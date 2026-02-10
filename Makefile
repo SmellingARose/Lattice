@@ -74,9 +74,10 @@ LIB_OBJ = $(patsubst src/%.c,$(BUILDDIR)/%.o,$(LIB_SRC))
 # Binary names
 BIN = lattice
 TEST_FLAT_BIN = build/test_flat
-TEST_BH_BIN   = build/test_bh
+TEST_BH_BIN       = build/test_bh
+TEST_BH_SMOKE_BIN = build/test_bh_smoke
 
-.PHONY: all debug test test-flat test-bh test-convergence clean
+.PHONY: all debug test test-flat test-bh test-bh-smoke test-convergence clean
 
 all: $(BIN)
 
@@ -113,6 +114,16 @@ test-flat: $(TEST_FLAT_BIN)
 
 test-bh: $(TEST_BH_BIN)
 	./$(TEST_BH_BIN)
+
+$(TEST_BH_SMOKE_BIN): $(LIB_OBJ) $(BUILDDIR)/test_bh_smoke.o $(BUILDDIR)/initial_data/puncture.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
+$(BUILDDIR)/test_bh_smoke.o: tests/test_bh_smoke.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+test-bh-smoke: $(TEST_BH_SMOKE_BIN)
+	./$(TEST_BH_SMOKE_BIN)
 
 test: test-flat test-bh
 

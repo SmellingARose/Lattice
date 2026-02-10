@@ -59,9 +59,11 @@ int main(int argc, char *argv[])
     sim_params_t params;
     params_set_defaults(&params);
 
-    /* Default BH test parameters */
-    params.nx = params.ny = params.nz = 64;
-    params.lx = params.ly = params.lz = 256.0;
+    /* Default BH test parameters.
+     * dx = L / (nx - 2*gw - 1) = 128/128 = 1.0M — resolves puncture structure.
+     * Boundary at 64M from center, safe for t_final=50M (causal contact ~64M). */
+    params.nx = params.ny = params.nz = 137;
+    params.lx = params.ly = params.lz = 128.0;
     params.cfl = 0.25;
     params.kappa1 = 0.02;
     params.kappa2 = 0.0;
@@ -90,6 +92,11 @@ int main(int argc, char *argv[])
 
     /* Set Schwarzschild puncture at origin, M=1 */
     puncture_set_single(&g, 1.0, 0.0, 0.0, 0.0);
+
+    /* Enforce chi/alpha floors on initial data — puncture has chi,alpha -> 0
+     * at the coordinate singularity (r=0). Without this, the first RK step
+     * reads near-zero chi and 1/chi^2 terms in Rchi blow up immediately. */
+    enforce_algebraic_constraints(&g);
 
     int max_steps = (int)(t_final / params.dt) + 1;
 

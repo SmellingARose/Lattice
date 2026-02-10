@@ -18,7 +18,7 @@
 #define LATTICE_FIELDS_H
 
 /* Symmetric tensor index: maps (i,j) in {0,1,2} to flat index 0-5 */
-#define SYM(i, j) ((i) <= (j) ? (i) * (3 - (i)) / 2 + (j) : (j) * (3 - (j)) / 2 + (i))
+#define SYM(i, j) ((i) <= (j) ? (i) * (5 - (i)) / 2 + (j) : (j) * (5 - (j)) / 2 + (i))
 
 enum {
     SYM_XX = 0,

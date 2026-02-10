@@ -71,18 +71,18 @@
  * Ref: Zlochower et al., gr-qc/0505055
  */
 #define FD_ADV_LEFT(f, idx, s, dx, vel) \
-    ((vel) * ((f)[(idx) - 3*(s)] \
-              - 6.0 * (f)[(idx) - 2*(s)] \
-              + 18.0 * (f)[(idx) - (s)] \
-              - 10.0 * (f)[(idx)] \
-              - 3.0 * (f)[(idx) + (s)]) / (12.0 * (dx)))
+    ((vel) * (-(f)[(idx) - 3*(s)] \
+              + 6.0 * (f)[(idx) - 2*(s)] \
+              - 18.0 * (f)[(idx) - (s)] \
+              + 10.0 * (f)[(idx)] \
+              + 3.0 * (f)[(idx) + (s)]) / (12.0 * (dx)))
 
 #define FD_ADV_RIGHT(f, idx, s, dx, vel) \
-    ((vel) * (3.0 * (f)[(idx) - (s)] \
-              + 10.0 * (f)[(idx)] \
-              - 18.0 * (f)[(idx) + (s)] \
-              + 6.0 * (f)[(idx) + 2*(s)] \
-              - (f)[(idx) + 3*(s)]) / (12.0 * (dx)))
+    ((vel) * (-3.0 * (f)[(idx) - (s)] \
+              - 10.0 * (f)[(idx)] \
+              + 18.0 * (f)[(idx) + (s)] \
+              - 6.0 * (f)[(idx) + 2*(s)] \
+              + (f)[(idx) + 3*(s)]) / (12.0 * (dx)))
 
 #define FD_ADV(f, idx, s, dx, vel) \
     ((vel) >= 0.0 \

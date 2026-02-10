@@ -20,9 +20,40 @@
 #include "../geometry/tensor_utils.h"
 
 #include <string.h>
+#include <stdio.h>
+#include <stdint.h>
 
 /* RHS function signature: compute rhs from current state */
 typedef void (*rhs_func_t)(grid_t *g);
+
+/* DEBUG: NaN/blowup detector for BH evolution.
+ * Uses integer bit-pattern check for NaN (immune to -ffast-math). */
+static int check_nan_rhs(grid_t *g, const char *label)
+{
+    int n = grid_total_points(g);
+    int nf = g->params.num_fields;
+    for (int f = 0; f < nf; f++) {
+        for (int idx = 0; idx < n; idx++) {
+            double v = g->rhs[f][idx];
+            uint64_t bits;
+            memcpy(&bits, &v, sizeof(bits));
+            int bad = ((bits & 0x7FF0000000000000ULL) == 0x7FF0000000000000ULL &&
+                       (bits & 0x000FFFFFFFFFFFFFULL) != 0);
+            if (!bad && (v > 1e50 || v < -1e50)) bad = 1;
+            if (bad) {
+                int nx_pad = g->params.nx_pad;
+                int ny_pad = g->params.ny_pad;
+                int ii = idx % nx_pad;
+                int jj = (idx / nx_pad) % ny_pad;
+                int kk = idx / (nx_pad * ny_pad);
+                fprintf(stderr, "Bad val %.4e in rhs[%d] at (%d,%d,%d) (%s) step=%d\n",
+                        v, f, ii, jj, kk, label, g->step);
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
 
 /*
  * Copy fields to scratch, then add dt_factor * k_stage to scratch.
@@ -51,6 +82,20 @@ static void prepare_stage(grid_t *g, int stage, double dt_factor)
             for (int idx = 0; idx < n; idx++) {
                 dst[idx] = src[idx] + dt_factor * k[idx];
             }
+        }
+
+        /* Floor chi and alpha in scratch data to prevent RHS blowup.
+         * Without this, intermediate RK stages can drive chi negative,
+         * causing cascading NaN/Inf through 1/chi and 1/chi^2 terms.
+         * Ref: GRChombo applies PositiveChiAndAlpha at each substep. */
+#ifdef LATTICE_USE_OMP
+#pragma omp parallel for schedule(static)
+#endif
+        for (int idx = 0; idx < n; idx++) {
+            if (g->rk_scratch[FIELD_CHI][idx] < 1e-4)
+                g->rk_scratch[FIELD_CHI][idx] = 1e-4;
+            if (g->rk_scratch[FIELD_ALPHA][idx] < 1e-4)
+                g->rk_scratch[FIELD_ALPHA][idx] = 1e-4;
         }
     }
 }
@@ -105,6 +150,7 @@ static void rk4_combine(grid_t *g)
  * Enforce algebraic constraints after a full RK4 step:
  *   1. det(gamma_tilde) = 1   (rescale conformal metric)
  *   2. tr(A_tilde) = 0        (remove trace from tracefree extrinsic curvature)
+ *   3. chi >= 1e-4, alpha >= 1e-4  (puncture stabilization, GRChombo PositiveChiAndAlpha.hpp)
  */
 void enforce_algebraic_constraints(grid_t *g)
 {
@@ -135,6 +181,14 @@ void enforce_algebraic_constraints(grid_t *g)
         for (int a = 0; a < 6; a++) {
             g->fields[FIELD_AT_BASE + a][idx] = at[a];
         }
+
+        /* Enforce chi >= 1e-4 and alpha >= 1e-4.
+         * Standard puncture stabilization (GRChombo PositiveChiAndAlpha.hpp).
+         * Prevents coordinate singularity at puncture from producing negative chi. */
+        if (g->fields[FIELD_CHI][idx] < 1e-4)
+            g->fields[FIELD_CHI][idx] = 1e-4;
+        if (g->fields[FIELD_ALPHA][idx] < 1e-4)
+            g->fields[FIELD_ALPHA][idx] = 1e-4;
     }
 }
 
@@ -149,21 +203,25 @@ void rk4_step(grid_t *g, rhs_func_t rhs_func, double dt)
     /* Stage 1: k1 = dt * f(t, y) */
     prepare_stage(g, 0, 0.0);
     rhs_func(g);
+    if (check_nan_rhs(g, "stage1")) return;
     store_k(g, 0, dt);
 
     /* Stage 2: k2 = dt * f(t + dt/2, y + k1/2) */
     prepare_stage(g, 1, 0.5);
     rhs_func(g);
+    if (check_nan_rhs(g, "stage2")) return;
     store_k(g, 1, dt);
 
     /* Stage 3: k3 = dt * f(t + dt/2, y + k2/2) */
     prepare_stage(g, 2, 0.5);
     rhs_func(g);
+    if (check_nan_rhs(g, "stage3")) return;
     store_k(g, 2, dt);
 
     /* Stage 4: k4 = dt * f(t + dt, y + k3) */
     prepare_stage(g, 3, 1.0);
     rhs_func(g);
+    if (check_nan_rhs(g, "stage4")) return;
     store_k(g, 3, dt);
 
     /* Combine: y += (k1 + 2k2 + 2k3 + k4) / 6 */

@@ -100,12 +100,19 @@ void constraints_l2(grid_t *g, double *ham_l2, double *mom_l2)
             }
         }
 
-        /* Second derivatives of gt (diagonal) */
-        double d2_gt_diag[3][6];
+        /* Second derivatives of gt (full, including mixed) */
+        double d2_gt[3][3][6];
         for (int a = 0; a < 6; a++) {
-            d2_gt_diag[0][a] = FD_D2(g->fields[FIELD_GT_BASE + a], idx, sx, dx);
-            d2_gt_diag[1][a] = FD_D2(g->fields[FIELD_GT_BASE + a], idx, sy, dy);
-            d2_gt_diag[2][a] = FD_D2(g->fields[FIELD_GT_BASE + a], idx, sz, dz);
+            const double *f = g->fields[FIELD_GT_BASE + a];
+            d2_gt[0][0][a] = FD_D2(f, idx, sx, dx);
+            d2_gt[1][1][a] = FD_D2(f, idx, sy, dy);
+            d2_gt[2][2][a] = FD_D2(f, idx, sz, dz);
+            d2_gt[0][1][a] = FD_D1D1(f, idx, sx, sy, dx, dy);
+            d2_gt[1][0][a] = d2_gt[0][1][a];
+            d2_gt[0][2][a] = FD_D1D1(f, idx, sx, sz, dx, dz);
+            d2_gt[2][0][a] = d2_gt[0][2][a];
+            d2_gt[1][2][a] = FD_D1D1(f, idx, sy, sz, dy, dz);
+            d2_gt[2][1][a] = d2_gt[1][2][a];
         }
 
         /* Christoffel symbols */
@@ -131,12 +138,39 @@ void constraints_l2(grid_t *g, double *ham_l2, double *mom_l2)
             }
         }
 
-        /* Conformal Ricci scalar (leading term): g^{ij} (-1/2 g^{lm} d_l d_m g_{ij}) */
-        /* For a more accurate constraint, we'd need the full Ricci tensor.
-         * For monitoring purposes, compute the trace of the Laplacian term. */
-        double Rt = 0.0;
+        /* Lower-index Christoffels: Gamma_{ijk} = g_{il} Gamma^l_{jk} */
+        double chris_d[3][6];
+        for (int jk = 0; jk < 6; jk++) {
+            for (int ii = 0; ii < 3; ii++) {
+                chris_d[ii][jk] = 0.0;
+                for (int ll = 0; ll < 3; ll++) {
+                    chris_d[ii][jk] += gt[SYM(ii, ll)] * chris[ll][jk];
+                }
+            }
+        }
+
+        /* Gamma_hat^i from stored field (if evolved), else from contracted Christoffel */
+        double Ghat[3];
+        for (int ii = 0; ii < 3; ii++) {
+            Ghat[ii] = g->fields[FIELD_GHAT1 + ii][idx];
+        }
+
+        /* Full conformal Ricci tensor Rt_{ij} using the 4-term formula
+         * (same as ccz4_rhs.c, B&S eq 3.69):
+         *   Rt_{ij} = -(1/2) g^{lm} d_l d_m g_{ij}
+         *           + g_{k(i} d_{j)} Ghat^k
+         *           + Ghat^k Gamma_{(ij)k}
+         *           + g^{lm} (2 Gamma^k_{l(i} Gamma_{j)km} + Gamma^k_{im} Gamma_{klj})
+         */
+        double Rt_dd[6];
+        double d1_Ghat[3][3];
+        for (int ii = 0; ii < 3; ii++) {
+            for (int d = 0; d < 3; d++) {
+                d1_Ghat[d][ii] = FD_D1(g->fields[FIELD_GHAT1 + ii], idx, strides[d], dxs[d]);
+            }
+        }
+
         for (int ij = 0; ij < 6; ij++) {
-            double fac = (ij == SYM_XX || ij == SYM_YY || ij == SYM_ZZ) ? 1.0 : 2.0;
             int ii, jj;
             switch (ij) {
             case SYM_XX: ii = 0; jj = 0; break;
@@ -147,47 +181,72 @@ void constraints_l2(grid_t *g, double *ham_l2, double *mom_l2)
             default:     ii = 2; jj = 2; break;
             }
 
-            /* -1/2 g^{ij} g^{lm} d_l d_m g_{ij} */
-            double lap = 0.0;
-            for (int d = 0; d < 3; d++) {
-                lap += gtu[SYM(d, d)] * d2_gt_diag[d][ij];
-            }
-            /* Note: mixed second derivatives omitted for speed in diagnostics.
-             * This is sufficient for flat spacetime where all terms vanish. */
-            Rt += fac * gtu[SYM(ii, jj)] * (-0.5 * lap);
+            /* Term 1: -(1/2) g^{lm} d_l d_m g_{ij} */
+            double term1 = 0.0;
+            for (int ll = 0; ll < 3; ll++)
+                for (int mm = 0; mm < 3; mm++)
+                    term1 += gtu[SYM(ll, mm)] * d2_gt[ll][mm][ij];
+            term1 *= -0.5;
 
-            /* Christoffel squared terms */
+            /* Term 2: g_{k(i} d_{j)} Ghat^k */
+            double term2 = 0.0;
             for (int kk = 0; kk < 3; kk++) {
-                for (int ll = 0; ll < 3; ll++) {
-                    for (int mm = 0; mm < 3; mm++) {
-                        Rt += fac * gtu[SYM(ii, jj)] * gtu[SYM(ll, mm)]
-                            * chris[kk][SYM(ll, ii)] * gt[SYM(kk, mm)] * 0.0;
-                        /* ^ This is a placeholder; full Christoffel-squared terms
-                         * would be needed for an exact constraint monitor near BH.
-                         * For flat spacetime testing, Rt = 0 is exact. */
+                term2 += gt[SYM(kk, ii)] * d1_Ghat[jj][kk]
+                       + gt[SYM(kk, jj)] * d1_Ghat[ii][kk];
+            }
+            term2 *= 0.5;
+
+            /* Term 3: Ghat^k Gamma_{(ij)k} */
+            double term3 = 0.0;
+            for (int kk = 0; kk < 3; kk++) {
+                term3 += Ghat[kk] * 0.5 * (chris_d[ii][SYM(jj, kk)]
+                                           + chris_d[jj][SYM(ii, kk)]);
+            }
+
+            /* Term 4: g^{lm} (2 Gamma^k_{l(i} Gamma_{j)km} + Gamma^k_{im} Gamma_{klj}) */
+            double term4 = 0.0;
+            for (int ll = 0; ll < 3; ll++) {
+                for (int mm = 0; mm < 3; mm++) {
+                    double gtu_lm = gtu[SYM(ll, mm)];
+                    for (int kk = 0; kk < 3; kk++) {
+                        term4 += gtu_lm * (chris[kk][SYM(ll, ii)] * chris_d[jj][SYM(kk, mm)]
+                                         + chris[kk][SYM(ll, jj)] * chris_d[ii][SYM(kk, mm)]);
+                        term4 += gtu_lm * chris[kk][SYM(ii, mm)] * chris_d[kk][SYM(ll, jj)];
                     }
                 }
             }
+
+            Rt_dd[ij] = term1 + term2 + term3 + term4;
         }
 
-        /* Conformal factor contribution to Ricci scalar:
-         * R_chi terms: involve d^2 chi / chi and (d chi)^2 / chi^2
-         * In vacuum flat spacetime with chi=1, all these vanish.
-         */
-        double laplacian_chi = 0.0;
+        /* Conformal Ricci scalar: Rt = g^{ij} Rt_{ij} */
+        double Rt = sym3_trace(Rt_dd, gtu);
+
+        /* Conformal Laplacian of chi: g^{ij} D_i D_j chi
+         * D_i D_j chi = d_i d_j chi - Gamma^k_{ij} d_k chi */
+        double DDchi[6];
+        for (int ij = 0; ij < 6; ij++) {
+            DDchi[ij] = d2_chi[ij];
+            for (int kk = 0; kk < 3; kk++)
+                DDchi[ij] -= chris[kk][ij] * d1_chi[kk];
+        }
+        double laplacian_chi = sym3_trace(DDchi, gtu);
+
+        /* g^{ij} d_i chi d_j chi */
         double grad_chi_sq = 0.0;
-        for (int d = 0; d < 3; d++) {
-            laplacian_chi += gtu[SYM(d, d)] * d2_chi[SYM(d, d)];
-            for (int e = 0; e < 3; e++) {
-                grad_chi_sq += gtu[SYM(d, e)] * d1_chi[d] * d1_chi[e];
-            }
-        }
+        for (int a = 0; a < 3; a++)
+            for (int b = 0; b < 3; b++)
+                grad_chi_sq += gtu[SYM(a, b)] * d1_chi[a] * d1_chi[b];
 
-        double chi_safe = fmax(chi, 1e-16);
-        double R_chi_contrib = 0.5 / chi_safe * (-3.0 * laplacian_chi
-                             + 1.5 / chi_safe * grad_chi_sq);
-
-        double R = chi * Rt + R_chi_contrib;
+        /* Physical Ricci scalar (B&S eq 3.10 in chi convention):
+         *   R = chi * Rt + 2 * laplacian_chi - 5/(2 chi) * grad_chi_sq
+         * Derivation: Rchi_{ij} = 1/(2chi)(DDchi_{ij} + gt_{ij} lap_chi)
+         *                       - 1/(4chi^2)(d_i chi d_j chi + 3 gt_{ij} dchi_sq)
+         * Trace: g^{ij} Rchi_{ij} = 2/chi * lap_chi - 5/(2chi^2) * dchi_sq
+         * R = chi * (Rt + g^{ij} Rchi_{ij}) */
+        double chi_safe = fmax(chi, 1e-4);
+        double R = chi * Rt + 2.0 * laplacian_chi
+                 - 2.5 / chi_safe * grad_chi_sq;
 
         /* Hamiltonian constraint: H = R + (2/3)K^2 - Aij Aij */
         double H = R + (2.0 / 3.0) * K * K - ata;

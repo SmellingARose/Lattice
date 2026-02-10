@@ -328,25 +328,18 @@ static void ccz4_rhs_point(grid_t *g, int idx)
      * equations via specific combinations. Let's compute what we need:
      */
 
-    /* R_{ij}^{phys} = Rt_{ij} + Rchi_{ij} where: */
+    /* R_{ij}^{phys} = Rt_{ij} + Rchi_{ij} where:
+     *
+     * Rchi_{ij} = 1/(2 chi) [DDchi_{ij} + gt_{ij} * laplacian_chi]
+     *           - 1/(4 chi^2) [d_i chi d_j chi + 3 gt_{ij} * dchi_sq]
+     *
+     * Ref: GRChombo CCZ4Geometry.hpp (compute_ricci_Z), verified against
+     * B&S eq 3.10 converted from phi to chi = e^{-4 phi}.
+     * In d=3 dimensions: (d-2)=1 prefactor on DDchi and d_i chi d_j chi terms,
+     * d=3 prefactor on gt * dchi_sq term.
+     */
     double Rchi_dd[6];
     for (int ij = 0; ij < 6; ij++) {
-        /* Rchi_{ij} = 1/(2 chi) * [DDchi_{ij} + gt_{ij} * laplacian_chi]
-         *           - 3/(4 chi^2) * [d_i chi d_j chi + gt_{ij} * dchi_sq / ???]
-         *
-         * Standard form (B&S eq 3.10 in chi convention):
-         * Rchi_{ij} = (1/(2 chi)) * (DDchi_{ij} + gt_{ij} * laplacian_chi / 3)
-         *           wait, let me use the known-correct form.
-         *
-         * With chi = psi^{-4} = e^{-4 phi}:
-         * The physical Ricci contribution from the conformal factor is:
-         *
-         * R^{phi}_{ij} = 1/(2 chi) [ tD_i tD_j chi + gt_{ij} gt^{kl} tD_k tD_l chi ]
-         *              - 1/(4 chi^2) [ 3 d_i chi d_j chi - gt_{ij} gt^{kl} d_k chi d_l chi ]
-         *
-         * where tD is the covariant derivative compatible with gt.
-         * Ref: adapted from B&S eq 3.57, converting phi -> chi
-         */
         int ii2, jj2;
         switch (ij) {
         case SYM_XX: ii2 = 0; jj2 = 0; break;
@@ -359,10 +352,7 @@ static void ccz4_rhs_point(grid_t *g, int idx)
 
         Rchi_dd[ij] = (1.0 / (2.0 * chi_safe)) * (DDchi[ij] + gt[ij] * laplacian_chi)
                     - (1.0 / (4.0 * chi_safe * chi_safe))
-                      * (3.0 * d1_chi[ii2] * d1_chi[jj2] - gt[ij] * dchi_sq);
-
-        /* Note: for diagonal components ii2==jj2, d1_chi[ii2]*d1_chi[jj2] is fine.
-         * For off-diagonal, this is the mixed product. */
+                      * (d1_chi[ii2] * d1_chi[jj2] + 3.0 * gt[ij] * dchi_sq);
     }
 
     /* Physical Ricci (lower indices, conformal + chi parts) */
@@ -371,16 +361,8 @@ static void ccz4_rhs_point(grid_t *g, int idx)
         Rphys_dd[a] = Rt_dd[a] + Rchi_dd[a];
     }
 
-    /* Physical Ricci scalar: R = chi * g^{ij} R_{ij} */
-    /* Actually R = g^{ij}_{phys} R_{ij} = chi * g_tilde^{ij} R_{ij} */
-    double Rphys = 0.0;
-    for (int a = 0; a < 6; a++) {
-        double fac = (a == SYM_XX || a == SYM_YY || a == SYM_ZZ) ? 1.0 : 2.0;
-        Rphys += chi * fac * gtu[SYM_XX + (a - SYM_XX)] * Rphys_dd[a];
-        /* ^ This is wrong for off-diag. Let me fix: */
-    }
-    /* Redo properly */
-    Rphys = chi * (gtu[SYM_XX] * Rphys_dd[SYM_XX]
+    /* Physical Ricci scalar: R = g^{ij}_{phys} R_{ij} = chi * g_tilde^{ij} R_{ij} */
+    double Rphys = chi * (gtu[SYM_XX] * Rphys_dd[SYM_XX]
                  + gtu[SYM_YY] * Rphys_dd[SYM_YY]
                  + gtu[SYM_ZZ] * Rphys_dd[SYM_ZZ]
                  + 2.0 * (gtu[SYM_XY] * Rphys_dd[SYM_XY]
@@ -492,8 +474,8 @@ static void ccz4_rhs_point(grid_t *g, int idx)
      *
      * With CCZ4 Theta: K -> K - 2 Theta
      */
-    double dt_chi = -(2.0 / 3.0) * alpha * chi * (K - 2.0 * Theta)
-                  + (2.0 / 3.0) * chi * div_beta
+    double dt_chi = +(2.0 / 3.0) * alpha * chi * (K - 2.0 * Theta)
+                  - (2.0 / 3.0) * chi * div_beta
                   + adv_chi;
 
     /* ----- dt_gt: conformal metric ----- */
@@ -568,15 +550,14 @@ static void ccz4_rhs_point(grid_t *g, int idx)
         case SYM_YZ: ii2 = 1; jj2 = 2; break;
         default:     ii2 = 2; jj2 = 2; break;
         }
-        /* nabla_i nabla_j alpha includes conformal factor:
-         * = D~_i D~_j alpha + 1/(2 chi) (d_i chi D_j alpha + d_j chi D_i alpha
-         *   - gt_{ij} g^{kl} d_k chi D_l alpha)
-         * where D~ is the conformal covariant derivative
-         */
+        /* nabla_i nabla_j alpha = D~_i D~_j alpha - S^k_{ij} d_k alpha
+         * where S^k_{ij} = 1/(2chi)(delta^k_i d_j chi + delta^k_j d_i chi
+         *                          - gt_{ij} gt^{kl} d_l chi)
+         * Ref: B&S eq (3.30), chi convention */
         phys_DDalpha[ij] = DDalpha[ij]
-            + 0.5 / chi_safe * (d1_chi[ii2] * d1_alpha[jj2]
+            - 0.5 / chi_safe * (d1_chi[ii2] * d1_alpha[jj2]
                               + d1_chi[jj2] * d1_alpha[ii2])
-            - 0.5 / chi_safe * gt[ij] * dchi_dalpha;
+            + 0.5 / chi_safe * gt[ij] * dchi_dalpha;
     }
 
     /* D_i Z_j + D_j Z_i (symmetric): approximate from Ghat definition */
