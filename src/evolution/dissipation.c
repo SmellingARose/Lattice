@@ -46,7 +46,7 @@ void dissipation_apply(grid_t *g)
          * Floor W at 0.1 so dissipation remains active at punctures.
          * Without this, high-frequency modes at the puncture grow unchecked. */
         double chi = g->rk_scratch[FIELD_CHI][idx];
-        double W = fmax(sqrt(fmax(chi, 1e-4)), 0.1);
+        double W = fmax(sqrt(fmax(chi, 0.0)), 0.1);
 
         for (int f = 0; f < nf; f++) {
             double eps_ca = is_gauge_field(f) ? eps_gauge : eps_other;

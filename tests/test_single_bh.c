@@ -90,8 +90,11 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    /* Set Schwarzschild puncture at origin, M=1 */
-    puncture_set_single(&g, 1.0, 0.0, 0.0, 0.0);
+    /* Set Schwarzschild puncture offset by dx/2 from origin, M=1.
+     * Offset avoids placing a grid point at the coordinate singularity (r=0),
+     * which causes steep chi gradients through the floor value and RHS blowup.
+     * Standard practice: GRChombo uses cell-centered grids for the same reason. */
+    puncture_set_single(&g, 1.0, 0.5 * params.dx, 0.5 * params.dy, 0.5 * params.dz);
 
     /* Enforce chi/alpha floors on initial data — puncture has chi,alpha -> 0
      * at the coordinate singularity (r=0). Without this, the first RK step

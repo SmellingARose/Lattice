@@ -84,18 +84,20 @@ static void prepare_stage(grid_t *g, int stage, double dt_factor)
             }
         }
 
-        /* Floor chi and alpha in scratch data to prevent RHS blowup.
-         * Without this, intermediate RK stages can drive chi negative,
-         * causing cascading NaN/Inf through 1/chi and 1/chi^2 terms.
-         * Ref: GRChombo applies PositiveChiAndAlpha at each substep. */
+        /* Ensure chi and alpha stay non-negative in scratch data.
+         * Only prevent negative values from numerical overshoot.
+         * Do NOT impose a large floor — the RHS uses chi_safe/alpha_safe
+         * for all divisions. A large floor creates artificial plateaus
+         * whose steep edges blow up FD stencils.
+         * Ref: GRChombo PositiveChiAndAlpha.hpp (positivity only). */
 #ifdef LATTICE_USE_OMP
 #pragma omp parallel for schedule(static)
 #endif
         for (int idx = 0; idx < n; idx++) {
-            if (g->rk_scratch[FIELD_CHI][idx] < 1e-4)
-                g->rk_scratch[FIELD_CHI][idx] = 1e-4;
-            if (g->rk_scratch[FIELD_ALPHA][idx] < 1e-4)
-                g->rk_scratch[FIELD_ALPHA][idx] = 1e-4;
+            if (g->rk_scratch[FIELD_CHI][idx] < 0.0)
+                g->rk_scratch[FIELD_CHI][idx] = 0.0;
+            if (g->rk_scratch[FIELD_ALPHA][idx] < 0.0)
+                g->rk_scratch[FIELD_ALPHA][idx] = 0.0;
         }
     }
 }
@@ -182,13 +184,13 @@ void enforce_algebraic_constraints(grid_t *g)
             g->fields[FIELD_AT_BASE + a][idx] = at[a];
         }
 
-        /* Enforce chi >= 1e-4 and alpha >= 1e-4.
-         * Standard puncture stabilization (GRChombo PositiveChiAndAlpha.hpp).
-         * Prevents coordinate singularity at puncture from producing negative chi. */
-        if (g->fields[FIELD_CHI][idx] < 1e-4)
-            g->fields[FIELD_CHI][idx] = 1e-4;
-        if (g->fields[FIELD_ALPHA][idx] < 1e-4)
-            g->fields[FIELD_ALPHA][idx] = 1e-4;
+        /* Ensure chi and alpha stay non-negative (positivity only).
+         * Do NOT impose a large floor — the RHS uses chi_safe/alpha_safe
+         * for all divisions. Ref: GRChombo PositiveChiAndAlpha.hpp. */
+        if (g->fields[FIELD_CHI][idx] < 0.0)
+            g->fields[FIELD_CHI][idx] = 0.0;
+        if (g->fields[FIELD_ALPHA][idx] < 0.0)
+            g->fields[FIELD_ALPHA][idx] = 0.0;
     }
 }
 

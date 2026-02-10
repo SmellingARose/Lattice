@@ -49,7 +49,7 @@ static void ccz4_rhs_point(grid_t *g, int idx)
 
     /* ===== 1. Read field values ===== */
     double chi = g->rk_scratch[FIELD_CHI][idx];
-    double chi_safe = fmax(chi, 1e-16);
+    double chi_safe = fmax(chi, 1e-4);
 
     double gt[6], at[6];
     for (int a = 0; a < 6; a++) {
@@ -429,7 +429,7 @@ static void ccz4_rhs_point(grid_t *g, int idx)
             dchi_dalpha += gtu[SYM(a, b)] * d1_chi[a] * d1_alpha[b];
         }
     }
-    lap_alpha += 0.5 * dchi_dalpha;  /* correction from conformal decomposition */
+    lap_alpha -= 0.5 * dchi_dalpha;  /* correction from conformal decomposition */
 
     /* ===== Raise At: A^{ij} = chi * g^{ik} g^{jl} At_{kl} ===== */
     /* A_tilde^{ij} = g_tilde^{ik} g_tilde^{jl} A_tilde_{kl} */
@@ -469,13 +469,10 @@ static void ccz4_rhs_point(grid_t *g, int idx)
 
     /* ----- dt_chi: conformal factor ----- */
     /* Using chi = e^{-4 phi}:
-     * dt phi = (1/3) alpha K - (1/3) div_beta + adv
-     * dt chi = -4 chi * dt phi = -(2/3) alpha chi K + (2/3) chi div_beta + adv_chi
-     *
-     * With CCZ4 Theta: K -> K - 2 Theta
+     * dt chi = (2/3) chi (alpha K - div_beta) + adv_chi
+     * Ref: GRChombo CCZ4RHS.impl.hpp (no Theta coupling in chi equation)
      */
-    double dt_chi = +(2.0 / 3.0) * alpha * chi * (K - 2.0 * Theta)
-                  - (2.0 / 3.0) * chi * div_beta
+    double dt_chi = (2.0 / 3.0) * chi * (alpha * K - div_beta)
                   + adv_chi;
 
     /* ----- dt_gt: conformal metric ----- */
@@ -555,9 +552,9 @@ static void ccz4_rhs_point(grid_t *g, int idx)
          *                          - gt_{ij} gt^{kl} d_l chi)
          * Ref: B&S eq (3.30), chi convention */
         phys_DDalpha[ij] = DDalpha[ij]
-            - 0.5 / chi_safe * (d1_chi[ii2] * d1_alpha[jj2]
+            + 0.5 / chi_safe * (d1_chi[ii2] * d1_alpha[jj2]
                               + d1_chi[jj2] * d1_alpha[ii2])
-            + 0.5 / chi_safe * gt[ij] * dchi_dalpha;
+            - 0.5 / chi_safe * gt[ij] * dchi_dalpha;
     }
 
     /* D_i Z_j + D_j Z_i (symmetric): approximate from Ghat definition */

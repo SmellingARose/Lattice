@@ -88,7 +88,9 @@ int main(void)
         return 1;
     }
 
-    puncture_set_single(&g, 1.0, 0.0, 0.0, 0.0);
+    /* Offset puncture by dx/2 so no grid point sits at r=0.
+     * This avoids the discontinuity from chi-floor at the coordinate singularity. */
+    puncture_set_single(&g, 1.0, 0.5 * params.dx, 0.5 * params.dy, 0.5 * params.dz);
     enforce_algebraic_constraints(&g);
 
     double alpha_min_init = find_alpha_min(&g);

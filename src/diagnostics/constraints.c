@@ -291,7 +291,8 @@ void constraints_l2(grid_t *g, double *ham_l2, double *mom_l2)
                 Mi -= (2.0 / 3.0) * gtu[SYM(ii, jj)] * d1_K[jj];
             }
 
-            /* +6 A^{ij} d_j chi / (2 chi) = 3 A^{ij} d_j chi / chi */
+            /* -3/(2 chi) A^{ij} d_j chi: conformal correction to D_j A^{ij}
+             * Ref: B&S eq (2.108) with chi convention */
             for (int jj = 0; jj < 3; jj++) {
                 /* A^{ij} = g^{ik} g^{jl} A_{kl} — compute component */
                 double Aij_upper = 0.0;
@@ -300,7 +301,7 @@ void constraints_l2(grid_t *g, double *ham_l2, double *mom_l2)
                         Aij_upper += gtu[SYM(ii, kk)] * gtu[SYM(jj, ll)] * at[SYM(kk, ll)];
                     }
                 }
-                Mi += 3.0 * Aij_upper * d1_chi[jj] / chi_safe;
+                Mi -= 1.5 * Aij_upper * d1_chi[jj] / chi_safe;
             }
 
             mom_sq += Mi * Mi;
