@@ -36,6 +36,11 @@ void sommerfeld_apply(grid_t *g)
         double *field = g->rk_scratch[f];
 
         /* x-faces */
+        /* OMP: boundary fill on x-faces, independent per (k,j) slice.
+         * Toggle: make PARALLEL=0/1 */
+#ifdef LATTICE_USE_OMP
+#pragma omp parallel for collapse(2) schedule(static)
+#endif
         for (int k = 0; k < nz; k++) {
             for (int j = 0; j < ny; j++) {
                 /* x-lower face */
@@ -77,6 +82,11 @@ void sommerfeld_apply(grid_t *g)
         }
 
         /* y-faces (skip corners already done by x) */
+        /* OMP: boundary fill on y-faces, independent per (k,i) slice.
+         * Toggle: make PARALLEL=0/1 */
+#ifdef LATTICE_USE_OMP
+#pragma omp parallel for collapse(2) schedule(static)
+#endif
         for (int k = 0; k < nz; k++) {
             for (int i = gw; i < nx - gw; i++) {
                 /* y-lower */
@@ -118,6 +128,11 @@ void sommerfeld_apply(grid_t *g)
         }
 
         /* z-faces (skip edges already done) */
+        /* OMP: boundary fill on z-faces, independent per (j,i) slice.
+         * Toggle: make PARALLEL=0/1 */
+#ifdef LATTICE_USE_OMP
+#pragma omp parallel for collapse(2) schedule(static)
+#endif
         for (int j = gw; j < ny - gw; j++) {
             for (int i = gw; i < nx - gw; i++) {
                 /* z-lower */

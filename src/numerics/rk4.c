@@ -44,6 +44,10 @@ static void prepare_stage(grid_t *g, int stage, double dt_factor)
             const double *src = g->fields[f];
             const double *k = g->rk_k[stage - 1][f];
             double *dst = g->rk_scratch[f];
+            /* OMP: independent per-element update. Toggle: make PARALLEL=0/1 */
+#ifdef LATTICE_USE_OMP
+#pragma omp parallel for schedule(static)
+#endif
             for (int idx = 0; idx < n; idx++) {
                 dst[idx] = src[idx] + dt_factor * k[idx];
             }
@@ -62,6 +66,10 @@ static void store_k(grid_t *g, int stage, double dt)
     for (int f = 0; f < nf; f++) {
         const double *r = g->rhs[f];
         double *k = g->rk_k[stage][f];
+        /* OMP: independent per-element update. Toggle: make PARALLEL=0/1 */
+#ifdef LATTICE_USE_OMP
+#pragma omp parallel for schedule(static)
+#endif
         for (int idx = 0; idx < n; idx++) {
             k[idx] = dt * r[idx];
         }
@@ -83,6 +91,10 @@ static void rk4_combine(grid_t *g)
         const double *k2 = g->rk_k[1][f];
         const double *k3 = g->rk_k[2][f];
         const double *k4 = g->rk_k[3][f];
+        /* OMP: independent per-element update. Toggle: make PARALLEL=0/1 */
+#ifdef LATTICE_USE_OMP
+#pragma omp parallel for schedule(static)
+#endif
         for (int idx = 0; idx < n; idx++) {
             u[idx] += (k1[idx] + 2.0 * k2[idx] + 2.0 * k3[idx] + k4[idx]) / 6.0;
         }
@@ -96,7 +108,9 @@ static void rk4_combine(grid_t *g)
  */
 void enforce_algebraic_constraints(grid_t *g)
 {
-    GRID_LOOP_ALL(g, i, j, k) {
+    /* OMP: per-point constraint enforcement, no cross-point dependencies.
+     * Toggle: make PARALLEL=0/1 */
+    GRID_LOOP_ALL_OMP(g, i, j, k) {
         int idx = grid_idx(g, i, j, k);
 
         /* Enforce det(gamma_tilde) = 1 */

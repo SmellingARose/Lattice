@@ -782,9 +782,15 @@ static void ccz4_rhs_point(grid_t *g, int idx)
  * Compute CCZ4 RHS for all interior grid points.
  * Called from the main driver's full_rhs function.
  */
+/*
+ * Compute CCZ4 RHS for all interior grid points.
+ * This is the heaviest loop in the entire code (~90% of runtime).
+ * Uses GRID_LOOP_INTERIOR_OMP for OpenMP parallelism (toggle: make PARALLEL=0/1).
+ */
 void ccz4_rhs(grid_t *g)
 {
-    GRID_LOOP_INTERIOR(g, i, j, k) {
+    /* OMP: each (k,j) slice is independent — perfect parallelism */
+    GRID_LOOP_INTERIOR_OMP(g, i, j, k) {
         int idx = grid_idx(g, i, j, k);
         ccz4_rhs_point(g, idx);
     }

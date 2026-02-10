@@ -118,8 +118,29 @@ static inline double grid_z(const grid_t *g, int k)
  *   }
  *
  * Loop order: z-outer, y-mid, x-inner (unit stride on x).
+ *
+ * GRID_LOOP_INTERIOR_OMP: OpenMP-parallelized version (collapse(2) on z,y).
+ * Use this for compute-heavy per-point work (CCZ4 RHS, gauge, dissipation).
+ * The non-OMP version is for loops with reductions or data dependencies.
+ *
+ * Controlled by LATTICE_USE_OMP (set by Makefile via -DLATTICE_USE_OMP).
  */
+#ifdef LATTICE_USE_OMP
+#define _GRID_OMP_COLLAPSE2 _Pragma("omp parallel for collapse(2) schedule(static)")
+#else
+#define _GRID_OMP_COLLAPSE2
+#endif
+
 #define GRID_LOOP_INTERIOR(g, i, j, k)                                        \
+    for (int (k) = (g)->params.ghost_width;                                   \
+         (k) < (g)->params.nz - (g)->params.ghost_width; ++(k))              \
+        for (int (j) = (g)->params.ghost_width;                               \
+             (j) < (g)->params.ny - (g)->params.ghost_width; ++(j))           \
+            for (int (i) = (g)->params.ghost_width;                           \
+                 (i) < (g)->params.nx - (g)->params.ghost_width; ++(i))
+
+#define GRID_LOOP_INTERIOR_OMP(g, i, j, k)                                   \
+    _GRID_OMP_COLLAPSE2                                                       \
     for (int (k) = (g)->params.ghost_width;                                   \
          (k) < (g)->params.nz - (g)->params.ghost_width; ++(k))              \
         for (int (j) = (g)->params.ghost_width;                               \
@@ -131,6 +152,12 @@ static inline double grid_z(const grid_t *g, int k)
  * Full loop including ghost zones.
  */
 #define GRID_LOOP_ALL(g, i, j, k)                                             \
+    for (int (k) = 0; (k) < (g)->params.nz; ++(k))                           \
+        for (int (j) = 0; (j) < (g)->params.ny; ++(j))                       \
+            for (int (i) = 0; (i) < (g)->params.nx; ++(i))
+
+#define GRID_LOOP_ALL_OMP(g, i, j, k)                                        \
+    _GRID_OMP_COLLAPSE2                                                       \
     for (int (k) = 0; (k) < (g)->params.nz; ++(k))                           \
         for (int (j) = 0; (j) < (g)->params.ny; ++(j))                       \
             for (int (i) = 0; (i) < (g)->params.nx; ++(i))

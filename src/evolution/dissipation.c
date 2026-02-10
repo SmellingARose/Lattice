@@ -37,7 +37,9 @@ void dissipation_apply(grid_t *g)
     const double eps_gauge = g->params.ko_eps_gauge;
     const double eps_other = g->params.ko_eps_other;
 
-    GRID_LOOP_INTERIOR(g, i, j, k) {
+    /* OMP: per-point dissipation, no cross-point dependencies.
+     * Toggle: make PARALLEL=0/1 */
+    GRID_LOOP_INTERIOR_OMP(g, i, j, k) {
         int idx = grid_idx(g, i, j, k);
 
         /* W = chi^{1/2} — spatially varying multiplier */

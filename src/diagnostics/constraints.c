@@ -36,7 +36,15 @@ void constraints_l2(grid_t *g, double *ham_l2, double *mom_l2)
     double mom_sum = 0.0;
     int count = 0;
 
-    GRID_LOOP_INTERIOR(g, i, j, k) {
+    /* OMP: constraint computation with reduction on ham_sum, mom_sum, count.
+     * Uses explicit pragma instead of GRID_LOOP_INTERIOR_OMP for reduction support.
+     * Toggle: compile with/without -DLATTICE_USE_OMP (make PARALLEL=0/1) */
+#ifdef LATTICE_USE_OMP
+#pragma omp parallel for collapse(2) schedule(static) reduction(+:ham_sum,mom_sum,count)
+#endif
+    for (int k = g->params.ghost_width; k < g->params.nz - g->params.ghost_width; ++k)
+        for (int j = g->params.ghost_width; j < g->params.ny - g->params.ghost_width; ++j)
+            for (int i = g->params.ghost_width; i < g->params.nx - g->params.ghost_width; ++i) {
         int idx = grid_idx(g, i, j, k);
 
         /* Read fields */

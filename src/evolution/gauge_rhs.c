@@ -36,7 +36,9 @@ void gauge_rhs(grid_t *g)
     const double f_driver = g->params.gamma_driver_f;
     const double eta0 = g->params.eta;
 
-    GRID_LOOP_INTERIOR(g, i, j, k) {
+    /* OMP: per-point gauge computation, no cross-point dependencies.
+     * Toggle: make PARALLEL=0/1 */
+    GRID_LOOP_INTERIOR_OMP(g, i, j, k) {
         int idx = grid_idx(g, i, j, k);
 
         double alpha = g->rk_scratch[FIELD_ALPHA][idx];
