@@ -8,8 +8,15 @@
 #   make test               # run all tests
 #   make clean
 
-CC      = clang
 BACKEND ?= cpu
+
+# Platform detection: macOS vs Linux
+UNAME := $(shell uname -s)
+ifeq ($(UNAME),Darwin)
+    CC ?= clang
+else
+    CC ?= gcc
+endif
 
 # Source files (common to all backends)
 CORE_SRC    = src/core/grid.c
@@ -24,9 +31,16 @@ MAIN_SRC      = src/main.c
 # Backend selection
 ifeq ($(BACKEND),cpu)
     BACKEND_SRC = src/backend/backend_cpu.c
-    OMP_PREFIX ?= $(shell brew --prefix libomp 2>/dev/null || echo /opt/homebrew/opt/libomp)
-    BACKEND_FLAGS = -Xclang -fopenmp -I$(OMP_PREFIX)/include
-    BACKEND_LIBS = -L$(OMP_PREFIX)/lib -lomp
+    ifeq ($(UNAME),Darwin)
+        # macOS: clang needs libomp from Homebrew
+        OMP_PREFIX ?= $(shell brew --prefix libomp 2>/dev/null || echo /opt/homebrew/opt/libomp)
+        BACKEND_FLAGS = -Xclang -fopenmp -I$(OMP_PREFIX)/include
+        BACKEND_LIBS = -L$(OMP_PREFIX)/lib -lomp
+    else
+        # Linux: gcc has OpenMP built in
+        BACKEND_FLAGS = -fopenmp
+        BACKEND_LIBS = -lgomp
+    endif
 else ifeq ($(BACKEND),gpu)
     BACKEND_SRC = src/backend/backend_gpu.c
     BACKEND_FLAGS = -fopenmp -fopenmp-targets=nvptx64 -DLATTICE_GPU
