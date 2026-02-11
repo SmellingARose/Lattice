@@ -238,7 +238,16 @@ enforce algebraic constraints
 
 N=256: 3 blocks x 3.42 GB = 10.3 GB (fits in 16 GB) vs 4 blocks = 13.7 GB.
 
+### OpenMP parallelization
+
+Added `#pragma omp parallel for` to all field update loops in rk4.c:
+`ck45_update`, `enforce_algebraic` (collapse(2) on k,j), `axpy_fields`,
+`accum_add`, `apply_accum`. Previously only `backend_compute_rhs` was
+parallelized, causing CPU utilization to oscillate between RHS (all cores)
+and updates (single core).
+
 ### Test results
 
 Flat spacetime (N=32, 1000 steps, CK45): Ham L2 = 5.3e-14 — PASSED (< 1e-10).
 Classic RK4 unchanged and also passing.
+Single BH (N=256) allocates successfully with CK45 (10.3 GB) — evolution running.

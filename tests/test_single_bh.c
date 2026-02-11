@@ -128,6 +128,8 @@ int main(void)
     for (int step = 1; step <= p.num_steps; step++) {
         rk4_step(g, &p, ccz4_rhs_point, apply_sommerfeld, p.dt);
 
+        double pct = 100.0 * step / p.num_steps;
+
         if (step % diag_every == 0 || step == p.num_steps) {
             if (!check_finite(g)) {
                 printf("  CRASH: NaN/Inf at step %d (t = %.2f M)\n",
@@ -140,12 +142,14 @@ int main(void)
             double ham = compute_constraint_l2(g);
             double ml  = min_lapse(g);
             double t   = step * p.dt;
-            double pct = 100.0 * step / p.num_steps;
 
             if (ham > ham_peak) ham_peak = ham;
 
             printf("  step %4d/%d  [%5.1f%%]  t = %6.2f M  Ham L2 = %.4e  min(alpha) = %.4f\n",
                    step, p.num_steps, pct, t, ham, ml);
+            fflush(stdout);
+        } else {
+            printf("  step %4d/%d  [%5.1f%%]\n", step, p.num_steps, pct);
             fflush(stdout);
         }
     }

@@ -46,26 +46,32 @@ static void copy_fields(double **dst, const double *const *src, size_t n)
 static void axpy_fields(double **dst, const double *const *a,
                         const double *const *b, double coeff, size_t n)
 {
-    for (int f = 0; f < NUM_FIELDS; f++)
+    for (int f = 0; f < NUM_FIELDS; f++) {
+        #pragma omp parallel for schedule(static)
         for (size_t i = 0; i < n; i++)
             dst[f][i] = a[f][i] + coeff * b[f][i];
+    }
 }
 
 /* Accumulate: accum[i] += coeff * rhs[i] */
 static void accum_add(double **accum, const double *const *rhs_arr,
                       double coeff, size_t n)
 {
-    for (int f = 0; f < NUM_FIELDS; f++)
+    for (int f = 0; f < NUM_FIELDS; f++) {
+        #pragma omp parallel for schedule(static)
         for (size_t i = 0; i < n; i++)
             accum[f][i] += coeff * rhs_arr[f][i];
+    }
 }
 
 /* Apply: fields[i] += accum[i] */
 static void apply_accum(double **fields, const double *const *accum, size_t n)
 {
-    for (int f = 0; f < NUM_FIELDS; f++)
+    for (int f = 0; f < NUM_FIELDS; f++) {
+        #pragma omp parallel for schedule(static)
         for (size_t i = 0; i < n; i++)
             fields[f][i] += accum[f][i];
+    }
 }
 
 /* Zero all field arrays */
@@ -84,6 +90,7 @@ static void zero_fields(double **arr, size_t n)
  */
 static void enforce_algebraic(grid_t *g)
 {
+    #pragma omp parallel for collapse(2) schedule(static)
     for (int k = 0; k < g->Ntotal; k++) {
         for (int j = 0; j < g->Ntotal; j++) {
             for (int i = 0; i < g->Ntotal; i++) {
@@ -223,6 +230,7 @@ static void ck45_update(double **U, double **dU, const double *const *F,
                         double A_s, double B_s, double dt, size_t n)
 {
     for (int f = 0; f < NUM_FIELDS; f++) {
+        #pragma omp parallel for schedule(static)
         for (size_t i = 0; i < n; i++) {
             dU[f][i] = A_s * dU[f][i] + dt * F[f][i];
             U[f][i] += B_s * dU[f][i];
