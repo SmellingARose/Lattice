@@ -3,6 +3,8 @@
  * Grid allocation and deallocation.
  *
  * All arrays page-aligned (4096 bytes) for zero-copy GPU buffers.
+ * Each group (fields, rhs, scratch, accum) is allocated as one
+ * contiguous block for efficient GPU mapping.
  * Ntotal padded so interior N is a multiple of 16 for cache alignment.
  */
 
@@ -13,15 +15,14 @@
 
 #define PAGE_ALIGN 4096
 
-static double *alloc_field(size_t npoints)
+static double *alloc_block(size_t total_bytes)
 {
     void *ptr = NULL;
-    size_t bytes = npoints * sizeof(double);
-    if (posix_memalign(&ptr, PAGE_ALIGN, bytes) != 0) {
-        fprintf(stderr, "grid: posix_memalign failed for %zu bytes\n", bytes);
+    if (posix_memalign(&ptr, PAGE_ALIGN, total_bytes) != 0) {
+        fprintf(stderr, "grid: posix_memalign failed for %zu bytes\n", total_bytes);
         exit(1);
     }
-    memset(ptr, 0, bytes);
+    memset(ptr, 0, total_bytes);
     return (double *)ptr;
 }
 
@@ -42,11 +43,19 @@ grid_t *grid_alloc(int N, double L)
     g->dx     = L / N_padded;
     g->npoints = (size_t)g->Ntotal * g->Ntotal * g->Ntotal;
 
+    /* Allocate contiguous blocks: NUM_FIELDS * npoints each */
+    size_t block_bytes = (size_t)NUM_FIELDS * g->npoints * sizeof(double);
+    g->fields_block  = alloc_block(block_bytes);
+    g->rhs_block     = alloc_block(block_bytes);
+    g->scratch_block = alloc_block(block_bytes);
+    g->accum_block   = alloc_block(block_bytes);
+
+    /* Point per-field pointers into the contiguous blocks */
     for (int f = 0; f < NUM_FIELDS; f++) {
-        g->fields[f]  = alloc_field(g->npoints);
-        g->rhs[f]     = alloc_field(g->npoints);
-        g->scratch[f] = alloc_field(g->npoints);
-        g->accum[f]   = alloc_field(g->npoints);
+        g->fields[f]  = g->fields_block  + f * g->npoints;
+        g->rhs[f]     = g->rhs_block     + f * g->npoints;
+        g->scratch[f] = g->scratch_block + f * g->npoints;
+        g->accum[f]   = g->accum_block   + f * g->npoints;
     }
 
     return g;
@@ -55,11 +64,9 @@ grid_t *grid_alloc(int N, double L)
 void grid_free(grid_t *g)
 {
     if (!g) return;
-    for (int f = 0; f < NUM_FIELDS; f++) {
-        free(g->fields[f]);
-        free(g->rhs[f]);
-        free(g->scratch[f]);
-        free(g->accum[f]);
-    }
+    free(g->fields_block);
+    free(g->rhs_block);
+    free(g->scratch_block);
+    free(g->accum_block);
     free(g);
 }

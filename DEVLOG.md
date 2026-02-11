@@ -95,3 +95,104 @@ Requires ~15 GB RAM (run on 32GB+ machine).
 - `min_lapse(final) < 0.5` (trumpet collapse)
 - `check_finite` (no NaN/Inf)
 - `ham_peak < 1.0` (constraints bounded)
+
+## 2026-02-11: Contiguous Memory Allocation
+
+Changed grid allocation from per-field `posix_memalign` calls to contiguous
+block allocation. Each group (fields, rhs, scratch, accum) is now a single
+contiguous allocation of `NUM_FIELDS * npoints` doubles. Per-field pointer
+arrays (`g->fields[f]`, etc.) index into these blocks.
+
+Benefits:
+- Slightly better CPU cache utilization (adjacent fields contiguous)
+- Required for efficient GPU mapping (one `omp target enter data` per block
+  instead of per-field)
+- Simpler allocation/deallocation code
+
+No functional change to CPU performance. Tests pass unchanged.
+
+## 2026-02-11: GPU Backend Investigation (GCC 13 + Tesla P40)
+
+### Setup
+
+- **GPU**: NVIDIA Tesla P40 (24 GB GDDR5X, compute capability 6.1)
+- **Secondary GPU**: GT 1030 (2 GB, device 1 — not used)
+- **Compiler**: GCC 13.3 with `-foffload=nvptx-none`
+- **Driver**: CUDA 570.211.01
+- **Build flags**: `-fopenmp -foffload=nvptx-none -fcf-protection=none
+  -fno-stack-protector -foffload-options="-lm -fno-stack-protector" -DLATTICE_GPU`
+
+### What worked
+
+All basic GPU operations verified working:
+1. Device detection (2 devices found)
+2. Simple `#pragma omp target` regions
+3. `omp target teams distribute parallel for` with collapse(3)
+4. `omp target enter data` for persistent GPU memory residency
+5. Multiple target regions reusing mapped data via `map(tofrom:)`
+6. Large allocations (~3.5 GB, 4 blocks of ~2.6 MB each for N=16)
+7. Pointer arithmetic inside target regions (reconstructing per-field
+   pointer arrays from contiguous blocks on-device)
+8. Math functions: `pow()`, `cbrt()`, `sqrt()` all work correctly
+9. Multi-field stencil access patterns (reading all 25 fields with
+   finite-difference-like neighbor access)
+10. Full RK4 pipeline with stubbed kernel (zero RHS) — mapping, RK4 stages,
+    Sommerfeld BCs, algebraic enforcement all work end-to-end
+
+### What didn't work
+
+`ccz4_rhs_point` crashes with "illegal memory access" when called on GPU,
+even with a single thread (`#pragma omp target` without teams/parallel).
+
+### Root cause: GPU thread stack overflow
+
+Systematic bisection (GPU_BISECT preprocessor levels 0-10) with dead-code
+elimination controls revealed that the crash occurs when the compiler must
+preserve all ~4 KB of local variables in `ccz4_rhs_point`:
+
+| Bisect level | What runs | Result |
+|---|---|---|
+| 0 | Zero RHS and return (stub) | PASS |
+| 1-9 | Compute through gauge RHS, write zeros | PASS (DCE removes dead computation) |
+| 9 (fixed) | Compute + write 4 real values | PASS (DCE still removes most) |
+| 9 (fixed) | Compute + write all 25 real values | **CRASH** |
+| 10 | Full store, skip KO dissipation | **CRASH** |
+| Full | Complete function | **CRASH** |
+
+The function's ~4 KB+ of stack locals (3x3x3x3 derivative tensors, Christoffel
+symbols, Ricci tensor, etc.) exceeds the GCC nvptx soft-stack default. When
+`-O3` eliminates dead code, the effective stack usage drops below the limit
+and the function appears to work.
+
+### Attempted fixes (none resolved the crash)
+
+1. `-msoft-stack-reserve-local=1024` and `=4096` — no effect
+2. `-O1` optimization for nvptx offloaded code — no effect
+3. `GOMP_NVPTX_NATIVE_GPU_THREAD_STACK_SIZE` env var — GCC 15+ only, not
+   available in GCC 13
+4. Removing `static` from `const` array declarations — no effect
+5. Wrapping all declarations and definitions in `#pragma omp declare target` —
+   correct but didn't fix the stack issue
+
+### Lessons learned
+
+- GCC 13's nvptx soft-stack default is insufficient for large numerical kernels
+- `-O3` dead-code elimination can mask stack overflow during bisection
+- `map(present:)` (OpenMP 5.1) not supported by GCC 13
+- `is_device_ptr` doesn't work with `omp target enter data`-mapped pointers
+  in GCC 13; must use `map(tofrom:)` to reference already-mapped data
+- GCC 15 adds `GOMP_NVPTX_NATIVE_GPU_THREAD_STACK_SIZE` for runtime control
+  of native GPU thread stack — this would likely fix the issue
+
+### Recommendation for future GPU work
+
+Options to resolve the stack overflow:
+1. **Upgrade to GCC 15** — adds env var for native GPU stack control
+2. **Use CUDA/nvcc directly** — full control over launch configuration
+   and `cudaDeviceSetLimit(cudaLimitStackSize, N)`
+3. **Split `ccz4_rhs_point`** — break into smaller functions to reduce
+   peak stack usage (significant refactor, may hurt CPU performance)
+4. **Use scratch memory** — move large derivative arrays to pre-allocated
+   per-thread GPU scratch buffers instead of stack
+
+GPU backend code reverted; CPU backend unchanged and fully functional.

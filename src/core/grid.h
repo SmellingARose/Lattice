@@ -27,6 +27,12 @@ typedef struct {
     double *rhs[NUM_FIELDS];      /* RHS scratch (for RK stages)*/
     double *scratch[NUM_FIELDS];  /* scratch state (RK stages)  */
     double *accum[NUM_FIELDS];    /* RK4 accumulator            */
+
+    /* Contiguous backing blocks (fields[f] points into these) */
+    double *fields_block;
+    double *rhs_block;
+    double *scratch_block;
+    double *accum_block;
 } grid_t;
 
 /*
