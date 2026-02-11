@@ -150,6 +150,9 @@ make clean
 ```
 
 Backend flag: `BACKEND=cpu|metal|cuda|hip`. Default is `cpu` (OpenMP).
+Time integrator: `--rk classic|ck45`. Default is `ck45` (Carpenter-Kennedy 2N
+low-storage, 3 memory blocks). Use `--rk classic` for standard 4-stage RK4
+(4 memory blocks).
 Compiler: `clang` on macOS, `gcc`/`nvcc` on Linux.
 No external dependencies beyond standard C and Accelerate (macOS).
 Debug builds enable NaN/Inf checking — any floating-point trap is a bug.
@@ -223,6 +226,7 @@ constant `GR_SPACEDIM = 3`.
 | `lapse_power` | 1.0 | Power p in Bona-Masso: f(alpha) = c * alpha^(p-2) |
 | `shift_Gamma_coeff` | 0.75 | F in dt(beta^i) = F * B^i |
 | `eta` | 1.0 | Damping in Gamma-driver: dt(B^i) = dt(Gamma^i) - eta * B^i |
+| `rk_method` | `RK_CK45` | Time integrator: `RK_CLASSIC` (4 stages, 4 blocks) or `RK_CK45` (5 stages, 3 blocks) |
 
 ## Workflow Rules
 

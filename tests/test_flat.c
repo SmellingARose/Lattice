@@ -36,7 +36,7 @@ int main(void)
     p.dt = p.CFL * p.dx;
 
     backend_init();
-    grid_t *g = grid_alloc(p.N, p.L);
+    grid_t *g = grid_alloc(p.N, p.L, p.rk_method);
 
     /* Recompute after possible padding */
     p.N  = g->N;

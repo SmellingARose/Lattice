@@ -34,6 +34,7 @@ static void print_usage(void)
     fprintf(stderr, "  --sigma <float>     KO dissipation (default 0.3)\n");
     fprintf(stderr, "  --output_every <int> Output interval (default 0=off)\n");
     fprintf(stderr, "  --puncture M,x,y,z  Add a puncture BH\n");
+    fprintf(stderr, "  --rk classic|ck45   Time integrator (default ck45)\n");
 }
 
 int main(int argc, char **argv)
@@ -75,6 +76,16 @@ int main(int argc, char **argv)
                 fprintf(stderr, "Error: --puncture expects M,x,y,z\n");
                 return 1;
             }
+        } else if (strcmp(argv[a], "--rk") == 0 && a + 1 < argc) {
+            a++;
+            if (strcmp(argv[a], "classic") == 0) {
+                p.rk_method = RK_CLASSIC;
+            } else if (strcmp(argv[a], "ck45") == 0) {
+                p.rk_method = RK_CK45;
+            } else {
+                fprintf(stderr, "Error: --rk expects 'classic' or 'ck45'\n");
+                return 1;
+            }
         } else if (strcmp(argv[a], "--help") == 0 || strcmp(argv[a], "-h") == 0) {
             print_usage();
             return 0;
@@ -91,11 +102,13 @@ int main(int argc, char **argv)
 
     printf("Lattice — 3D Numerical Relativity\n");
     printf("  N = %d, L = %.1f, dx = %.6f, dt = %.6f\n", p.N, p.L, p.dx, p.dt);
-    printf("  steps = %d, sigma = %.2f, CFL = %.2f\n", p.num_steps, p.sigma, p.CFL);
+    printf("  steps = %d, sigma = %.2f, CFL = %.2f, rk = %s\n",
+           p.num_steps, p.sigma, p.CFL,
+           p.rk_method == RK_CK45 ? "ck45" : "classic");
 
     /* Allocate grid */
     backend_init();
-    grid_t *g = grid_alloc(p.N, p.L);
+    grid_t *g = grid_alloc(p.N, p.L, p.rk_method);
 
     /* Note: grid_alloc may pad N to a multiple of 16 */
     p.N  = g->N;

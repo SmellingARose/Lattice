@@ -11,6 +11,12 @@
 
 #include <stdbool.h>
 
+/* Time integration method */
+typedef enum {
+    RK_CLASSIC,  /* Classic 4-stage RK4 (4 blocks: fields, rhs, scratch, accum) */
+    RK_CK45      /* Carpenter-Kennedy 2N low-storage RK4 (3 blocks, 5 RHS evals) */
+} rk_method_t;
+
 /* CCZ4 constraint damping parameters */
 typedef struct {
     double kappa1;       /* constraint damping (Theta + Z_i), default 0.1   */
@@ -40,6 +46,8 @@ typedef struct {
     int    num_steps;      /* total evolution steps                  */
     int    output_every;   /* output interval (0 = never)            */
 
+    rk_method_t rk_method;  /* RK_CLASSIC or RK_CK45              */
+
     ccz4_params_t  ccz4;
     gauge_params_t gauge;
 } sim_params_t;
@@ -54,6 +62,7 @@ static inline sim_params_t default_params(void)
     p.num_steps    = 1000;
     p.output_every = 0;
     p.sigma        = 0.3;
+    p.rk_method    = RK_CK45;
 
     p.dx = p.L / p.N;
     p.dt = p.CFL * p.dx;

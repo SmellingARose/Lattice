@@ -196,3 +196,49 @@ Options to resolve the stack overflow:
    per-thread GPU scratch buffers instead of stack
 
 GPU backend code reverted; CPU backend unchanged and fully functional.
+
+## 2026-02-11: CK45 Low-Storage RK4 Integrator
+
+### Problem
+
+Single BH test (N=256) allocates 4 blocks of ~3.4 GB each = 13.7 GB, which
+thrashes on the 16 GB M4. Classic RK4 needs 4 memory blocks: fields, rhs,
+scratch (initial state backup), and accum (weighted sum).
+
+### Solution
+
+Added Carpenter-Kennedy 2N low-storage RK4 (CK45) as an alternative integrator.
+Ref: Carpenter & Kennedy, NASA TM-109112 (1994), Solution 3.
+
+CK45 uses only 3 memory blocks (fields=U, rhs=F, scratch=dU), saving 25% memory
+at the cost of 5 RHS evaluations per step instead of 4. Both methods are
+4th-order accurate.
+
+Algorithm per step:
+```
+dU = 0
+for s = 0..4:
+    F = RHS(U); BCs(F)
+    dU = A[s]*dU + dt*F
+    U += B[s]*dU
+enforce algebraic constraints
+```
+
+### Implementation
+
+- `params.h`: Added `rk_method_t` enum (`RK_CLASSIC`, `RK_CK45`), default CK45
+- `grid.h/c`: `grid_alloc()` takes `rk_method_t`, skips accum_block for CK45
+- `rk4.c`: Classic RK4 renamed to `classic_rk4_step()`, CK45 added as
+  `ck45_step()` with fused `ck45_update()` kernel. `rk4_step()` dispatches
+  on `p->rk_method`
+- `main.c`: Added `--rk classic|ck45` CLI flag
+- All callers updated: main.c, test_flat.c, test_single_bh.c
+
+### Memory savings
+
+N=256: 3 blocks x 3.42 GB = 10.3 GB (fits in 16 GB) vs 4 blocks = 13.7 GB.
+
+### Test results
+
+Flat spacetime (N=32, 1000 steps, CK45): Ham L2 = 5.3e-14 — PASSED (< 1e-10).
+Classic RK4 unchanged and also passing.

@@ -93,7 +93,7 @@ int main(void)
 
     printf("  Allocating grid (N=%d, L=%.1f)...\n", p.N, p.L);
     fflush(stdout);
-    grid_t *g = grid_alloc(p.N, p.L);
+    grid_t *g = grid_alloc(p.N, p.L, p.rk_method);
 
     /* Recompute after possible padding */
     p.N  = g->N;
