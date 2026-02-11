@@ -72,6 +72,7 @@ static int check_finite(const grid_t *g)
 int main(void)
 {
     printf("=== Single BH Evolution Test ===\n");
+    fflush(stdout);
 
     /* N=256, L=64, dx=0.25, T=30M.
      * Boundary at 32M — no reflections reach puncture by T=30M. */
@@ -86,7 +87,12 @@ int main(void)
     double T_final = 30.0;
     p.num_steps = (int)(T_final / p.dt + 0.5);
 
+    printf("  Initializing backend...\n");
+    fflush(stdout);
     backend_init();
+
+    printf("  Allocating grid (N=%d, L=%.1f)...\n", p.N, p.L);
+    fflush(stdout);
     grid_t *g = grid_alloc(p.N, p.L);
 
     /* Recompute after possible padding */
@@ -97,8 +103,11 @@ int main(void)
 
     printf("  N = %d, dx = %.4f, dt = %.6f, steps = %d\n",
            g->N, g->dx, p.dt, p.num_steps);
+    fflush(stdout);
 
     /* Brill-Lindquist: single puncture M=1 at origin */
+    printf("  Setting Brill-Lindquist initial data (M=1.0)...\n");
+    fflush(stdout);
     double mass = 1.0;
     double center[1][3] = {{0.0, 0.0, 0.0}};
     set_brill_lindquist(g, 1, &mass, center);
@@ -106,6 +115,8 @@ int main(void)
     double ham0 = compute_constraint_l2(g);
     double ml0  = min_lapse(g);
     printf("  Initial: Ham L2 = %.6e, min lapse = %.6f\n", ham0, ml0);
+    printf("  Starting evolution...\n");
+    fflush(stdout);
 
     /* Evolve */
     int diag_every = p.num_steps / 50;
@@ -119,8 +130,9 @@ int main(void)
 
         if (step % diag_every == 0 || step == p.num_steps) {
             if (!check_finite(g)) {
-                printf("\n  CRASH: NaN/Inf at step %d (t = %.2f M)\n",
+                printf("  CRASH: NaN/Inf at step %d (t = %.2f M)\n",
                        step, step * p.dt);
+                fflush(stdout);
                 crashed = 1;
                 break;
             }
@@ -132,12 +144,11 @@ int main(void)
 
             if (ham > ham_peak) ham_peak = ham;
 
-            printf("\r  step %4d/%d  [%5.1f%%]  t = %6.2f M  Ham L2 = %.4e  min(alpha) = %.4f",
+            printf("  step %4d/%d  [%5.1f%%]  t = %6.2f M  Ham L2 = %.4e  min(alpha) = %.4f\n",
                    step, p.num_steps, pct, t, ham, ml);
             fflush(stdout);
         }
     }
-    printf("\n");
 
     if (!crashed) {
         double ham_final = compute_constraint_l2(g);

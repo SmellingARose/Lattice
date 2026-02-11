@@ -54,7 +54,7 @@ ALL_SRC = $(CORE_SRC) $(EVOLUTION_SRC) $(NUMERICS_SRC) $(INITIAL_SRC) \
 
 # Compiler flags
 INCLUDES = -I src
-CFLAGS_BASE = -std=c17 -Wall -Wextra -Werror $(INCLUDES) $(BACKEND_FLAGS)
+CFLAGS_BASE = -std=c17 -Wall -Wextra -Werror -D_GNU_SOURCE -Wno-unused-but-set-variable $(INCLUDES) $(BACKEND_FLAGS)
 CFLAGS_OPT  = $(CFLAGS_BASE) -O3 -ffast-math -march=native
 CFLAGS_DBG  = $(CFLAGS_BASE) -O0 -g -fsanitize=address,undefined -DDEBUG
 
