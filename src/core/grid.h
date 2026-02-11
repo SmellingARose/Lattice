@@ -1,165 +1,53 @@
 /*
- * grid.h — Grid structure and access functions
+ * Lattice — 3D Numerical Relativity
+ * Grid struct, allocation, and indexing.
  *
- * Memory layout: struct-of-arrays (SoA). Each field is a contiguous double*
- * array. x is the innermost (unit-stride) index. Loops: z-outer, y-mid, x-inner.
- *
- * Allocations are page-aligned (4096 bytes) for zero-copy GPU buffers.
+ * SoA layout: each field is a contiguous double* array.
+ * x is the innermost (unit-stride) index.
+ * Ghost zone width = 4 (4th-order stencils + 6th-order KO dissipation).
  */
 
 #ifndef LATTICE_GRID_H
 #define LATTICE_GRID_H
 
 #include "fields.h"
-#include "params.h"
+#include <stddef.h>
+
+#define GHOST_WIDTH 4
 
 typedef struct {
-    /* Field data — one array per field */
-    double *fields[NUM_TOTAL_FIELDS];
+    int    N;          /* interior grid points per side               */
+    int    ghost;      /* ghost zone width = GHOST_WIDTH              */
+    int    Ntotal;     /* N + 2*ghost, padded so N is multiple of 16  */
+    double dx;         /* grid spacing                                */
+    double L;          /* physical domain size                        */
+    size_t npoints;    /* Ntotal^3, total points including ghosts     */
 
-    /* RK4 intermediate stages: k[stage][field] */
-    double *rk_k[4][NUM_TOTAL_FIELDS];
-
-    /* RK4 scratch space for intermediate state */
-    double *rk_scratch[NUM_TOTAL_FIELDS];
-
-    /* RHS storage */
-    double *rhs[NUM_TOTAL_FIELDS];
-
-    /* Simulation parameters */
-    sim_params_t params;
-
-    /* Current simulation time and step */
-    double time;
-    int step;
+    double *fields[NUM_FIELDS];   /* evolved field arrays       */
+    double *rhs[NUM_FIELDS];      /* RHS scratch (for RK stages)*/
+    double *scratch[NUM_FIELDS];  /* scratch state (RK stages)  */
+    double *accum[NUM_FIELDS];    /* RK4 accumulator            */
 } grid_t;
 
 /*
- * Allocate all field arrays. Returns 0 on success, -1 on failure.
+ * Flat 3D indexing: x innermost (unit stride), z outermost.
+ * IDX(g, i, j, k) = k*Ntotal*Ntotal + j*Ntotal + i
  */
-int grid_alloc(grid_t *g);
+#define IDX(g, i, j, k) \
+    ((k) * (g)->Ntotal * (g)->Ntotal + (j) * (g)->Ntotal + (i))
 
-/*
- * Free all field arrays.
- */
+/* Strides for finite difference access by direction */
+#define STRIDE_X          1
+#define STRIDE_Y(g)       ((g)->Ntotal)
+#define STRIDE_Z(g)       ((g)->Ntotal * (g)->Ntotal)
+
+/* Physical coordinate of grid point i (cell-centered) */
+#define COORD(g, i) (((i) - (g)->ghost + 0.5) * (g)->dx - (g)->L * 0.5)
+
+/* Allocate and initialize grid (all arrays zeroed) */
+grid_t *grid_alloc(int N, double L);
+
+/* Free all grid arrays */
 void grid_free(grid_t *g);
-
-/*
- * Zero all field arrays.
- */
-void grid_zero_fields(grid_t *g);
-
-/*
- * Zero all RHS arrays.
- */
-void grid_zero_rhs(grid_t *g);
-
-/*
- * Total number of grid points (padded).
- */
-static inline int grid_total_points(const grid_t *g)
-{
-    return g->params.nx_pad * g->params.ny_pad * g->params.nz_pad;
-}
-
-/*
- * Strides for each dimension.
- * x is unit stride, y stride = nx_pad, z stride = nx_pad * ny_pad.
- */
-static inline int grid_stride_x(const grid_t *g)
-{
-    (void)g;
-    return 1;
-}
-
-static inline int grid_stride_y(const grid_t *g)
-{
-    return g->params.nx_pad;
-}
-
-static inline int grid_stride_z(const grid_t *g)
-{
-    return g->params.nx_pad * g->params.ny_pad;
-}
-
-/*
- * Linear index from (i, j, k) grid coordinates.
- */
-static inline int grid_idx(const grid_t *g, int i, int j, int k)
-{
-    return i + j * g->params.nx_pad + k * g->params.nx_pad * g->params.ny_pad;
-}
-
-/*
- * Physical coordinates at grid point (i, j, k).
- * Origin at center of domain.
- */
-static inline double grid_x(const grid_t *g, int i)
-{
-    return (i - g->params.ghost_width) * g->params.dx - g->params.lx * 0.5;
-}
-
-static inline double grid_y(const grid_t *g, int j)
-{
-    return (j - g->params.ghost_width) * g->params.dy - g->params.ly * 0.5;
-}
-
-static inline double grid_z(const grid_t *g, int k)
-{
-    return (k - g->params.ghost_width) * g->params.dz - g->params.lz * 0.5;
-}
-
-/*
- * Interior loop bounds (excludes ghost zones).
- * Usage:
- *   GRID_LOOP_INTERIOR(g, i, j, k) {
- *       int idx = grid_idx(g, i, j, k);
- *       ...
- *   }
- *
- * Loop order: z-outer, y-mid, x-inner (unit stride on x).
- *
- * GRID_LOOP_INTERIOR_OMP: OpenMP-parallelized version (collapse(2) on z,y).
- * Use this for compute-heavy per-point work (CCZ4 RHS, gauge, dissipation).
- * The non-OMP version is for loops with reductions or data dependencies.
- *
- * Controlled by LATTICE_USE_OMP (set by Makefile via -DLATTICE_USE_OMP).
- */
-#ifdef LATTICE_USE_OMP
-#define _GRID_OMP_COLLAPSE2 _Pragma("omp parallel for collapse(2) schedule(static)")
-#else
-#define _GRID_OMP_COLLAPSE2
-#endif
-
-#define GRID_LOOP_INTERIOR(g, i, j, k)                                        \
-    for (int (k) = (g)->params.ghost_width;                                   \
-         (k) < (g)->params.nz - (g)->params.ghost_width; ++(k))              \
-        for (int (j) = (g)->params.ghost_width;                               \
-             (j) < (g)->params.ny - (g)->params.ghost_width; ++(j))           \
-            for (int (i) = (g)->params.ghost_width;                           \
-                 (i) < (g)->params.nx - (g)->params.ghost_width; ++(i))
-
-#define GRID_LOOP_INTERIOR_OMP(g, i, j, k)                                   \
-    _GRID_OMP_COLLAPSE2                                                       \
-    for (int (k) = (g)->params.ghost_width;                                   \
-         (k) < (g)->params.nz - (g)->params.ghost_width; ++(k))              \
-        for (int (j) = (g)->params.ghost_width;                               \
-             (j) < (g)->params.ny - (g)->params.ghost_width; ++(j))           \
-            for (int (i) = (g)->params.ghost_width;                           \
-                 (i) < (g)->params.nx - (g)->params.ghost_width; ++(i))
-
-/*
- * Full loop including ghost zones.
- */
-#define GRID_LOOP_ALL(g, i, j, k)                                             \
-    for (int (k) = 0; (k) < (g)->params.nz; ++(k))                           \
-        for (int (j) = 0; (j) < (g)->params.ny; ++(j))                       \
-            for (int (i) = 0; (i) < (g)->params.nx; ++(i))
-
-#define GRID_LOOP_ALL_OMP(g, i, j, k)                                        \
-    _GRID_OMP_COLLAPSE2                                                       \
-    for (int (k) = 0; (k) < (g)->params.nz; ++(k))                           \
-        for (int (j) = 0; (j) < (g)->params.ny; ++(j))                       \
-            for (int (i) = 0; (i) < (g)->params.nx; ++(i))
 
 #endif /* LATTICE_GRID_H */

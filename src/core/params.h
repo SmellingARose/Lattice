@@ -1,124 +1,76 @@
 /*
- * params.h — Simulation parameters
+ * Lattice — 3D Numerical Relativity
+ * Parameter structs for CCZ4 evolution.
  *
- * All tunable parameters live here. Computed quantities (dx, dt, padded dims)
- * are derived in params_init().
+ * Ref: arXiv:1106.2254 (CCZ4 params)
+ * Ref: GRChombo MovingPunctureGauge.hpp (gauge params)
  */
 
 #ifndef LATTICE_PARAMS_H
 #define LATTICE_PARAMS_H
 
-#include "fields.h"
+#include <stdbool.h>
 
+/* CCZ4 constraint damping parameters */
 typedef struct {
-    /* Grid dimensions (user-specified, before padding) */
-    int nx, ny, nz;
+    double kappa1;       /* constraint damping (Theta + Z_i), default 0.1   */
+    double kappa2;       /* Theta damping mix in K equation, default 0       */
+    double kappa3;       /* Z contribution in Gamma equation, default 1      */
+    bool   covariant_Z4; /* if true, use kappa1 (covariant); else kappa1*alpha */
+} ccz4_params_t;
 
-    /* Padded dimensions (nx rounded up to next multiple of 16) */
-    int nx_pad, ny_pad, nz_pad;
+/* Moving puncture gauge parameters */
+typedef struct {
+    double lapse_coeff;        /* c in 1+log: dt(alpha) = -c*alpha^p*(K-2*Theta) */
+    double lapse_power;        /* p in Bona-Masso, default 1                      */
+    double shift_Gamma_coeff;  /* F in dt(beta^i) = F * B^i, default 0.75         */
+    double eta;                /* damping in Gamma-driver: dt(B^i) -= eta*B^i     */
+    double lapse_advec_coeff;  /* advection coefficient for lapse, default 0       */
+    double shift_advec_coeff;  /* advection coefficient for shift, default 0       */
+} gauge_params_t;
 
-    /* Domain physical size */
-    double lx, ly, lz;
+/* Simulation parameters */
+typedef struct {
+    int    N;              /* grid points per side (interior)        */
+    double L;              /* physical domain size                   */
+    double dx;             /* grid spacing = L / N                   */
+    double dt;             /* time step = CFL * dx                   */
+    double CFL;            /* CFL factor, default 0.25               */
+    double sigma;          /* Kreiss-Oliger dissipation, default 0.3 */
+    int    num_steps;      /* total evolution steps                  */
+    int    output_every;   /* output interval (0 = never)            */
 
-    /* Grid spacing (computed) */
-    double dx, dy, dz;
-
-    /* Time step (computed from CFL) */
-    double dt;
-
-    /* Ghost zone width — must be >= 4 for 4th-order stencils + KO6 */
-    int ghost_width;
-
-    /* CFL factor */
-    double cfl;
-
-    /* CCZ4 constraint damping */
-    double kappa1;
-    double kappa2;
-    double kappa3;
-
-    /* Kreiss-Oliger dissipation coefficients */
-    double ko_eps_gauge;  /* for alpha, beta, B (gauge variables) */
-    double ko_eps_other;  /* for chi, gt, K, At, Ghat, Theta */
-
-    /* Gamma-driver parameters */
-    double eta;             /* damping in B^i equation */
-    double gamma_driver_f;  /* coefficient f in dt beta^i = f * B^i */
-
-    /* Number of fields to evolve */
-    int num_fields;
-
-    /* Enable Einstein-Maxwell fields */
-    int enable_em;
-
-    /* Output control */
-    int output_every;       /* steps between output */
-    char output_dir[256];   /* output directory path */
+    ccz4_params_t  ccz4;
+    gauge_params_t gauge;
 } sim_params_t;
 
-/*
- * Set default parameter values.
- */
-static inline void params_set_defaults(sim_params_t *p)
+/* Default parameter initialization */
+static inline sim_params_t default_params(void)
 {
-    p->nx = 32;
-    p->ny = 32;
-    p->nz = 32;
+    sim_params_t p;
+    p.N            = 32;
+    p.L            = 10.0;
+    p.CFL          = 0.25;
+    p.num_steps    = 1000;
+    p.output_every = 0;
+    p.sigma        = 0.3;
 
-    p->lx = 10.0;
-    p->ly = 10.0;
-    p->lz = 10.0;
+    p.dx = p.L / p.N;
+    p.dt = p.CFL * p.dx;
 
-    p->ghost_width = 4;
+    p.ccz4.kappa1       = 0.1;
+    p.ccz4.kappa2       = 0.0;
+    p.ccz4.kappa3       = 1.0;
+    p.ccz4.covariant_Z4 = true;
 
-    p->cfl = 0.25;
+    p.gauge.lapse_coeff       = 2.0;
+    p.gauge.lapse_power       = 1.0;
+    p.gauge.shift_Gamma_coeff = 0.75;
+    p.gauge.eta               = 1.0;
+    p.gauge.lapse_advec_coeff = 0.0;
+    p.gauge.shift_advec_coeff = 0.0;
 
-    p->kappa1 = 0.02;
-    p->kappa2 = 0.0;
-    p->kappa3 = 0.5;
-
-    p->ko_eps_gauge = 0.99;
-    p->ko_eps_other = 0.3;
-
-    p->eta = 2.0;
-    p->gamma_driver_f = 0.75;
-
-    p->enable_em = 0;
-    p->num_fields = NUM_VACUUM_FIELDS;
-
-    p->output_every = 10;
-    p->output_dir[0] = '.';
-    p->output_dir[1] = '\0';
-}
-
-/*
- * Compute derived quantities: dx, dt, padded dimensions.
- * Call after setting nx/ny/nz and lx/ly/lz.
- */
-static inline void params_init(sim_params_t *p)
-{
-    /* Pad nx to next multiple of 16 for cache alignment */
-    p->nx_pad = ((p->nx + 15) / 16) * 16;
-    p->ny_pad = p->ny;
-    p->nz_pad = p->nz;
-
-    /* Grid spacing: domain covers [0, L] with nx points including ghosts */
-    p->dx = p->lx / (p->nx - 2 * p->ghost_width - 1);
-    p->dy = p->ly / (p->ny - 2 * p->ghost_width - 1);
-    p->dz = p->lz / (p->nz - 2 * p->ghost_width - 1);
-
-    /* Time step from CFL condition */
-    double dx_min = p->dx;
-    if (p->dy < dx_min) dx_min = p->dy;
-    if (p->dz < dx_min) dx_min = p->dz;
-    p->dt = p->cfl * dx_min;
-
-    /* Field count */
-    if (p->enable_em) {
-        p->num_fields = NUM_TOTAL_FIELDS;
-    } else {
-        p->num_fields = NUM_VACUUM_FIELDS;
-    }
+    return p;
 }
 
 #endif /* LATTICE_PARAMS_H */

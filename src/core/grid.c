@@ -1,94 +1,65 @@
 /*
- * grid.c — Grid allocation and management
+ * Lattice — 3D Numerical Relativity
+ * Grid allocation and deallocation.
  *
- * All field arrays are page-aligned (4096 bytes) via posix_memalign
- * for zero-copy GPU buffer compatibility.
+ * All arrays page-aligned (4096 bytes) for zero-copy GPU buffers.
+ * Ntotal padded so interior N is a multiple of 16 for cache alignment.
  */
 
 #include "grid.h"
-
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #define PAGE_ALIGN 4096
 
-static double *alloc_field(int n)
+static double *alloc_field(size_t npoints)
 {
-    double *ptr = NULL;
-    if (posix_memalign((void **)&ptr, PAGE_ALIGN, (size_t)n * sizeof(double)) != 0) {
-        return NULL;
+    void *ptr = NULL;
+    size_t bytes = npoints * sizeof(double);
+    if (posix_memalign(&ptr, PAGE_ALIGN, bytes) != 0) {
+        fprintf(stderr, "grid: posix_memalign failed for %zu bytes\n", bytes);
+        exit(1);
     }
-    memset(ptr, 0, (size_t)n * sizeof(double));
-    return ptr;
+    memset(ptr, 0, bytes);
+    return (double *)ptr;
 }
 
-int grid_alloc(grid_t *g)
+grid_t *grid_alloc(int N, double L)
 {
-    int n = grid_total_points(g);
-    int nf = g->params.num_fields;
-
-    for (int f = 0; f < nf; f++) {
-        g->fields[f] = alloc_field(n);
-        if (!g->fields[f]) return -1;
-
-        g->rhs[f] = alloc_field(n);
-        if (!g->rhs[f]) return -1;
-
-        g->rk_scratch[f] = alloc_field(n);
-        if (!g->rk_scratch[f]) return -1;
-
-        for (int s = 0; s < 4; s++) {
-            g->rk_k[s][f] = alloc_field(n);
-            if (!g->rk_k[s][f]) return -1;
-        }
+    grid_t *g = calloc(1, sizeof(grid_t));
+    if (!g) {
+        fprintf(stderr, "grid: calloc failed\n");
+        exit(1);
     }
 
-    /* Zero out unused field slots */
-    for (int f = nf; f < NUM_TOTAL_FIELDS; f++) {
-        g->fields[f] = NULL;
-        g->rhs[f] = NULL;
-        g->rk_scratch[f] = NULL;
-        for (int s = 0; s < 4; s++) {
-            g->rk_k[s][f] = NULL;
-        }
+    /* Pad N to next multiple of 16 */
+    int N_padded = ((N + 15) / 16) * 16;
+    g->N      = N_padded;
+    g->ghost  = GHOST_WIDTH;
+    g->Ntotal = N_padded + 2 * GHOST_WIDTH;
+    g->L      = L;
+    g->dx     = L / N_padded;
+    g->npoints = (size_t)g->Ntotal * g->Ntotal * g->Ntotal;
+
+    for (int f = 0; f < NUM_FIELDS; f++) {
+        g->fields[f]  = alloc_field(g->npoints);
+        g->rhs[f]     = alloc_field(g->npoints);
+        g->scratch[f] = alloc_field(g->npoints);
+        g->accum[f]   = alloc_field(g->npoints);
     }
 
-    g->time = 0.0;
-    g->step = 0;
-    return 0;
+    return g;
 }
 
 void grid_free(grid_t *g)
 {
-    for (int f = 0; f < NUM_TOTAL_FIELDS; f++) {
+    if (!g) return;
+    for (int f = 0; f < NUM_FIELDS; f++) {
         free(g->fields[f]);
-        g->fields[f] = NULL;
-
         free(g->rhs[f]);
-        g->rhs[f] = NULL;
-
-        free(g->rk_scratch[f]);
-        g->rk_scratch[f] = NULL;
-
-        for (int s = 0; s < 4; s++) {
-            free(g->rk_k[s][f]);
-            g->rk_k[s][f] = NULL;
-        }
+        free(g->scratch[f]);
+        free(g->accum[f]);
     }
-}
-
-void grid_zero_fields(grid_t *g)
-{
-    int n = grid_total_points(g);
-    for (int f = 0; f < g->params.num_fields; f++) {
-        memset(g->fields[f], 0, (size_t)n * sizeof(double));
-    }
-}
-
-void grid_zero_rhs(grid_t *g)
-{
-    int n = grid_total_points(g);
-    for (int f = 0; f < g->params.num_fields; f++) {
-        memset(g->rhs[f], 0, (size_t)n * sizeof(double));
-    }
+    free(g);
 }

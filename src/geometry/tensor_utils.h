@@ -1,139 +1,175 @@
 /*
- * tensor_utils.h — Symmetric 3x3 tensor utilities (header-only)
+ * Lattice — 3D Numerical Relativity
+ * Inline tensor algebra utilities.
  *
- * All symmetric tensors are stored as flat arrays in order:
- *   [xx, xy, xz, yy, yz, zz] (indices 0-5)
- *
- * Convention: _dd suffix = covariant (lower), _uu suffix = contravariant (upper)
+ * Ref: GRChombo Source/utils/TensorAlgebra.hpp
+ * All functions operate on double[3][3] or double[3] arrays.
  */
 
 #ifndef LATTICE_TENSOR_UTILS_H
 #define LATTICE_TENSOR_UTILS_H
 
 #include "../core/fields.h"
-#include <math.h>
+
+#ifdef LATTICE_GPU
+#pragma omp declare target
+#endif
 
 /*
- * Determinant of a symmetric 3x3 matrix.
- * det = a00(a11*a22 - a12^2) - a01(a01*a22 - a02*a12) + a02(a01*a12 - a02*a11)
+ * Christoffel symbol data: Gamma^i_{jk}, Gamma_{ijk}, Gamma^i (contracted)
+ * Ref: GRChombo TensorAlgebra.hpp chris_t struct
  */
-static inline double sym3_det(const double s[6])
+typedef struct {
+    double ULL[3][3][3];     /* Gamma^i_{jk}           */
+    double LLL[3][3][3];     /* Gamma_{ijk}            */
+    double contracted[3];    /* Gamma^i = h^{jk} Gamma^i_{jk} */
+} chris_t;
+
+/* Ricci tensor data */
+typedef struct {
+    double LL[3][3];   /* R_{ij}  */
+    double scalar;     /* R = h^{ij} R_{ij} (conformal weighted) */
+} ricci_t;
+
+/*
+ * Determinant of symmetric 3x3 matrix.
+ * Ref: GRChombo TensorAlgebra.hpp:55-63
+ */
+static inline double compute_det_sym(const double h[3][3])
 {
-    return s[SYM_XX] * (s[SYM_YY] * s[SYM_ZZ] - s[SYM_YZ] * s[SYM_YZ])
-         - s[SYM_XY] * (s[SYM_XY] * s[SYM_ZZ] - s[SYM_XZ] * s[SYM_YZ])
-         + s[SYM_XZ] * (s[SYM_XY] * s[SYM_YZ] - s[SYM_XZ] * s[SYM_YY]);
+    return h[0][0] * h[1][1] * h[2][2]
+         + 2.0 * h[0][1] * h[0][2] * h[1][2]
+         - h[0][0] * h[1][2] * h[1][2]
+         - h[1][1] * h[0][2] * h[0][2]
+         - h[2][2] * h[0][1] * h[0][1];
 }
 
 /*
- * Inverse of a symmetric 3x3 matrix: inv[6] = s^{-1}.
- * Returns determinant. Caller should check det != 0.
+ * Inverse of symmetric 3x3 matrix.
+ * Ref: GRChombo TensorAlgebra.hpp:77-99
  */
-static inline double sym3_inv(const double s[6], double inv[6])
+static inline void compute_inverse_sym(const double h[3][3],
+                                       double h_UU[3][3])
 {
-    double det = sym3_det(s);
+    double det = compute_det_sym(h);
     double inv_det = 1.0 / det;
 
-    inv[SYM_XX] = (s[SYM_YY] * s[SYM_ZZ] - s[SYM_YZ] * s[SYM_YZ]) * inv_det;
-    inv[SYM_XY] = (s[SYM_XZ] * s[SYM_YZ] - s[SYM_XY] * s[SYM_ZZ]) * inv_det;
-    inv[SYM_XZ] = (s[SYM_XY] * s[SYM_YZ] - s[SYM_XZ] * s[SYM_YY]) * inv_det;
-    inv[SYM_YY] = (s[SYM_XX] * s[SYM_ZZ] - s[SYM_XZ] * s[SYM_XZ]) * inv_det;
-    inv[SYM_YZ] = (s[SYM_XY] * s[SYM_XZ] - s[SYM_XX] * s[SYM_YZ]) * inv_det;
-    inv[SYM_ZZ] = (s[SYM_XX] * s[SYM_YY] - s[SYM_XY] * s[SYM_XY]) * inv_det;
+    h_UU[0][0] = (h[1][1] * h[2][2] - h[1][2] * h[1][2]) * inv_det;
+    h_UU[0][1] = (h[0][2] * h[1][2] - h[0][1] * h[2][2]) * inv_det;
+    h_UU[0][2] = (h[0][1] * h[1][2] - h[0][2] * h[1][1]) * inv_det;
+    h_UU[1][1] = (h[0][0] * h[2][2] - h[0][2] * h[0][2]) * inv_det;
+    h_UU[1][2] = (h[0][1] * h[0][2] - h[0][0] * h[1][2]) * inv_det;
+    h_UU[2][2] = (h[0][0] * h[1][1] - h[0][1] * h[0][1]) * inv_det;
 
-    return det;
+    h_UU[1][0] = h_UU[0][1];
+    h_UU[2][0] = h_UU[0][2];
+    h_UU[2][1] = h_UU[1][2];
 }
 
 /*
- * Trace of a symmetric tensor with respect to an inverse metric:
- *   tr = g^{ij} s_{ij} = gtu[0]*s[0] + gtu[3]*s[3] + gtu[5]*s[5]
- *        + 2*(gtu[1]*s[1] + gtu[2]*s[2] + gtu[4]*s[4])
+ * Trace of A_{ij} with inverse metric: tr = h^{ij} A_{ij}
+ * Ref: GRChombo TensorAlgebra.hpp:165-171
  */
-static inline double sym3_trace(const double s[6], const double gtu[6])
+static inline double compute_trace(const double A[3][3],
+                                   const double h_UU[3][3])
 {
-    return gtu[SYM_XX] * s[SYM_XX] + gtu[SYM_YY] * s[SYM_YY] + gtu[SYM_ZZ] * s[SYM_ZZ]
-         + 2.0 * (gtu[SYM_XY] * s[SYM_XY] + gtu[SYM_XZ] * s[SYM_XZ]
-                  + gtu[SYM_YZ] * s[SYM_YZ]);
+    double tr = 0.0;
+    FOR2(i, j) tr += h_UU[i][j] * A[i][j];
+    return tr;
 }
 
 /*
- * Make a symmetric tensor tracefree with respect to a metric:
- *   s_ij -> s_ij - (1/3) g_ij g^{kl} s_{kl}
+ * Trace of a mixed tensor A^i_j (diagonal sum).
+ * Ref: GRChombo TensorAlgebra.hpp:175-179
  */
-static inline void sym3_make_tracefree(double s[6], const double g_dd[6],
-                                       const double g_uu[6])
+static inline double compute_trace_diag(const double A[3][3])
 {
-    double tr = sym3_trace(s, g_uu);
-    double third_tr = tr / 3.0;
-    for (int a = 0; a < 6; a++) {
-        s[a] -= third_tr * g_dd[a];
+    return A[0][0] + A[1][1] + A[2][2];
+}
+
+/*
+ * Dot product of two vectors: v^i w_i (no metric).
+ * Ref: GRChombo TensorAlgebra.hpp:193-199
+ */
+static inline double compute_dot_product(const double v[3], const double w[3])
+{
+    return v[0] * w[0] + v[1] * w[1] + v[2] * w[2];
+}
+
+/*
+ * Dot product with inverse metric: h^{ij} v_i w_j
+ * Ref: GRChombo TensorAlgebra.hpp:204-214
+ */
+static inline double compute_dot_product_metric(const double v[3],
+                                                const double w[3],
+                                                const double h_UU[3][3])
+{
+    double dp = 0.0;
+    FOR2(m, n) dp += h_UU[m][n] * v[m] * w[n];
+    return dp;
+}
+
+/*
+ * Compute Christoffel symbols from d1_h[i][j][k] = d_k h_{ij}
+ * and the inverse metric h_UU.
+ *
+ * Gamma_{ijk} = 0.5*(d_k h_{ji} + d_j h_{ki} - d_i h_{jk})
+ * Gamma^i_{jk} = h^{il} Gamma_{ljk}
+ * Gamma^i = h^{jk} Gamma^i_{jk}
+ *
+ * Ref: GRChombo TensorAlgebra.hpp:344-367
+ */
+static inline void compute_christoffel(const double d1_h[3][3][3],
+                                       const double h_UU[3][3],
+                                       chris_t *chris)
+{
+    /* Gamma_{ijk} = 0.5*(d1_h[j][i][k] + d1_h[k][i][j] - d1_h[j][k][i])
+     * where d1_h[a][b][dir] = d_{dir} h_{ab} */
+    FOR3(i, j, k) {
+        chris->LLL[i][j][k] = 0.5 * (d1_h[j][i][k] + d1_h[k][i][j]
+                                    - d1_h[j][k][i]);
+    }
+
+    FOR3(i, j, k) {
+        chris->ULL[i][j][k] = 0.0;
+        FOR1(l) chris->ULL[i][j][k] += h_UU[i][l] * chris->LLL[l][j][k];
+    }
+
+    FOR1(i) {
+        chris->contracted[i] = 0.0;
+        FOR2(j, k) chris->contracted[i] += h_UU[j][k] * chris->ULL[i][j][k];
     }
 }
 
 /*
- * Raise a covector v_i with inverse metric: v^i = g^{ij} v_j
+ * Raise both indices of a symmetric 2-tensor: A^{ij} = h^{ik} h^{jl} A_{kl}
+ * Ref: GRChombo TensorAlgebra.hpp:259-270
  */
-static inline void sym3_raise_vector(const double gtu[6], const double v_d[3],
-                                     double v_u[3])
+static inline void raise_all_2(const double A_dd[3][3],
+                                const double h_UU[3][3],
+                                double A_uu[3][3])
 {
-    v_u[0] = gtu[SYM_XX] * v_d[0] + gtu[SYM_XY] * v_d[1] + gtu[SYM_XZ] * v_d[2];
-    v_u[1] = gtu[SYM_XY] * v_d[0] + gtu[SYM_YY] * v_d[1] + gtu[SYM_YZ] * v_d[2];
-    v_u[2] = gtu[SYM_XZ] * v_d[0] + gtu[SYM_YZ] * v_d[1] + gtu[SYM_ZZ] * v_d[2];
-}
-
-/*
- * Contract two symmetric tensors: result = a^{ij} b_{ij}
- * (same as trace of product when one index is raised)
- */
-static inline double sym3_contract(const double a[6], const double b[6])
-{
-    return a[SYM_XX] * b[SYM_XX] + a[SYM_YY] * b[SYM_YY] + a[SYM_ZZ] * b[SYM_ZZ]
-         + 2.0 * (a[SYM_XY] * b[SYM_XY] + a[SYM_XZ] * b[SYM_XZ]
-                  + a[SYM_YZ] * b[SYM_YZ]);
-}
-
-/*
- * Raise first index of a symmetric tensor: A^i_j = g^{ik} A_{kj}
- * Result is NOT symmetric — stored as [3][3] = result[i][j]
- */
-static inline void sym3_raise_first(const double gtu[6], const double a_dd[6],
-                                    double a_ud[3][3])
-{
-    /* i=0: A^x_j = g^{xk} A_{kj} */
-    a_ud[0][0] = gtu[SYM_XX] * a_dd[SYM_XX] + gtu[SYM_XY] * a_dd[SYM_XY]
-               + gtu[SYM_XZ] * a_dd[SYM_XZ];
-    a_ud[0][1] = gtu[SYM_XX] * a_dd[SYM_XY] + gtu[SYM_XY] * a_dd[SYM_YY]
-               + gtu[SYM_XZ] * a_dd[SYM_YZ];
-    a_ud[0][2] = gtu[SYM_XX] * a_dd[SYM_XZ] + gtu[SYM_XY] * a_dd[SYM_YZ]
-               + gtu[SYM_XZ] * a_dd[SYM_ZZ];
-
-    /* i=1: A^y_j = g^{yk} A_{kj} */
-    a_ud[1][0] = gtu[SYM_XY] * a_dd[SYM_XX] + gtu[SYM_YY] * a_dd[SYM_XY]
-               + gtu[SYM_YZ] * a_dd[SYM_XZ];
-    a_ud[1][1] = gtu[SYM_XY] * a_dd[SYM_XY] + gtu[SYM_YY] * a_dd[SYM_YY]
-               + gtu[SYM_YZ] * a_dd[SYM_YZ];
-    a_ud[1][2] = gtu[SYM_XY] * a_dd[SYM_XZ] + gtu[SYM_YY] * a_dd[SYM_YZ]
-               + gtu[SYM_YZ] * a_dd[SYM_ZZ];
-
-    /* i=2: A^z_j = g^{zk} A_{kj} */
-    a_ud[2][0] = gtu[SYM_XZ] * a_dd[SYM_XX] + gtu[SYM_YZ] * a_dd[SYM_XY]
-               + gtu[SYM_ZZ] * a_dd[SYM_XZ];
-    a_ud[2][1] = gtu[SYM_XZ] * a_dd[SYM_XY] + gtu[SYM_YZ] * a_dd[SYM_YY]
-               + gtu[SYM_ZZ] * a_dd[SYM_YZ];
-    a_ud[2][2] = gtu[SYM_XZ] * a_dd[SYM_XZ] + gtu[SYM_YZ] * a_dd[SYM_YZ]
-               + gtu[SYM_ZZ] * a_dd[SYM_ZZ];
-}
-
-/*
- * Enforce unit determinant: rescale g_ij -> g_ij / cbrt(det(g))
- * Used after every RK4 step to maintain det(gamma_tilde) = 1.
- */
-static inline void sym3_enforce_unit_det(double s[6])
-{
-    double det = sym3_det(s);
-    double scale = 1.0 / cbrt(det);
-    for (int a = 0; a < 6; a++) {
-        s[a] *= scale;
+    FOR2(i, j) {
+        A_uu[i][j] = 0.0;
+        FOR2(k, l) A_uu[i][j] += h_UU[i][k] * h_UU[j][l] * A_dd[k][l];
     }
 }
+
+/*
+ * Remove trace from symmetric tensor: A_{ij} -= (1/3) h_{ij} h^{kl} A_{kl}
+ * Ref: GRChombo TensorAlgebra.hpp:220-230
+ */
+static inline void make_trace_free(double A[3][3],
+                                   const double h[3][3],
+                                   const double h_UU[3][3])
+{
+    double tr = compute_trace(A, h_UU);
+    double one_over_dim = 1.0 / (double)GR_SPACEDIM;
+    FOR2(i, j) A[i][j] -= one_over_dim * h[i][j] * tr;
+}
+
+#ifdef LATTICE_GPU
+#pragma omp end declare target
+#endif
 
 #endif /* LATTICE_TENSOR_UTILS_H */

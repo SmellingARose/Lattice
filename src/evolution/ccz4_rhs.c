@@ -1,775 +1,429 @@
 /*
- * ccz4_rhs.c — CCZ4 evolution equations right-hand side
+ * Lattice — 3D Numerical Relativity
+ * Full CCZ4 right-hand-side at a single grid point.
  *
- * Implements the complete CCZ4 system (arXiv:1106.2254) with GRChombo
- * modification kappa1 -> kappa1/alpha for BH stability (arXiv:1503.03436).
+ * Steps:
+ *   1. Load fields into locals
+ *   2. Compute first derivatives (d1) for all needed fields
+ *   3. Compute second derivatives (d2) for chi, h, lapse, shift
+ *   4. Compute advection derivatives (upwind with shift)
+ *   5. Inverse metric, Christoffel symbols
+ *   6. Z vector from Gamma - chris_contracted
+ *   7. Ricci tensor with Z terms
+ *   8. Covariant derivatives of lapse
+ *   9. CCZ4 RHS: chi, h, K, A, Theta, Gamma
+ *  10. Moving puncture gauge: lapse, shift, B
+ *  11. Kreiss-Oliger dissipation
  *
- * Evolved variables: {chi, gt_{ij}, K, At_{ij}, Ghat^i, Theta}
- *
- * Conformal factor convention: chi = e^{-4 phi}, W = chi^{1/2} = e^{-2 phi}
- *
- * Per-point computation:
- *   1. Read field values
- *   2. Compute inverse metric
- *   3. First derivatives (D1) of all fields
- *   4. Second derivatives (D2) of chi, gt, alpha
- *   5. Advection terms (upwind)
- *   6. Christoffel symbols
- *   7. Conformal Ricci tensor
- *   8. Z_i from Gamma_hat^i
- *   9. Assemble all RHS equations
+ * Ref: arXiv:1106.2254 (CCZ4 equations)
+ * Ref: GRChombo CCZ4RHS.impl.hpp:60-227
+ * Ref: GRChombo CCZ4Geometry.hpp (Ricci with Z)
+ * Ref: GRChombo MovingPunctureGauge.hpp (gauge)
  */
 
-#include "../core/grid.h"
+#include "ccz4_rhs.h"
 #include "../core/fields.h"
 #include "../numerics/finite_diff.h"
 #include "../geometry/tensor_utils.h"
-
 #include <math.h>
 
-/*
- * Compute CCZ4 RHS at a single grid point.
- * All field data is read from g->rk_scratch[], output to g->rhs[].
- */
-static void ccz4_rhs_point(grid_t *g, int idx)
+/* Forward declaration */
+extern void add_ko_dissipation(double **rhs, const double *const *src,
+                               const grid_t *g, double sigma,
+                               int i, int j, int k);
+
+void ccz4_rhs_point(double **rhs, const double *const *src,
+                    const grid_t *g, const sim_params_t *p,
+                    int i, int j, int k)
 {
-    const int sx = grid_stride_x(g);
-    const int sy = grid_stride_y(g);
-    const int sz = grid_stride_z(g);
-    const double dx = g->params.dx;
-    const double dy = g->params.dy;
-    const double dz = g->params.dz;
+    const int idx = IDX(g, i, j, k);
+    const int sx  = STRIDE_X;
+    const int sy  = STRIDE_Y(g);
+    const int sz  = STRIDE_Z(g);
+    const double dx = g->dx;
     const int strides[3] = { sx, sy, sz };
-    const double dxs[3] = { dx, dy, dz };
 
-    /* CCZ4 parameters */
-    const double kappa1 = g->params.kappa1;
-    const double kappa2 = g->params.kappa2;
-    const double kappa3 = g->params.kappa3;
+    /* ========== 1. Load fields into locals ========== */
+    double chi   = src[FIELD_CHI][idx];
+    double h[3][3];
+    h[0][0] = src[FIELD_H11][idx]; h[0][1] = src[FIELD_H12][idx]; h[0][2] = src[FIELD_H13][idx];
+    h[1][0] = h[0][1];             h[1][1] = src[FIELD_H22][idx]; h[1][2] = src[FIELD_H23][idx];
+    h[2][0] = h[0][2];             h[2][1] = h[1][2];             h[2][2] = src[FIELD_H33][idx];
 
-    /* ===== 1. Read field values ===== */
-    double chi = g->rk_scratch[FIELD_CHI][idx];
-    double chi_safe = fmax(chi, 1e-4);
+    double K     = src[FIELD_K][idx];
+    double A[3][3];
+    A[0][0] = src[FIELD_A11][idx]; A[0][1] = src[FIELD_A12][idx]; A[0][2] = src[FIELD_A13][idx];
+    A[1][0] = A[0][1];             A[1][1] = src[FIELD_A22][idx]; A[1][2] = src[FIELD_A23][idx];
+    A[2][0] = A[0][2];             A[2][1] = A[1][2];             A[2][2] = src[FIELD_A33][idx];
 
-    double gt[6], at[6];
-    for (int a = 0; a < 6; a++) {
-        gt[a] = g->rk_scratch[FIELD_GT_BASE + a][idx];
-        at[a] = g->rk_scratch[FIELD_AT_BASE + a][idx];
-    }
+    double Theta  = src[FIELD_THETA][idx];
+    double Gamma[3] = { src[FIELD_GAMMA1][idx], src[FIELD_GAMMA2][idx], src[FIELD_GAMMA3][idx] };
+    double lapse  = src[FIELD_LAPSE][idx];
+    double shift[3] = { src[FIELD_SHIFT1][idx], src[FIELD_SHIFT2][idx], src[FIELD_SHIFT3][idx] };
+    double B[3]     = { src[FIELD_B1][idx], src[FIELD_B2][idx], src[FIELD_B3][idx] };
 
-    double K = g->rk_scratch[FIELD_TRKA][idx];
-    double Theta = g->rk_scratch[FIELD_THETA][idx];
-    double alpha = g->rk_scratch[FIELD_ALPHA][idx];
-    double alpha_safe = fmax(fabs(alpha), 1e-16);
+    /* ========== 2. First derivatives ========== */
+    double d1_chi[3], d1_K[3], d1_Theta[3], d1_lapse[3];
+    double d1_h[3][3][3];     /* d1_h[i][j][dir] = d_{dir} h_{ij} */
+    double d1_A[3][3][3];     /* d1_A[i][j][dir] = d_{dir} A_{ij} */
+    double d1_Gamma[3][3];    /* d1_Gamma[i][dir] = d_{dir} Gamma^i */
+    double d1_shift[3][3];    /* d1_shift[i][dir] = d_{dir} shift^i */
 
-    double beta[3], Ghat[3];
-    for (int d = 0; d < 3; d++) {
-        beta[d] = g->rk_scratch[FIELD_BETA1 + d][idx];
-        Ghat[d] = g->rk_scratch[FIELD_GHAT1 + d][idx];
-    }
+    /* Field indices for symmetric tensor components */
+    static const int h_idx[3][3] = {
+        {FIELD_H11, FIELD_H12, FIELD_H13},
+        {FIELD_H12, FIELD_H22, FIELD_H23},
+        {FIELD_H13, FIELD_H23, FIELD_H33}
+    };
+    static const int A_idx[3][3] = {
+        {FIELD_A11, FIELD_A12, FIELD_A13},
+        {FIELD_A12, FIELD_A22, FIELD_A23},
+        {FIELD_A13, FIELD_A23, FIELD_A33}
+    };
 
-    /* ===== 2. Inverse conformal metric ===== */
-    double gtu[6];
-    sym3_inv(gt, gtu);
+    FOR1(dir) {
+        int s = strides[dir];
+        d1_chi[dir]    = fd_d1(src[FIELD_CHI],   idx, s, dx);
+        d1_K[dir]      = fd_d1(src[FIELD_K],     idx, s, dx);
+        d1_Theta[dir]  = fd_d1(src[FIELD_THETA], idx, s, dx);
+        d1_lapse[dir]  = fd_d1(src[FIELD_LAPSE], idx, s, dx);
 
-    /* ===== 3. First derivatives ===== */
-    double d1_chi[3], d1_K[3], d1_Theta[3], d1_alpha[3];
-    double d1_gt[3][6], d1_beta[3][3], d1_Ghat[3][3];
-
-    for (int d = 0; d < 3; d++) {
-        d1_chi[d] = FD_D1(g->rk_scratch[FIELD_CHI], idx, strides[d], dxs[d]);
-        d1_K[d] = FD_D1(g->rk_scratch[FIELD_TRKA], idx, strides[d], dxs[d]);
-        d1_Theta[d] = FD_D1(g->rk_scratch[FIELD_THETA], idx, strides[d], dxs[d]);
-        d1_alpha[d] = FD_D1(g->rk_scratch[FIELD_ALPHA], idx, strides[d], dxs[d]);
-
-        for (int a = 0; a < 6; a++) {
-            d1_gt[d][a] = FD_D1(g->rk_scratch[FIELD_GT_BASE + a], idx, strides[d], dxs[d]);
+        FOR2(a, b) {
+            d1_h[a][b][dir] = fd_d1(src[h_idx[a][b]], idx, s, dx);
+            d1_A[a][b][dir] = fd_d1(src[A_idx[a][b]], idx, s, dx);
         }
-
-        for (int b = 0; b < 3; b++) {
-            d1_beta[d][b] = FD_D1(g->rk_scratch[FIELD_BETA1 + b], idx, strides[d], dxs[d]);
-            d1_Ghat[d][b] = FD_D1(g->rk_scratch[FIELD_GHAT1 + b], idx, strides[d], dxs[d]);
-        }
-    }
-
-    /* Divergence of shift: d_k beta^k */
-    double div_beta = d1_beta[0][0] + d1_beta[1][1] + d1_beta[2][2];
-
-    /* ===== 4. Second derivatives ===== */
-    double d2_chi[6], d2_alpha[6];
-    double d2_gt[3][3][6];
-
-    /* chi second derivatives */
-    d2_chi[SYM_XX] = FD_D2(g->rk_scratch[FIELD_CHI], idx, sx, dx);
-    d2_chi[SYM_YY] = FD_D2(g->rk_scratch[FIELD_CHI], idx, sy, dy);
-    d2_chi[SYM_ZZ] = FD_D2(g->rk_scratch[FIELD_CHI], idx, sz, dz);
-    d2_chi[SYM_XY] = FD_D1D1(g->rk_scratch[FIELD_CHI], idx, sx, sy, dx, dy);
-    d2_chi[SYM_XZ] = FD_D1D1(g->rk_scratch[FIELD_CHI], idx, sx, sz, dx, dz);
-    d2_chi[SYM_YZ] = FD_D1D1(g->rk_scratch[FIELD_CHI], idx, sy, sz, dy, dz);
-
-    /* alpha second derivatives */
-    d2_alpha[SYM_XX] = FD_D2(g->rk_scratch[FIELD_ALPHA], idx, sx, dx);
-    d2_alpha[SYM_YY] = FD_D2(g->rk_scratch[FIELD_ALPHA], idx, sy, dy);
-    d2_alpha[SYM_ZZ] = FD_D2(g->rk_scratch[FIELD_ALPHA], idx, sz, dz);
-    d2_alpha[SYM_XY] = FD_D1D1(g->rk_scratch[FIELD_ALPHA], idx, sx, sy, dx, dy);
-    d2_alpha[SYM_XZ] = FD_D1D1(g->rk_scratch[FIELD_ALPHA], idx, sx, sz, dx, dz);
-    d2_alpha[SYM_YZ] = FD_D1D1(g->rk_scratch[FIELD_ALPHA], idx, sy, sz, dy, dz);
-
-    /* gt second derivatives */
-    for (int a = 0; a < 6; a++) {
-        const double *f = g->rk_scratch[FIELD_GT_BASE + a];
-        for (int d = 0; d < 3; d++) {
-            d2_gt[d][d][a] = FD_D2(f, idx, strides[d], dxs[d]);
-        }
-        d2_gt[0][1][a] = FD_D1D1(f, idx, sx, sy, dx, dy);
-        d2_gt[1][0][a] = d2_gt[0][1][a];
-        d2_gt[0][2][a] = FD_D1D1(f, idx, sx, sz, dx, dz);
-        d2_gt[2][0][a] = d2_gt[0][2][a];
-        d2_gt[1][2][a] = FD_D1D1(f, idx, sy, sz, dy, dz);
-        d2_gt[2][1][a] = d2_gt[1][2][a];
-    }
-
-    /* Second derivatives of beta (for Gamma_hat RHS) */
-    double d2_beta[3][3][3]; /* d2_beta[d1][d2][component] */
-    for (int b = 0; b < 3; b++) {
-        const double *f = g->rk_scratch[FIELD_BETA1 + b];
-        for (int d = 0; d < 3; d++) {
-            d2_beta[d][d][b] = FD_D2(f, idx, strides[d], dxs[d]);
-        }
-        d2_beta[0][1][b] = FD_D1D1(f, idx, sx, sy, dx, dy);
-        d2_beta[1][0][b] = d2_beta[0][1][b];
-        d2_beta[0][2][b] = FD_D1D1(f, idx, sx, sz, dx, dz);
-        d2_beta[2][0][b] = d2_beta[0][2][b];
-        d2_beta[1][2][b] = FD_D1D1(f, idx, sy, sz, dy, dz);
-        d2_beta[2][1][b] = d2_beta[1][2][b];
-    }
-
-    /* ===== 5. Advection terms ===== */
-    double adv_chi = 0.0, adv_K = 0.0, adv_Theta = 0.0;
-    double adv_gt[6], adv_at[6], adv_Ghat[3];
-
-    for (int d = 0; d < 3; d++) {
-        adv_chi += FD_ADV(g->rk_scratch[FIELD_CHI], idx, strides[d], dxs[d], beta[d]);
-        adv_K += FD_ADV(g->rk_scratch[FIELD_TRKA], idx, strides[d], dxs[d], beta[d]);
-        adv_Theta += FD_ADV(g->rk_scratch[FIELD_THETA], idx, strides[d], dxs[d], beta[d]);
-    }
-
-    for (int a = 0; a < 6; a++) {
-        adv_gt[a] = 0.0;
-        adv_at[a] = 0.0;
-        for (int d = 0; d < 3; d++) {
-            adv_gt[a] += FD_ADV(g->rk_scratch[FIELD_GT_BASE + a], idx, strides[d], dxs[d], beta[d]);
-            adv_at[a] += FD_ADV(g->rk_scratch[FIELD_AT_BASE + a], idx, strides[d], dxs[d], beta[d]);
+        FOR1(a) {
+            d1_Gamma[a][dir] = fd_d1(src[FIELD_GAMMA1 + a], idx, s, dx);
+            d1_shift[a][dir] = fd_d1(src[FIELD_SHIFT1 + a], idx, s, dx);
         }
     }
 
-    for (int b = 0; b < 3; b++) {
-        adv_Ghat[b] = 0.0;
-        for (int d = 0; d < 3; d++) {
-            adv_Ghat[b] += FD_ADV(g->rk_scratch[FIELD_GHAT1 + b], idx, strides[d], dxs[d], beta[d]);
+    /* ========== 3. Second derivatives ========== */
+    double d2_chi[3][3], d2_lapse[3][3];
+    double d2_h[3][3][3][3];    /* d2_h[i][j][dir1][dir2] */
+    double d2_shift[3][3][3];   /* d2_shift[i][dir1][dir2] */
+
+    FOR1(dir) {
+        int s = strides[dir];
+        d2_chi[dir][dir]   = fd_d2(src[FIELD_CHI],   idx, s, dx);
+        d2_lapse[dir][dir] = fd_d2(src[FIELD_LAPSE], idx, s, dx);
+
+        FOR2(a, b) {
+            d2_h[a][b][dir][dir] = fd_d2(src[h_idx[a][b]], idx, s, dx);
+        }
+        FOR1(a) {
+            d2_shift[a][dir][dir] = fd_d2(src[FIELD_SHIFT1 + a], idx, s, dx);
         }
     }
 
-    /* ===== 6. Christoffel symbols ===== */
-    double chris[3][6]; /* Gamma^i_{jk} */
-    for (int jk = 0; jk < 6; jk++) {
-        int jj, kk;
-        switch (jk) {
-        case SYM_XX: jj = 0; kk = 0; break;
-        case SYM_XY: jj = 0; kk = 1; break;
-        case SYM_XZ: jj = 0; kk = 2; break;
-        case SYM_YY: jj = 1; kk = 1; break;
-        case SYM_YZ: jj = 1; kk = 2; break;
-        default:     jj = 2; kk = 2; break;
-        }
-        for (int ii = 0; ii < 3; ii++) {
-            double val = 0.0;
-            for (int ll = 0; ll < 3; ll++) {
-                val += gtu[SYM(ii, ll)] * (d1_gt[jj][SYM(ll, kk)]
-                                         + d1_gt[kk][SYM(ll, jj)]
-                                         - d1_gt[ll][SYM(jj, kk)]);
+    /* Mixed second derivatives */
+    for (int dir1 = 0; dir1 < 3; dir1++) {
+        for (int dir2 = 0; dir2 < dir1; dir2++) {
+            int s1 = strides[dir1], s2 = strides[dir2];
+
+            d2_chi[dir1][dir2]   = fd_d2_mixed(src[FIELD_CHI],   idx, s1, s2, dx);
+            d2_chi[dir2][dir1]   = d2_chi[dir1][dir2];
+            d2_lapse[dir1][dir2] = fd_d2_mixed(src[FIELD_LAPSE], idx, s1, s2, dx);
+            d2_lapse[dir2][dir1] = d2_lapse[dir1][dir2];
+
+            FOR2(a, b) {
+                d2_h[a][b][dir1][dir2] = fd_d2_mixed(src[h_idx[a][b]], idx, s1, s2, dx);
+                d2_h[a][b][dir2][dir1] = d2_h[a][b][dir1][dir2];
             }
-            chris[ii][jk] = 0.5 * val;
-        }
-    }
-
-    /* Contracted Christoffels: Gamma^i = g^{jk} Gamma^i_{jk} */
-    double Gamma_contracted[3];
-    for (int ii = 0; ii < 3; ii++) {
-        Gamma_contracted[ii] = gtu[SYM_XX] * chris[ii][SYM_XX]
-                             + gtu[SYM_YY] * chris[ii][SYM_YY]
-                             + gtu[SYM_ZZ] * chris[ii][SYM_ZZ]
-                             + 2.0 * (gtu[SYM_XY] * chris[ii][SYM_XY]
-                                    + gtu[SYM_XZ] * chris[ii][SYM_XZ]
-                                    + gtu[SYM_YZ] * chris[ii][SYM_YZ]);
-    }
-
-    /* ===== 7. Conformal Ricci tensor ===== */
-    double Rt_dd[6]; /* R_tilde_{ij} */
-
-    /* Lower-index Christoffels for Ricci */
-    double chris_d[3][6];
-    for (int jk = 0; jk < 6; jk++) {
-        for (int ii = 0; ii < 3; ii++) {
-            chris_d[ii][jk] = 0.0;
-            for (int ll = 0; ll < 3; ll++) {
-                chris_d[ii][jk] += gt[SYM(ii, ll)] * chris[ll][jk];
+            FOR1(a) {
+                d2_shift[a][dir1][dir2] = fd_d2_mixed(src[FIELD_SHIFT1 + a], idx, s1, s2, dx);
+                d2_shift[a][dir2][dir1] = d2_shift[a][dir1][dir2];
             }
         }
     }
 
-    for (int ij = 0; ij < 6; ij++) {
-        int ii, jj;
-        switch (ij) {
-        case SYM_XX: ii = 0; jj = 0; break;
-        case SYM_XY: ii = 0; jj = 1; break;
-        case SYM_XZ: ii = 0; jj = 2; break;
-        case SYM_YY: ii = 1; jj = 1; break;
-        case SYM_YZ: ii = 1; jj = 2; break;
-        default:     ii = 2; jj = 2; break;
+    /* ========== 4. Advection derivatives ========== */
+    double advec_chi = 0.0, advec_K = 0.0, advec_Theta = 0.0, advec_lapse = 0.0;
+    double advec_h[3][3] = {{0}}, advec_A[3][3] = {{0}};
+    double advec_Gamma[3] = {0}, advec_shift[3] = {0}, advec_B[3] = {0};
+
+    FOR1(dir) {
+        int s = strides[dir];
+        double beta = shift[dir];
+        advec_chi    += fd_adv(src[FIELD_CHI],   idx, s, beta, dx);
+        advec_K      += fd_adv(src[FIELD_K],     idx, s, beta, dx);
+        advec_Theta  += fd_adv(src[FIELD_THETA], idx, s, beta, dx);
+        advec_lapse  += fd_adv(src[FIELD_LAPSE], idx, s, beta, dx);
+
+        FOR2(a, b) {
+            advec_h[a][b] += fd_adv(src[h_idx[a][b]], idx, s, beta, dx);
+            advec_A[a][b] += fd_adv(src[A_idx[a][b]], idx, s, beta, dx);
         }
-
-        /* -(1/2) g^{lm} d_l d_m g_{ij} */
-        double term1 = 0.0;
-        for (int ll = 0; ll < 3; ll++) {
-            for (int mm = 0; mm < 3; mm++) {
-                term1 += gtu[SYM(ll, mm)] * d2_gt[ll][mm][ij];
-            }
-        }
-        term1 *= -0.5;
-
-        /* g_{k(i} d_{j)} Ghat^k */
-        double term2 = 0.0;
-        for (int kk = 0; kk < 3; kk++) {
-            term2 += gt[SYM(kk, ii)] * d1_Ghat[jj][kk]
-                   + gt[SYM(kk, jj)] * d1_Ghat[ii][kk];
-        }
-        term2 *= 0.5;
-
-        /* Ghat^k Gamma_{(ij)k} */
-        double term3 = 0.0;
-        for (int kk = 0; kk < 3; kk++) {
-            term3 += Ghat[kk] * 0.5 * (chris_d[ii][SYM(jj, kk)]
-                                       + chris_d[jj][SYM(ii, kk)]);
-        }
-
-        /* g^{lm} (2 Gamma^k_{l(i} Gamma_{j)km} + Gamma^k_{im} Gamma_{klj}) */
-        double term4 = 0.0;
-        for (int ll = 0; ll < 3; ll++) {
-            for (int mm = 0; mm < 3; mm++) {
-                double gtu_lm = gtu[SYM(ll, mm)];
-                for (int kk = 0; kk < 3; kk++) {
-                    term4 += gtu_lm * (chris[kk][SYM(ll, ii)] * chris_d[jj][SYM(kk, mm)]
-                                     + chris[kk][SYM(ll, jj)] * chris_d[ii][SYM(kk, mm)]);
-                    term4 += gtu_lm * chris[kk][SYM(ii, mm)] * chris_d[kk][SYM(ll, jj)];
-                }
-            }
-        }
-
-        Rt_dd[ij] = term1 + term2 + term3 + term4;
-    }
-
-    /* ===== Conformal factor contributions to physical Ricci ===== */
-    /*
-     * The full physical Ricci has conformal factor terms.
-     * Using chi = e^{-4 phi}:
-     *
-     * R_{ij} = R_tilde_{ij}
-     *        + (1/(2 chi)) [-D_i D_j chi - gt_{ij} g^{kl} D_k D_l chi
-     *                        + (1/chi) d_i chi d_j chi
-     *                        + gt_{ij} g^{kl} d_k chi d_l chi / (2 chi)]
-     *        + Christoffel corrections to D_i D_j chi
-     *
-     * Rewritten using covariant derivatives with conformal connection:
-     * D_i D_j chi = d_i d_j chi - Gamma^k_{ij} d_k chi
-     */
-    double DDchi[6]; /* Covariant D_i D_j chi (with conformal Christoffels) */
-    for (int ij = 0; ij < 6; ij++) {
-        DDchi[ij] = d2_chi[ij];
-        for (int kk = 0; kk < 3; kk++) {
-            DDchi[ij] -= chris[kk][ij] * d1_chi[kk];
+        FOR1(a) {
+            advec_Gamma[a] += fd_adv(src[FIELD_GAMMA1 + a], idx, s, beta, dx);
+            advec_shift[a] += fd_adv(src[FIELD_SHIFT1 + a], idx, s, beta, dx);
+            advec_B[a]     += fd_adv(src[FIELD_B1 + a],     idx, s, beta, dx);
         }
     }
 
-    /* Trace: g^{ij} D_i D_j chi */
-    double laplacian_chi = gtu[SYM_XX] * DDchi[SYM_XX]
-                         + gtu[SYM_YY] * DDchi[SYM_YY]
-                         + gtu[SYM_ZZ] * DDchi[SYM_ZZ]
-                         + 2.0 * (gtu[SYM_XY] * DDchi[SYM_XY]
-                                + gtu[SYM_XZ] * DDchi[SYM_XZ]
-                                + gtu[SYM_YZ] * DDchi[SYM_YZ]);
+    /* ========== 5. Inverse metric, Christoffel ========== */
+    double h_UU[3][3];
+    compute_inverse_sym(h, h_UU);
 
-    /* g^{kl} d_k chi d_l chi */
-    double dchi_sq = 0.0;
-    for (int a = 0; a < 3; a++) {
-        for (int b = 0; b < 3; b++) {
-            dchi_sq += gtu[SYM(a, b)] * d1_chi[a] * d1_chi[b];
-        }
+    chris_t chris;
+    compute_christoffel(d1_h, h_UU, &chris);
+
+    /* ========== 6. Z vector ========== */
+    /* Z_over_chi[i] = 0.5*(Gamma[i] - chris_contracted[i])
+     * Z[i] = chi * Z_over_chi[i]
+     * Ref: GRChombo CCZ4RHS.impl.hpp:71-82 */
+    double Z_over_chi[3], Z[3];
+    FOR1(i) {
+        Z_over_chi[i] = 0.5 * (Gamma[i] - chris.contracted[i]);
+        Z[i] = chi * Z_over_chi[i];
     }
 
-    /* Full Ricci R_{ij} including conformal factor:
-     * R_{ij} = Rt_{ij} + (1/(2 chi))[-DDchi_{ij} - gt_{ij} laplacian_chi
-     *          + d_i chi d_j chi / chi + gt_{ij} dchi_sq / (2 chi)]
-     * Note: the exact form depends on conventions. Using the chi convention
-     * (B&S eq 3.57 adapted):
-     *
-     * Rphys_{ij} = Rt_{ij}
-     *   + 1/(2 chi) * (DDchi_{ij} + gt_{ij} laplacian_chi
-     *                  - 3/(2 chi) d_i chi d_j chi
-     *                  - gt_{ij}/(2 chi) dchi_sq)  ... wait, need to be careful.
-     *
-     * Actually using the standard BSSN/CCZ4 decomposition with chi:
-     * phi = -ln(chi)/4, so d_i phi = -d_i chi / (4 chi)
-     *
-     * R_{ij}^{phi} = -(1/2) g^{kl} d_k d_l gt_{ij} + ...  [already in Rt]
-     *   +  1/(2 chi) [DDchi_{ij} - gt_{ij} laplacian_chi + ...]
-     *
-     * For CCZ4, the conformal factor contributions appear in the At and K
-     * equations via specific combinations. Let's compute what we need:
-     */
+    /* ========== 7. Ricci tensor with Z terms ========== */
+    /* Ref: GRChombo CCZ4Geometry.hpp:56-112 */
 
-    /* R_{ij}^{phys} = Rt_{ij} + Rchi_{ij} where:
-     *
-     * Rchi_{ij} = 1/(2 chi) [DDchi_{ij} + gt_{ij} * laplacian_chi]
-     *           - 1/(4 chi^2) [d_i chi d_j chi + 3 gt_{ij} * dchi_sq]
-     *
-     * Ref: GRChombo CCZ4Geometry.hpp (compute_ricci_Z), verified against
-     * B&S eq 3.10 converted from phi to chi = e^{-4 phi}.
-     * In d=3 dimensions: (d-2)=1 prefactor on DDchi and d_i chi d_j chi terms,
-     * d=3 prefactor on gt * dchi_sq term.
-     */
-    double Rchi_dd[6];
-    for (int ij = 0; ij < 6; ij++) {
-        int ii2, jj2;
-        switch (ij) {
-        case SYM_XX: ii2 = 0; jj2 = 0; break;
-        case SYM_XY: ii2 = 0; jj2 = 1; break;
-        case SYM_XZ: ii2 = 0; jj2 = 2; break;
-        case SYM_YY: ii2 = 1; jj2 = 1; break;
-        case SYM_YZ: ii2 = 1; jj2 = 2; break;
-        default:     ii2 = 2; jj2 = 2; break;
-        }
-
-        Rchi_dd[ij] = (1.0 / (2.0 * chi_safe)) * (DDchi[ij] + gt[ij] * laplacian_chi)
-                    - (1.0 / (4.0 * chi_safe * chi_safe))
-                      * (d1_chi[ii2] * d1_chi[jj2] + 3.0 * gt[ij] * dchi_sq);
+    /* Covariant derivative of chi: covdtilde2chi[k][l] = d2_chi[k][l] - Gamma^m_{kl} d1_chi[m] */
+    double covdtilde2chi[3][3];
+    FOR2(kk, ll) {
+        covdtilde2chi[kk][ll] = d2_chi[kk][ll];
+        FOR1(m) covdtilde2chi[kk][ll] -= chris.ULL[m][kk][ll] * d1_chi[m];
     }
 
-    /* Physical Ricci (lower indices, conformal + chi parts) */
-    double Rphys_dd[6];
-    for (int a = 0; a < 6; a++) {
-        Rphys_dd[a] = Rt_dd[a] + Rchi_dd[a];
+    /* chris_LLU[i][j][k] = h^{kl} chris_LLL[i][j][l] */
+    double chris_LLU[3][3][3] = {{{0}}};
+    double boxtildechi = 0.0;
+    double dchi_dot_dchi = 0.0;
+    FOR2(ii, jj) {
+        boxtildechi += covdtilde2chi[ii][jj] * h_UU[ii][jj];
+        dchi_dot_dchi += d1_chi[ii] * d1_chi[jj] * h_UU[ii][jj];
+        FOR2(kk, ll) chris_LLU[ii][jj][kk] += h_UU[kk][ll] * chris.LLL[ii][jj][ll];
     }
 
-    /* Physical Ricci scalar: R = g^{ij}_{phys} R_{ij} = chi * g_tilde^{ij} R_{ij} */
-    double Rphys = chi * (gtu[SYM_XX] * Rphys_dd[SYM_XX]
-                 + gtu[SYM_YY] * Rphys_dd[SYM_YY]
-                 + gtu[SYM_ZZ] * Rphys_dd[SYM_ZZ]
-                 + 2.0 * (gtu[SYM_XY] * Rphys_dd[SYM_XY]
-                        + gtu[SYM_XZ] * Rphys_dd[SYM_XZ]
-                        + gtu[SYM_YZ] * Rphys_dd[SYM_YZ]));
-
-    /* ===== 8. Z_i from Gamma_hat ===== */
-    /* Z^i = (1/2)(Ghat^i - Gamma^i)  where Gamma^i = contracted Christoffel */
-    double Z_u[3]; /* Z^i (upper index) */
-    for (int ii = 0; ii < 3; ii++) {
-        Z_u[ii] = 0.5 * (Ghat[ii] - Gamma_contracted[ii]);
-    }
-
-    /* Z_i = gt_{ij} Z^j (lower index) */
-    double Z_d[3];
-    for (int ii = 0; ii < 3; ii++) {
-        Z_d[ii] = gt[SYM(ii, 0)] * Z_u[0]
-                + gt[SYM(ii, 1)] * Z_u[1]
-                + gt[SYM(ii, 2)] * Z_u[2];
-    }
-
-    /* Divergence of Z: D_i Z^i ≈ d_i Z^i + Gamma^i_{ik} Z^k */
-    double divZ = 0.0;
-    for (int ii = 0; ii < 3; ii++) {
-        /* d_i Z^i = (1/2) d_i (Ghat^i - Gamma^i) ≈ (1/2) d_i Ghat^i */
-        divZ += 0.5 * d1_Ghat[ii][ii];
-        /* Christoffel correction */
-        for (int kk = 0; kk < 3; kk++) {
-            divZ += chris[ii][SYM(ii, kk)] * Z_u[kk];
-        }
-    }
-
-    /* Z^i d_i alpha */
-    double Z_d_alpha = Z_u[0] * d1_alpha[0] + Z_u[1] * d1_alpha[1]
-                     + Z_u[2] * d1_alpha[2];
-
-    /* ===== 9. Covariant Laplacian of alpha ===== */
-    /* nabla^2 alpha = g^{ij}_{phys} D_i D_j alpha
-     *              = chi * g^{ij} (d_i d_j alpha - Gamma^k_{ij} d_k alpha) */
-    double DDalpha[6];
-    for (int ij = 0; ij < 6; ij++) {
-        DDalpha[ij] = d2_alpha[ij];
-        for (int kk = 0; kk < 3; kk++) {
-            DDalpha[ij] -= chris[kk][ij] * d1_alpha[kk];
-        }
-        /* Conformal factor correction:
-         * D^phys_i D^phys_j alpha = chi * [D~_i D~_j alpha
-         *   + 1/(2 chi) (d_i chi d_j alpha + d_j chi d_i alpha
-         *                - gt_{ij} g^{kl} d_k chi d_l alpha)]
-         */
-    }
-    double lap_alpha = chi * (gtu[SYM_XX] * DDalpha[SYM_XX]
-                            + gtu[SYM_YY] * DDalpha[SYM_YY]
-                            + gtu[SYM_ZZ] * DDalpha[SYM_ZZ]
-                            + 2.0 * (gtu[SYM_XY] * DDalpha[SYM_XY]
-                                   + gtu[SYM_XZ] * DDalpha[SYM_XZ]
-                                   + gtu[SYM_YZ] * DDalpha[SYM_YZ]));
-
-    /* Add conformal factor contribution to Laplacian of alpha:
-     * The full physical Laplacian includes d_i chi * d_i alpha terms */
-    double dchi_dalpha = 0.0;
-    for (int a = 0; a < 3; a++) {
-        for (int b = 0; b < 3; b++) {
-            dchi_dalpha += gtu[SYM(a, b)] * d1_chi[a] * d1_alpha[b];
-        }
-    }
-    lap_alpha -= 0.5 * dchi_dalpha;  /* correction from conformal decomposition */
-
-    /* ===== Raise At: A^{ij} = chi * g^{ik} g^{jl} At_{kl} ===== */
-    /* A_tilde^{ij} = g_tilde^{ik} g_tilde^{jl} A_tilde_{kl} */
-    double atu[6]; /* A_tilde^{ij} in symmetric storage */
-    atu[SYM_XX] = gtu[SYM_XX] * (gtu[SYM_XX] * at[SYM_XX] + gtu[SYM_XY] * at[SYM_XY] + gtu[SYM_XZ] * at[SYM_XZ])
-                + gtu[SYM_XY] * (gtu[SYM_XX] * at[SYM_XY] + gtu[SYM_XY] * at[SYM_YY] + gtu[SYM_XZ] * at[SYM_YZ])
-                + gtu[SYM_XZ] * (gtu[SYM_XX] * at[SYM_XZ] + gtu[SYM_XY] * at[SYM_YZ] + gtu[SYM_XZ] * at[SYM_ZZ]);
-    atu[SYM_XY] = gtu[SYM_XX] * (gtu[SYM_XY] * at[SYM_XX] + gtu[SYM_YY] * at[SYM_XY] + gtu[SYM_YZ] * at[SYM_XZ])
-                + gtu[SYM_XY] * (gtu[SYM_XY] * at[SYM_XY] + gtu[SYM_YY] * at[SYM_YY] + gtu[SYM_YZ] * at[SYM_YZ])
-                + gtu[SYM_XZ] * (gtu[SYM_XY] * at[SYM_XZ] + gtu[SYM_YY] * at[SYM_YZ] + gtu[SYM_YZ] * at[SYM_ZZ]);
-    atu[SYM_XZ] = gtu[SYM_XX] * (gtu[SYM_XZ] * at[SYM_XX] + gtu[SYM_YZ] * at[SYM_XY] + gtu[SYM_ZZ] * at[SYM_XZ])
-                + gtu[SYM_XY] * (gtu[SYM_XZ] * at[SYM_XY] + gtu[SYM_YZ] * at[SYM_YY] + gtu[SYM_ZZ] * at[SYM_YZ])
-                + gtu[SYM_XZ] * (gtu[SYM_XZ] * at[SYM_XZ] + gtu[SYM_YZ] * at[SYM_YZ] + gtu[SYM_ZZ] * at[SYM_ZZ]);
-    atu[SYM_YY] = gtu[SYM_XY] * (gtu[SYM_XY] * at[SYM_XX] + gtu[SYM_YY] * at[SYM_XY] + gtu[SYM_YZ] * at[SYM_XZ])
-                + gtu[SYM_YY] * (gtu[SYM_XY] * at[SYM_XY] + gtu[SYM_YY] * at[SYM_YY] + gtu[SYM_YZ] * at[SYM_YZ])
-                + gtu[SYM_YZ] * (gtu[SYM_XY] * at[SYM_XZ] + gtu[SYM_YY] * at[SYM_YZ] + gtu[SYM_YZ] * at[SYM_ZZ]);
-    atu[SYM_YZ] = gtu[SYM_XY] * (gtu[SYM_XZ] * at[SYM_XX] + gtu[SYM_YZ] * at[SYM_XY] + gtu[SYM_ZZ] * at[SYM_XZ])
-                + gtu[SYM_YY] * (gtu[SYM_XZ] * at[SYM_XY] + gtu[SYM_YZ] * at[SYM_YY] + gtu[SYM_ZZ] * at[SYM_YZ])
-                + gtu[SYM_YZ] * (gtu[SYM_XZ] * at[SYM_XZ] + gtu[SYM_YZ] * at[SYM_YZ] + gtu[SYM_ZZ] * at[SYM_ZZ]);
-    atu[SYM_ZZ] = gtu[SYM_XZ] * (gtu[SYM_XZ] * at[SYM_XX] + gtu[SYM_YZ] * at[SYM_XY] + gtu[SYM_ZZ] * at[SYM_XZ])
-                + gtu[SYM_YZ] * (gtu[SYM_XZ] * at[SYM_XY] + gtu[SYM_YZ] * at[SYM_YY] + gtu[SYM_ZZ] * at[SYM_YZ])
-                + gtu[SYM_ZZ] * (gtu[SYM_XZ] * at[SYM_XZ] + gtu[SYM_YZ] * at[SYM_YZ] + gtu[SYM_ZZ] * at[SYM_ZZ]);
-
-    /* A_ij A^{ij} */
-    double ata = sym3_contract(at, atu);
-
-    /* A^i_j = g^{ik} A_{kj} */
-    double at_ud[3][3];
-    sym3_raise_first(gtu, at, at_ud);
-
-    /* GRChombo modification: kappa1 -> kappa1 / alpha */
-    double kappa1_eff = kappa1 / alpha_safe;
-
-    /* ======================================================================
-     * EVOLUTION EQUATIONS
-     * ====================================================================== */
-
-    /* ----- dt_chi: conformal factor ----- */
-    /* Using chi = e^{-4 phi}:
-     * dt chi = (2/3) chi (alpha K - div_beta) + adv_chi
-     * Ref: GRChombo CCZ4RHS.impl.hpp (no Theta coupling in chi equation)
-     */
-    double dt_chi = (2.0 / 3.0) * chi * (alpha * K - div_beta)
-                  + adv_chi;
-
-    /* ----- dt_gt: conformal metric ----- */
-    /* dt gt_{ij} = -2 alpha At_{ij} + 2 gt_{k(i} d_{j)} beta^k
-     *            - (2/3) gt_{ij} d_k beta^k + adv */
-    double dt_gt[6];
-    for (int ij = 0; ij < 6; ij++) {
-        int ii, jj;
-        switch (ij) {
-        case SYM_XX: ii = 0; jj = 0; break;
-        case SYM_XY: ii = 0; jj = 1; break;
-        case SYM_XZ: ii = 0; jj = 2; break;
-        case SYM_YY: ii = 1; jj = 1; break;
-        case SYM_YZ: ii = 1; jj = 2; break;
-        default:     ii = 2; jj = 2; break;
-        }
-
-        double lie_beta = 0.0;
-        for (int kk = 0; kk < 3; kk++) {
-            lie_beta += gt[SYM(kk, ii)] * d1_beta[jj][kk]
-                      + gt[SYM(kk, jj)] * d1_beta[ii][kk];
-        }
-
-        dt_gt[ij] = -2.0 * alpha * at[ij]
-                   + lie_beta
-                   - (2.0 / 3.0) * gt[ij] * div_beta
-                   + adv_gt[ij];
-    }
-
-    /* ----- dt_K: trace of extrinsic curvature ----- */
-    /* dt K = -nabla^2 alpha + alpha (R + 2 div Z + K^2 - 2 Theta K)
-     *      - 3 alpha kappa1 (1 + kappa2) Theta + adv */
-    double dt_K = -lap_alpha
-                + alpha * (Rphys + 2.0 * divZ + K * K - 2.0 * Theta * K)
-                - 3.0 * alpha * kappa1_eff * (1.0 + kappa2) * Theta
-                + adv_K;
-
-    /* ----- dt_Theta: CCZ4 constraint propagation ----- */
-    /* dt Theta = (1/2) alpha [R + 2 div Z - Aij Aij + (2/3) K^2 - 2 Theta K]
-     *          - Z^i d_i alpha - alpha kappa1 (2 + kappa2) Theta + adv */
-    double dt_Theta = 0.5 * alpha * (Rphys + 2.0 * divZ - ata
-                                    + (2.0 / 3.0) * K * K - 2.0 * Theta * K)
-                    - Z_d_alpha
-                    - alpha * kappa1_eff * (2.0 + kappa2) * Theta
-                    + adv_Theta;
-
-    /* ----- dt_At: tracefree extrinsic curvature ----- */
-    /*
-     * dt At_{ij} = chi [-D_i D_j alpha + alpha (R_{ij} + D_i Z_j + D_j Z_i)]^{TF}
-     *           + alpha At_{ij} (K - 2 Theta) - 2 alpha At_{il} At^l_j
-     *           + lie_beta terms + adv
-     *
-     * Note: the term in [ ]^{TF} means "take the tracefree part w.r.t. gt".
-     * We compute it as: X_{ij} = stuff, then X_{ij} - (1/3) gt_{ij} g^{kl} X_{kl}
-     */
-
-    /* Covariant derivative of Z: D_i Z_j = d_i Z_j - Gamma^k_{ij} Z_k
-     * But Z_j involves derivatives of Ghat, which is complex.
-     * Simplification: D_i Z_j + D_j Z_i can be expressed via the Gamma_hat equation.
-     * For now, we approximate the Z contribution.
-     */
-
-    /* Physical D_i D_j alpha including conformal decomposition */
-    double phys_DDalpha[6];
-    for (int ij = 0; ij < 6; ij++) {
-        int ii2, jj2;
-        switch (ij) {
-        case SYM_XX: ii2 = 0; jj2 = 0; break;
-        case SYM_XY: ii2 = 0; jj2 = 1; break;
-        case SYM_XZ: ii2 = 0; jj2 = 2; break;
-        case SYM_YY: ii2 = 1; jj2 = 1; break;
-        case SYM_YZ: ii2 = 1; jj2 = 2; break;
-        default:     ii2 = 2; jj2 = 2; break;
-        }
-        /* nabla_i nabla_j alpha = D~_i D~_j alpha - S^k_{ij} d_k alpha
-         * where S^k_{ij} = 1/(2chi)(delta^k_i d_j chi + delta^k_j d_i chi
-         *                          - gt_{ij} gt^{kl} d_l chi)
-         * Ref: B&S eq (3.30), chi convention */
-        phys_DDalpha[ij] = DDalpha[ij]
-            + 0.5 / chi_safe * (d1_chi[ii2] * d1_alpha[jj2]
-                              + d1_chi[jj2] * d1_alpha[ii2])
-            - 0.5 / chi_safe * gt[ij] * dchi_dalpha;
-    }
-
-    /* D_i Z_j + D_j Z_i (symmetric): approximate from Ghat definition */
-    /* Z_j = (1/2) gt_{jk} (Ghat^k - Gamma^k)
-     * D_i Z_j ≈ (1/2) gt_{jk} d_i Ghat^k + ... (Christoffel terms)
-     * This is a simplification; the full expression includes metric derivatives. */
-    double DZ_sym[6]; /* D_i Z_j + D_j Z_i */
-    for (int ij = 0; ij < 6; ij++) {
-        int ii2, jj2;
-        switch (ij) {
-        case SYM_XX: ii2 = 0; jj2 = 0; break;
-        case SYM_XY: ii2 = 0; jj2 = 1; break;
-        case SYM_XZ: ii2 = 0; jj2 = 2; break;
-        case SYM_YY: ii2 = 1; jj2 = 1; break;
-        case SYM_YZ: ii2 = 1; jj2 = 2; break;
-        default:     ii2 = 2; jj2 = 2; break;
-        }
-
-        DZ_sym[ij] = 0.0;
-        for (int kk = 0; kk < 3; kk++) {
-            /* d_i (gt_{jk} Z^k) + d_j (gt_{ik} Z^k) includes:
-             * gt_{jk} d_i Z^k + Z^k d_i gt_{jk} + (i <-> j)
-             * Z^k = (1/2)(Ghat^k - Gamma^k)
-             * d_i Z^k ≈ (1/2) d_i Ghat^k  (ignoring d_i Gamma^k which involves d2_gt)
-             */
-            DZ_sym[ij] += gt[SYM(jj2, kk)] * 0.5 * d1_Ghat[ii2][kk]
-                        + gt[SYM(ii2, kk)] * 0.5 * d1_Ghat[jj2][kk];
-            /* Metric derivative terms */
-            DZ_sym[ij] += Z_u[kk] * (d1_gt[ii2][SYM(jj2, kk)]
-                                   + d1_gt[jj2][SYM(ii2, kk)]);
-        }
-        /* Christoffel corrections */
-        for (int kk = 0; kk < 3; kk++) {
-            DZ_sym[ij] -= chris[kk][SYM(ii2, jj2)] * Z_d[kk] * 2.0;
-        }
-    }
-
-    /* Source term for At: X_{ij} = -D_i D_j alpha + alpha (R_{ij} + D_i Z_j + D_j Z_i) */
-    double X_dd[6];
-    for (int a = 0; a < 6; a++) {
-        X_dd[a] = chi * (-phys_DDalpha[a] + alpha * (Rphys_dd[a] + DZ_sym[a]));
-    }
-
-    /* Make tracefree: X^{TF}_{ij} = X_{ij} - (1/3) gt_{ij} g^{kl} X_{kl} */
-    double trX = gtu[SYM_XX] * X_dd[SYM_XX]
-               + gtu[SYM_YY] * X_dd[SYM_YY]
-               + gtu[SYM_ZZ] * X_dd[SYM_ZZ]
-               + 2.0 * (gtu[SYM_XY] * X_dd[SYM_XY]
-                      + gtu[SYM_XZ] * X_dd[SYM_XZ]
-                      + gtu[SYM_YZ] * X_dd[SYM_YZ]);
-
-    double dt_at[6];
-    for (int ij = 0; ij < 6; ij++) {
-        int ii2, jj2;
-        switch (ij) {
-        case SYM_XX: ii2 = 0; jj2 = 0; break;
-        case SYM_XY: ii2 = 0; jj2 = 1; break;
-        case SYM_XZ: ii2 = 0; jj2 = 2; break;
-        case SYM_YY: ii2 = 1; jj2 = 1; break;
-        case SYM_YZ: ii2 = 1; jj2 = 2; break;
-        default:     ii2 = 2; jj2 = 2; break;
-        }
-
-        /* TF part */
-        double xtf = X_dd[ij] - (1.0 / 3.0) * gt[ij] * trX;
-
-        /* alpha At_{ij} (K - 2 Theta) */
-        double atak = alpha * at[ij] * (K - 2.0 * Theta);
-
-        /* -2 alpha At_{il} At^l_j */
-        double ata2 = 0.0;
-        for (int ll = 0; ll < 3; ll++) {
-            ata2 += at_ud[ll][ii2] * at[SYM(ll, jj2)];
-            /* wait: At_{il} At^l_j = at[SYM(i,l)] * at_ud[l][j] */
-        }
-        /* Actually: At_{il} At^l_j = sum_l at[SYM(i,l)] * at_ud[l][j] */
-        ata2 = 0.0;
-        for (int ll = 0; ll < 3; ll++) {
-            ata2 += at[SYM(ii2, ll)] * at_ud[ll][jj2];
-        }
-
-        /* Lie derivative terms */
-        double lie_at = 0.0;
-        for (int kk = 0; kk < 3; kk++) {
-            lie_at += at[SYM(kk, ii2)] * d1_beta[jj2][kk]
-                    + at[SYM(kk, jj2)] * d1_beta[ii2][kk];
-        }
-        lie_at -= (2.0 / 3.0) * at[ij] * div_beta;
-
-        dt_at[ij] = xtf + atak - 2.0 * alpha * ata2 + lie_at + adv_at[ij];
-    }
-
-    /* ----- dt_Ghat: modified conformal connection ----- */
-    /*
-     * dt Ghat^i = 2 alpha (Gamma^i_{jk} At^{jk} - 3 At^{ij} d_j chi / (2 chi)
-     *            - (2/3) g^{ij} d_j K)
-     *          + 2 g^{ki} (alpha d_k Theta - Theta d_k alpha
-     *                      - (2/3) alpha K Z_k)
-     *          - 2 At^{ij} d_j alpha
-     *          + g^{kl} d_k d_l beta^i + (1/3) g^{ik} d_k d_l beta^l
-     *          + (2/3) Gamma^i div_beta - Gamma^k d_k beta^i
-     *          + 2 kappa3 ((2/3) g^{ij} Z_j div_beta - g^{jk} Z_j d_k beta^i)
-     *          - 2 alpha kappa1 g^{ij} Z_j + adv
-     */
-    double dt_Ghat[3];
-    for (int ii = 0; ii < 3; ii++) {
-        /* Term 1: 2 alpha Gamma^i_{jk} At^{jk} */
-        double chris_at = 0.0;
-        for (int jk = 0; jk < 6; jk++) {
-            double fac = (jk == SYM_XX || jk == SYM_YY || jk == SYM_ZZ) ? 1.0 : 2.0;
-            chris_at += fac * chris[ii][jk] * atu[jk];
-        }
-
-        /* Term 2: -3 At^{ij} d_j chi / (2 chi) = -(3/2) At^{ij} d_j chi / chi */
-        double at_dchi = 0.0;
-        for (int jj = 0; jj < 3; jj++) {
-            at_dchi += atu[SYM(ii, jj)] * d1_chi[jj];
-        }
-        /* Multiply by factor: since At^{ij} is stored as sym, need care.
-         * atu[SYM(ii, jj)] is At^{ij} */
-
-        /* Term 3: -(2/3) g^{ij} d_j K */
-        double gtu_dK = 0.0;
-        for (int jj = 0; jj < 3; jj++) {
-            gtu_dK += gtu[SYM(ii, jj)] * d1_K[jj];
-        }
-
-        /* Term 4: 2 g^{ki} (alpha d_k Theta - Theta d_k alpha - (2/3) alpha K Z_k) */
-        double theta_terms = 0.0;
-        for (int kk = 0; kk < 3; kk++) {
-            theta_terms += gtu[SYM(kk, ii)]
-                * (alpha * d1_Theta[kk] - Theta * d1_alpha[kk]
-                   - (2.0 / 3.0) * alpha * K * Z_d[kk]);
-        }
-
-        /* Term 5: -2 At^{ij} d_j alpha */
-        double at_dalpha = 0.0;
-        for (int jj = 0; jj < 3; jj++) {
-            at_dalpha += atu[SYM(ii, jj)] * d1_alpha[jj];
-        }
-
-        /* Term 6: g^{kl} d_k d_l beta^i */
-        double lap_beta = 0.0;
-        for (int kk = 0; kk < 3; kk++) {
-            for (int ll = 0; ll < 3; ll++) {
-                lap_beta += gtu[SYM(kk, ll)] * d2_beta[kk][ll][ii];
+    ricci_t ricci;
+    FOR2(ii, jj) {
+        /* ricci_hat: conformal Ricci using hat-Gamma trick
+         * Ref: GRChombo CCZ4Geometry.hpp:78-93 */
+        double ricci_hat = 0.0;
+        FOR1(kk) {
+            ricci_hat += 0.5 * (h[kk][ii] * d1_Gamma[kk][jj]
+                              + h[kk][jj] * d1_Gamma[kk][ii]);
+            ricci_hat += 0.5 * Gamma[kk] * d1_h[ii][jj][kk];
+            FOR1(ll) {
+                ricci_hat += -0.5 * h_UU[kk][ll] * d2_h[ii][jj][kk][ll]
+                           + (chris.ULL[kk][ll][ii] * chris_LLU[jj][kk][ll]
+                            + chris.ULL[kk][ll][jj] * chris_LLU[ii][kk][ll]
+                            + chris.ULL[kk][ii][ll] * chris_LLU[kk][jj][ll]);
             }
         }
 
-        /* Term 7: (1/3) g^{ik} d_k d_l beta^l */
-        double div_grad_beta = 0.0;
-        for (int kk = 0; kk < 3; kk++) {
-            for (int ll = 0; ll < 3; ll++) {
-                div_grad_beta += gtu[SYM(ii, kk)] * d2_beta[kk][ll][ll];
+        /* ricci_chi: chi contribution to Ricci
+         * Ref: GRChombo CCZ4Geometry.hpp:96-101 */
+        double ricci_chi = 0.5 * (
+            (GR_SPACEDIM - 2) * covdtilde2chi[ii][jj]
+            + h[ii][jj] * boxtildechi
+            - ((GR_SPACEDIM - 2) * d1_chi[ii] * d1_chi[jj]
+               + GR_SPACEDIM * h[ii][jj] * dchi_dot_dchi) / (2.0 * chi)
+        );
+
+        /* Z terms
+         * Ref: GRChombo CCZ4Geometry.hpp:34-45 */
+        double z_terms = 0.0;
+        FOR1(kk) {
+            z_terms += Z_over_chi[kk] * (h[ii][kk] * d1_chi[jj]
+                                        + h[jj][kk] * d1_chi[ii]
+                                        - h[ii][jj] * d1_chi[kk]);
+        }
+
+        ricci.LL[ii][jj] = (ricci_chi + chi * ricci_hat + z_terms) / chi;
+    }
+
+    /* Ricci scalar: R = chi * h^{ij} R_{ij} */
+    ricci.scalar = chi * compute_trace(ricci.LL, h_UU);
+
+    /* ========== 8. Covariant derivatives of lapse ========== */
+    /* Ref: GRChombo CCZ4RHS.impl.hpp:87-112 */
+
+    double divshift = 0.0;
+    FOR1(ii) divshift += d1_shift[ii][ii];
+
+    double Z_dot_d1lapse = compute_dot_product(Z, d1_lapse);
+    double dlapse_dot_dchi = compute_dot_product_metric(d1_lapse, d1_chi, h_UU);
+
+    double covdtilde2lapse[3][3];
+    double covd2lapse[3][3];
+    FOR2(kk, ll) {
+        covdtilde2lapse[kk][ll] = d2_lapse[kk][ll];
+        FOR1(m) covdtilde2lapse[kk][ll] -= chris.ULL[m][kk][ll] * d1_lapse[m];
+
+        /* Physical covariant derivative
+         * Ref: GRChombo CCZ4RHS.impl.hpp:97-101 */
+        covd2lapse[kk][ll] = chi * covdtilde2lapse[kk][ll]
+            + 0.5 * (d1_lapse[kk] * d1_chi[ll] + d1_chi[kk] * d1_lapse[ll]
+                    - h[kk][ll] * dlapse_dot_dchi);
+    }
+
+    /* Trace of covd2lapse
+     * Ref: GRChombo CCZ4RHS.impl.hpp:103-112 */
+    double tr_covd2lapse = -(GR_SPACEDIM / 2.0) * dlapse_dot_dchi;
+    FOR1(ii) {
+        tr_covd2lapse -= chi * chris.contracted[ii] * d1_lapse[ii];
+        FOR1(jj) {
+            tr_covd2lapse += h_UU[ii][jj] * (chi * d2_lapse[ii][jj]
+                                             + d1_lapse[ii] * d1_chi[jj]);
+        }
+    }
+
+    /* A^{ij} = h^{ik} h^{jl} A_{kl} */
+    double A_UU[3][3];
+    raise_all_2(A, h_UU, A_UU);
+
+    /* A^{ij} A_{ij} (trace of A^2)
+     * Ref: GRChombo CCZ4RHS.impl.hpp:117 */
+    double tr_A2 = compute_trace(A, A_UU);
+
+    /* ========== 9. CCZ4 RHS ========== */
+
+    /* --- chi --- */
+    /* dt(chi) = advec + (2/3)*chi*(alpha*K - divshift)
+     * Ref: GRChombo CCZ4RHS.impl.hpp:118-119 */
+    double rhs_chi = advec_chi
+        + (2.0 / GR_SPACEDIM) * chi * (lapse * K - divshift);
+
+    /* --- h_ij --- */
+    /* dt(h_ij) = advec - 2*alpha*A_ij - (2/3)*h_ij*divshift + h_{ki}*d_j(shift^k) + h_{kj}*d_i(shift^k)
+     * Ref: GRChombo CCZ4RHS.impl.hpp:120-129 */
+    double rhs_h[3][3];
+    FOR2(ii, jj) {
+        rhs_h[ii][jj] = advec_h[ii][jj]
+            - 2.0 * lapse * A[ii][jj]
+            - (2.0 / GR_SPACEDIM) * h[ii][jj] * divshift;
+        FOR1(kk) {
+            rhs_h[ii][jj] += h[kk][ii] * d1_shift[kk][jj]
+                            + h[kk][jj] * d1_shift[kk][ii];
+        }
+    }
+
+    /* --- A_ij --- */
+    /* Trace-free part of -D_i D_j alpha + chi * alpha * R_ij
+     * Ref: GRChombo CCZ4RHS.impl.hpp:131-154 */
+    double Adot_TF[3][3];
+    FOR2(ii, jj) {
+        Adot_TF[ii][jj] = -covd2lapse[ii][jj]
+                         + chi * lapse * ricci.LL[ii][jj];
+    }
+    make_trace_free(Adot_TF, h, h_UU);
+
+    double rhs_A[3][3];
+    FOR2(ii, jj) {
+        rhs_A[ii][jj] = advec_A[ii][jj] + Adot_TF[ii][jj]
+            + A[ii][jj] * (lapse * (K - 2.0 * Theta)
+                          - (2.0 / GR_SPACEDIM) * divshift);
+        FOR1(kk) {
+            rhs_A[ii][jj] += A[kk][ii] * d1_shift[kk][jj]
+                            + A[kk][jj] * d1_shift[kk][ii];
+            FOR1(ll) {
+                rhs_A[ii][jj] -= 2.0 * lapse * h_UU[kk][ll] * A[ii][kk] * A[ll][jj];
             }
         }
+    }
 
-        /* Term 8: (2/3) Gamma^i div_beta - Gamma^k d_k beta^i */
-        double gamma_beta = (2.0 / 3.0) * Gamma_contracted[ii] * div_beta;
-        for (int kk = 0; kk < 3; kk++) {
-            gamma_beta -= Gamma_contracted[kk] * d1_beta[kk][ii];
-        }
+    /* --- Theta --- */
+    /* Ref: GRChombo CCZ4RHS.impl.hpp:172-180 */
+    double kappa1_times_lapse;
+    if (p->ccz4.covariant_Z4)
+        kappa1_times_lapse = p->ccz4.kappa1;
+    else
+        kappa1_times_lapse = p->ccz4.kappa1 * lapse;
 
-        /* Term 9: kappa3 terms */
-        double k3_terms = 0.0;
-        double gtu_Z = 0.0;
-        for (int jj = 0; jj < 3; jj++) {
-            gtu_Z += gtu[SYM(ii, jj)] * Z_d[jj];
-        }
-        k3_terms = 2.0 * kappa3 * ((2.0 / 3.0) * gtu_Z * div_beta);
-        for (int jj = 0; jj < 3; jj++) {
-            for (int kk = 0; kk < 3; kk++) {
-                k3_terms -= 2.0 * kappa3 * gtu[SYM(jj, kk)] * Z_d[jj] * d1_beta[kk][ii];
+    double rhs_Theta = advec_Theta
+        + 0.5 * lapse * (ricci.scalar - tr_A2
+            + ((GR_SPACEDIM - 1.0) / (double)GR_SPACEDIM) * K * K
+            - 2.0 * Theta * K)
+        - 0.5 * Theta * kappa1_times_lapse
+            * ((GR_SPACEDIM + 1) + p->ccz4.kappa2 * (GR_SPACEDIM - 1))
+        - Z_dot_d1lapse;
+
+    /* --- K --- */
+    /* Ref: GRChombo CCZ4RHS.impl.hpp:183-191 */
+    double rhs_K = advec_K
+        + lapse * (ricci.scalar + K * (K - 2.0 * Theta))
+        - kappa1_times_lapse * GR_SPACEDIM * (1.0 + p->ccz4.kappa2) * Theta
+        - tr_covd2lapse;
+
+    /* --- Gamma^i --- */
+    /* Ref: GRChombo CCZ4RHS.impl.hpp:193-222 */
+    double Gammadot[3];
+    FOR1(ii) {
+        Gammadot[ii] = (2.0 / GR_SPACEDIM) *
+            (divshift * (chris.contracted[ii] + 2.0 * p->ccz4.kappa3 * Z_over_chi[ii])
+             - 2.0 * lapse * K * Z_over_chi[ii])
+            - 2.0 * kappa1_times_lapse * Z_over_chi[ii];
+
+        FOR1(jj) {
+            Gammadot[ii] +=
+                2.0 * h_UU[ii][jj] * (lapse * d1_Theta[jj] - Theta * d1_lapse[jj])
+                - 2.0 * A_UU[ii][jj] * d1_lapse[jj]
+                - lapse * ((2.0 * (GR_SPACEDIM - 1.0) / (double)GR_SPACEDIM)
+                           * h_UU[ii][jj] * d1_K[jj]
+                         + GR_SPACEDIM * A_UU[ii][jj] * d1_chi[jj] / chi)
+                - (chris.contracted[jj] + 2.0 * p->ccz4.kappa3 * Z_over_chi[jj])
+                  * d1_shift[ii][jj];
+
+            FOR1(kk) {
+                Gammadot[ii] +=
+                    2.0 * lapse * chris.ULL[ii][jj][kk] * A_UU[jj][kk]
+                    + h_UU[jj][kk] * d2_shift[ii][jj][kk]
+                    + ((GR_SPACEDIM - 2.0) / (double)GR_SPACEDIM)
+                      * h_UU[ii][jj] * d2_shift[kk][jj][kk];
             }
         }
-
-        /* Term 10: -2 alpha kappa1 g^{ij} Z_j (damping) */
-        double damping = -2.0 * alpha * kappa1_eff * gtu_Z;
-
-        dt_Ghat[ii] = 2.0 * alpha * (chris_at - 1.5 * at_dchi / chi_safe
-                                    - (2.0 / 3.0) * gtu_dK)
-                    + 2.0 * theta_terms
-                    - 2.0 * at_dalpha
-                    + lap_beta + (1.0 / 3.0) * div_grad_beta
-                    + gamma_beta + k3_terms + damping
-                    + adv_Ghat[ii];
     }
 
-    /* ===== Write RHS output ===== */
-    g->rhs[FIELD_CHI][idx] = dt_chi;
-    for (int a = 0; a < 6; a++) {
-        g->rhs[FIELD_GT_BASE + a][idx] = dt_gt[a];
-        g->rhs[FIELD_AT_BASE + a][idx] = dt_at[a];
-    }
-    g->rhs[FIELD_TRKA][idx] = dt_K;
-    g->rhs[FIELD_THETA][idx] = dt_Theta;
-    for (int a = 0; a < 3; a++) {
-        g->rhs[FIELD_GHAT1 + a][idx] = dt_Ghat[a];
-    }
-}
+    double rhs_Gamma[3];
+    FOR1(ii) rhs_Gamma[ii] = advec_Gamma[ii] + Gammadot[ii];
 
-/*
- * Compute CCZ4 RHS for all interior grid points.
- * Called from the main driver's full_rhs function.
- */
-/*
- * Compute CCZ4 RHS for all interior grid points.
- * This is the heaviest loop in the entire code (~90% of runtime).
- * Uses GRID_LOOP_INTERIOR_OMP for OpenMP parallelism (toggle: make PARALLEL=0/1).
- */
-void ccz4_rhs(grid_t *g)
-{
-    /* OMP: each (k,j) slice is independent — perfect parallelism */
-    GRID_LOOP_INTERIOR_OMP(g, i, j, k) {
-        int idx = grid_idx(g, i, j, k);
-        ccz4_rhs_point(g, idx);
+    /* ========== 10. Moving puncture gauge ========== */
+    /* Ref: GRChombo MovingPunctureGauge.hpp:54-65 */
+    double rhs_lapse = p->gauge.lapse_advec_coeff * advec_lapse
+        - p->gauge.lapse_coeff * pow(lapse, p->gauge.lapse_power)
+          * (K - 2.0 * Theta);
+
+    double rhs_shift[3], rhs_B[3];
+    FOR1(ii) {
+        rhs_shift[ii] = p->gauge.shift_advec_coeff * advec_shift[ii]
+                       + p->gauge.shift_Gamma_coeff * B[ii];
+
+        rhs_B[ii] = p->gauge.shift_advec_coeff * advec_B[ii]
+                   - p->gauge.shift_advec_coeff * advec_Gamma[ii]
+                   + rhs_Gamma[ii] - p->gauge.eta * B[ii];
     }
+
+    /* ========== 11. Store RHS ========== */
+    rhs[FIELD_CHI][idx]   = rhs_chi;
+    rhs[FIELD_H11][idx]   = rhs_h[0][0];
+    rhs[FIELD_H12][idx]   = rhs_h[0][1];
+    rhs[FIELD_H13][idx]   = rhs_h[0][2];
+    rhs[FIELD_H22][idx]   = rhs_h[1][1];
+    rhs[FIELD_H23][idx]   = rhs_h[1][2];
+    rhs[FIELD_H33][idx]   = rhs_h[2][2];
+    rhs[FIELD_K][idx]     = rhs_K;
+    rhs[FIELD_A11][idx]   = rhs_A[0][0];
+    rhs[FIELD_A12][idx]   = rhs_A[0][1];
+    rhs[FIELD_A13][idx]   = rhs_A[0][2];
+    rhs[FIELD_A22][idx]   = rhs_A[1][1];
+    rhs[FIELD_A23][idx]   = rhs_A[1][2];
+    rhs[FIELD_A33][idx]   = rhs_A[2][2];
+    rhs[FIELD_THETA][idx] = rhs_Theta;
+    rhs[FIELD_GAMMA1][idx] = rhs_Gamma[0];
+    rhs[FIELD_GAMMA2][idx] = rhs_Gamma[1];
+    rhs[FIELD_GAMMA3][idx] = rhs_Gamma[2];
+    rhs[FIELD_LAPSE][idx]  = rhs_lapse;
+    rhs[FIELD_SHIFT1][idx] = rhs_shift[0];
+    rhs[FIELD_SHIFT2][idx] = rhs_shift[1];
+    rhs[FIELD_SHIFT3][idx] = rhs_shift[2];
+    rhs[FIELD_B1][idx]     = rhs_B[0];
+    rhs[FIELD_B2][idx]     = rhs_B[1];
+    rhs[FIELD_B3][idx]     = rhs_B[2];
+
+    /* ========== 12. Kreiss-Oliger dissipation ========== */
+    add_ko_dissipation(rhs, src, g, p->sigma, i, j, k);
 }

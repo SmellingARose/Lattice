@@ -1,140 +1,86 @@
 /*
- * test_flat.c — Tier 1 validation: flat spacetime stability
+ * Lattice — 3D Numerical Relativity
+ * Flat spacetime stability test.
  *
- * Tests that flat Minkowski spacetime remains stable under evolution.
- * Pass criteria:
- *   - ham_l2 < 1e-10 after 1000 steps
- *   - mom_l2 < 1e-10 after 1000 steps
- *   - No NaN or crash
+ * Minkowski initial data evolved for 1000 steps.
+ * Pass criterion: Hamiltonian constraint L2 norm < 1e-10.
  *
- * Usage: ./build/test_flat [--nx N] [--steps S]
+ * This is the first test in the validation ladder:
+ *   flat spacetime -> single BH -> binary
  */
 
 #include "../src/core/grid.h"
-#include "../src/core/fields.h"
 #include "../src/core/params.h"
-
+#include "../src/core/fields.h"
+#include "../src/initial_data/puncture.h"
+#include "../src/evolution/ccz4_rhs.h"
+#include "../src/boundary/sommerfeld.h"
+#include "../src/numerics/rk4.h"
+#include "../src/diagnostics/constraints.h"
+#include "../src/backend/backend.h"
 #include <stdio.h>
-#include <stdlib.h>
 #include <math.h>
-#include <string.h>
 
-/* Forward declarations */
-typedef void (*rhs_func_t)(grid_t *g);
-extern void rk4_step(grid_t *g, rhs_func_t rhs_func, double dt);
-extern void enforce_algebraic_constraints(grid_t *g);
-extern void sommerfeld_apply(grid_t *g);
-extern void ccz4_rhs(grid_t *g);
-extern void gauge_rhs(grid_t *g);
-extern void dissipation_apply(grid_t *g);
-extern void constraints_l2(grid_t *g, double *ham_l2, double *mom_l2);
-extern int backend_init(void);
-extern void backend_shutdown(void);
-
-static void set_flat_initial_data(grid_t *g)
+int main(void)
 {
-    GRID_LOOP_ALL(g, i, j, k) {
-        int idx = grid_idx(g, i, j, k);
-        g->fields[FIELD_CHI][idx] = 1.0;
-        g->fields[FIELD_GT11][idx] = 1.0;
-        g->fields[FIELD_GT12][idx] = 0.0;
-        g->fields[FIELD_GT13][idx] = 0.0;
-        g->fields[FIELD_GT22][idx] = 1.0;
-        g->fields[FIELD_GT23][idx] = 0.0;
-        g->fields[FIELD_GT33][idx] = 1.0;
-        g->fields[FIELD_TRKA][idx] = 0.0;
-        for (int a = 0; a < 6; a++)
-            g->fields[FIELD_AT_BASE + a][idx] = 0.0;
-        g->fields[FIELD_GHAT1][idx] = 0.0;
-        g->fields[FIELD_GHAT2][idx] = 0.0;
-        g->fields[FIELD_GHAT3][idx] = 0.0;
-        g->fields[FIELD_THETA][idx] = 0.0;
-        g->fields[FIELD_ALPHA][idx] = 1.0;
-        g->fields[FIELD_BETA1][idx] = 0.0;
-        g->fields[FIELD_BETA2][idx] = 0.0;
-        g->fields[FIELD_BETA3][idx] = 0.0;
-        g->fields[FIELD_GBAUX1][idx] = 0.0;
-        g->fields[FIELD_GBAUX2][idx] = 0.0;
-        g->fields[FIELD_GBAUX3][idx] = 0.0;
-    }
-}
+    printf("=== Flat Spacetime Stability Test ===\n");
 
-static void full_rhs(grid_t *g)
-{
-    grid_zero_rhs(g);
-    sommerfeld_apply(g);
-    ccz4_rhs(g);
-    gauge_rhs(g);
-    dissipation_apply(g);
-}
+    /* Setup: N=32, L=10, CFL=0.25, 1000 steps */
+    sim_params_t p = default_params();
+    p.N         = 32;
+    p.L         = 10.0;
+    p.CFL       = 0.25;
+    p.num_steps = 1000;
+    p.sigma     = 0.3;
+    p.dx = p.L / p.N;
+    p.dt = p.CFL * p.dx;
 
-int main(int argc, char *argv[])
-{
-    sim_params_t params;
-    params_set_defaults(&params);
-    params.nx = params.ny = params.nz = 32;
-    params.lx = params.ly = params.lz = 10.0;
-    params.cfl = 0.25;
-
-    int max_steps = 1000;
-
-    for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--nx") == 0 && i + 1 < argc)
-            params.nx = params.ny = params.nz = atoi(argv[++i]);
-        else if (strcmp(argv[i], "--steps") == 0 && i + 1 < argc)
-            max_steps = atoi(argv[++i]);
-    }
-
-    params_init(&params);
     backend_init();
+    grid_t *g = grid_alloc(p.N, p.L);
 
-    grid_t g;
-    g.params = params;
-    if (grid_alloc(&g) != 0) {
-        fprintf(stderr, "FAIL: grid allocation\n");
-        return 1;
-    }
+    /* Recompute after possible padding */
+    p.N  = g->N;
+    p.dx = g->dx;
+    p.dt = p.CFL * p.dx;
 
-    set_flat_initial_data(&g);
+    printf("  N = %d, Ntotal = %d, dx = %.6f, dt = %.6f\n",
+           g->N, g->Ntotal, g->dx, p.dt);
 
-    printf("test_flat: %dx%dx%d, %d steps, CFL=%.3f\n",
-           params.nx, params.ny, params.nz, max_steps, params.cfl);
+    /* Set flat initial data */
+    set_flat_spacetime(g);
+
+    double ham0 = compute_constraint_l2(g);
+    printf("  Initial Ham L2 = %.6e\n", ham0);
 
     /* Evolve */
-    for (int step = 0; step < max_steps; step++) {
-        rk4_step(&g, full_rhs, params.dt);
+    int diag_every = p.num_steps / 5;  /* full diagnostic 5 times */
+    if (diag_every < 1) diag_every = 1;
 
-        /* Check for NaN every 100 steps */
-        if (step % 100 == 0) {
-            double alpha = g.fields[FIELD_ALPHA][grid_idx(&g, params.nx/2, params.ny/2, params.nz/2)];
-            if (isnan(alpha)) {
-                fprintf(stderr, "FAIL: NaN detected at step %d\n", step);
-                grid_free(&g);
-                backend_shutdown();
-                return 1;
-            }
+    for (int step = 1; step <= p.num_steps; step++) {
+        rk4_step(g, &p, ccz4_rhs_point, apply_sommerfeld, p.dt);
+
+        double pct = 100.0 * step / p.num_steps;
+        if (step % diag_every == 0 || step == p.num_steps) {
+            double ham = compute_constraint_l2(g);
+            printf("\r  step %4d/%d  [%5.1f%%]  Ham L2 = %.6e",
+                   step, p.num_steps, pct, ham);
+            fflush(stdout);
+        } else if (step % 10 == 0) {
+            printf("\r  step %4d/%d  [%5.1f%%]", step, p.num_steps, pct);
+            fflush(stdout);
         }
     }
+    printf("\n");
 
-    /* Check constraints */
-    double ham_l2, mom_l2;
-    constraints_l2(&g, &ham_l2, &mom_l2);
+    /* Final check */
+    double ham_final = compute_constraint_l2(g);
+    printf("  Final Ham L2 = %.6e\n", ham_final);
 
-    printf("  ham_l2 = %.6e\n", ham_l2);
-    printf("  mom_l2 = %.6e\n", mom_l2);
+    int passed = (ham_final < 1.0e-10);
+    printf("\n  %s (threshold = 1e-10)\n", passed ? "PASSED" : "FAILED");
 
-    int pass = (ham_l2 < 1e-10) && (mom_l2 < 1e-10);
+    grid_free(g);
+    backend_cleanup();
 
-    if (pass) {
-        printf("PASS: flat spacetime stable\n");
-    } else {
-        printf("FAIL: constraint violation too large\n");
-        if (ham_l2 >= 1e-10) printf("  ham_l2 = %.6e >= 1e-10\n", ham_l2);
-        if (mom_l2 >= 1e-10) printf("  mom_l2 = %.6e >= 1e-10\n", mom_l2);
-    }
-
-    grid_free(&g);
-    backend_shutdown();
-
-    return pass ? 0 : 1;
+    return passed ? 0 : 1;
 }

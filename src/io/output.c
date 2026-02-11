@@ -1,80 +1,42 @@
 /*
- * output.c — I/O routines for field dumps and scalar output
- *
- * Binary dumps: header + raw double array
- * Slice output: 2D tab-separated text at z = nz/2
- * Scalar output: append to scalars.dat
+ * Lattice — 3D Numerical Relativity
+ * 1D slice CSV output along x-axis through domain center.
  */
 
 #include "../core/grid.h"
 #include "../core/fields.h"
-
+#include "../diagnostics/constraints.h"
 #include <stdio.h>
-#include <string.h>
 
-/*
- * Write binary dump of all fields: header + raw data.
- * Header: nx, ny, nz (int), time (double), then field data.
- */
-void output_fields(grid_t *g)
+void output_1d_slice(const grid_t *g, int step, double time)
 {
-    char filename[512];
-    snprintf(filename, sizeof(filename), "%s/fields_%06d.dat",
-             g->params.output_dir, g->step);
+    (void)time;
+    char filename[256];
+    snprintf(filename, sizeof(filename), "build/slice_%06d.csv", step);
 
-    FILE *fp = fopen(filename, "wb");
-    if (!fp) return;
-
-    int dims[3] = { g->params.nx, g->params.ny, g->params.nz };
-    fwrite(dims, sizeof(int), 3, fp);
-    fwrite(&g->time, sizeof(double), 1, fp);
-
-    int n = grid_total_points(g);
-    for (int f = 0; f < g->params.num_fields; f++) {
-        fwrite(g->fields[f], sizeof(double), (size_t)n, fp);
-    }
-
-    fclose(fp);
-}
-
-/*
- * Write a 2D slice (z = nz/2) of a single field as tab-separated text.
- * Format: x\ty\tf(x,y)\n
- */
-void output_slice(grid_t *g, int field_id, const char *filename)
-{
     FILE *fp = fopen(filename, "w");
-    if (!fp) return;
-
-    int k_mid = g->params.nz / 2;
-    double *field = g->fields[field_id];
-
-    for (int j = g->params.ghost_width; j < g->params.ny - g->params.ghost_width; j++) {
-        for (int i = g->params.ghost_width; i < g->params.nx - g->params.ghost_width; i++) {
-            int idx = grid_idx(g, i, j, k_mid);
-            fprintf(fp, "%.6e\t%.6e\t%.15e\n",
-                    grid_x(g, i), grid_y(g, j), field[idx]);
-        }
-        fprintf(fp, "\n");
+    if (!fp) {
+        fprintf(stderr, "output: cannot open %s\n", filename);
+        return;
     }
 
-    fclose(fp);
-}
+    fprintf(fp, "x,chi,lapse,K,Hamiltonian\n");
 
-/*
- * Append scalar diagnostics to scalars.dat.
- * Format: step  time  ham_l2  mom_l2  alpha_min
- */
-void output_scalars(grid_t *g, double ham_l2, double mom_l2, double alpha_min)
-{
-    char filename[512];
-    snprintf(filename, sizeof(filename), "%s/scalars.dat", g->params.output_dir);
+    int jc = g->ghost + g->N / 2;
+    int kc = g->ghost + g->N / 2;
 
-    FILE *fp = fopen(filename, "a");
-    if (!fp) return;
+    for (int i = g->ghost; i < g->ghost + g->N; i++) {
+        double x = COORD(g, i);
+        int idx = IDX(g, i, jc, kc);
 
-    fprintf(fp, "%6d  %.6e  %.6e  %.6e  %.6e\n",
-            g->step, g->time, ham_l2, mom_l2, alpha_min);
+        double chi   = g->fields[FIELD_CHI][idx];
+        double alpha = g->fields[FIELD_LAPSE][idx];
+        double K_val = g->fields[FIELD_K][idx];
+        double Ham   = compute_hamiltonian_at(
+            (const double *const *)g->fields, g, i, jc, kc);
+
+        fprintf(fp, "%.8e,%.8e,%.8e,%.8e,%.8e\n", x, chi, alpha, K_val, Ham);
+    }
 
     fclose(fp);
 }

@@ -1,174 +1,100 @@
 /*
- * sommerfeld.c — Radiative (Sommerfeld) outflow boundary conditions
+ * Lattice — 3D Numerical Relativity
+ * Sommerfeld radiative boundary conditions.
  *
- * For each ghost point on all 6 faces, apply the outgoing-wave condition:
- *   (d/dt + d/dr) (r * (f - f0)) = 0
- *   => f = f0 + (f_int - f0) * r_int/r + (r_int/r) * df_int * (r - r_int)
+ * For each ghost zone point, the RHS is set to enforce:
+ *   d_t f = -x^i/r * d_i f + (f_asymptotic - f) / r
  *
- * where f0 is the asymptotic background value and f_int is the nearest
- * interior point. This allows outgoing waves to leave the domain cleanly.
+ * This permits outgoing waves to leave the domain with minimal reflection.
  *
- * Uses field_background_value() and field_falloff_power() from fields.h.
- * Ref: B&S Ch. 12.1.3
+ * Ref: GRChombo BoundaryConditions.cpp:593-661
  */
 
-#include "../core/grid.h"
+#include "sommerfeld.h"
 #include "../core/fields.h"
-
 #include <math.h>
 
-/*
- * Apply Sommerfeld boundary conditions to ghost zones of all evolved fields.
- * Uses simple radial extrapolation: f(ghost) = f0 + (f(interior) - f0) * r_int / r_ghost
- *
- * This implements a first-order radiative condition that matches the 1/r falloff.
- */
-void sommerfeld_apply(grid_t *g)
+/* Asymptotic values for each field */
+static double asymptotic_value(int field)
 {
-    const int nx = g->params.nx;
-    const int ny = g->params.ny;
-    const int nz = g->params.nz;
-    const int gw = g->params.ghost_width;
-    const int nf = g->params.num_fields;
+    switch (field) {
+        case FIELD_CHI:   return 1.0;
+        case FIELD_H11:   return 1.0;
+        case FIELD_H22:   return 1.0;
+        case FIELD_H33:   return 1.0;
+        case FIELD_LAPSE: return 1.0;
+        default:          return 0.0;
+    }
+}
 
-    for (int f = 0; f < nf; f++) {
-        double f0 = field_background_value(f);
-        double *field = g->rk_scratch[f];
+/*
+ * 2nd-order derivative at boundary using one-sided stencils.
+ * Ref: GRChombo BoundaryConditions.cpp:617-649
+ */
+static double boundary_d1(const double *f, int idx, int stride,
+                          int lo_offset, int hi_offset, double dx)
+{
+    if (lo_offset < 1) {
+        /* Near low boundary — forward stencil */
+        return (-1.5 * f[idx] + 2.0 * f[idx + stride]
+                - 0.5 * f[idx + 2*stride]) / dx;
+    } else if (hi_offset < 1) {
+        /* Near high boundary — backward stencil */
+        return (1.5 * f[idx] - 2.0 * f[idx - stride]
+                + 0.5 * f[idx - 2*stride]) / dx;
+    } else {
+        /* Interior — centered 2nd order */
+        return 0.5 * (f[idx + stride] - f[idx - stride]) / dx;
+    }
+}
 
-        /* x-faces */
-        /* OMP: boundary fill on x-faces, independent per (k,j) slice.
-         * Toggle: make PARALLEL=0/1 */
-#ifdef LATTICE_USE_OMP
-#pragma omp parallel for collapse(2) schedule(static)
-#endif
-        for (int k = 0; k < nz; k++) {
-            for (int j = 0; j < ny; j++) {
-                /* x-lower face */
-                for (int gi = 0; gi < gw; gi++) {
-                    int idx_ghost = grid_idx(g, gi, j, k);
-                    int idx_int = grid_idx(g, gw, j, k);
+void apply_sommerfeld(double **rhs, const double *const *src, const grid_t *g)
+{
+    int lo = g->ghost;
+    int hi = g->ghost + g->N;
+    int Nt = g->Ntotal;
 
-                    double xg = grid_x(g, gi);
-                    double yg = grid_y(g, j);
-                    double zg = grid_z(g, k);
-                    double rg = sqrt(xg * xg + yg * yg + zg * zg);
-                    if (rg < 1e-10) rg = 1e-10;
+    for (int k = 0; k < Nt; k++) {
+        for (int j = 0; j < Nt; j++) {
+            for (int i = 0; i < Nt; i++) {
+                /* Skip interior points */
+                if (i >= lo && i < hi &&
+                    j >= lo && j < hi &&
+                    k >= lo && k < hi)
+                    continue;
 
-                    double xi = grid_x(g, gw);
-                    double ri = sqrt(xi * xi + yg * yg + zg * zg);
-                    if (ri < 1e-10) ri = 1e-10;
+                int idx = IDX(g, i, j, k);
 
-                    field[idx_ghost] = f0 + (field[idx_int] - f0) * ri / rg;
-                }
+                double x = COORD(g, i);
+                double y = COORD(g, j);
+                double z = COORD(g, k);
+                double r = sqrt(x*x + y*y + z*z);
+                if (r < 1.0e-10) r = 1.0e-10;
 
-                /* x-upper face */
-                for (int gi = nx - gw; gi < nx; gi++) {
-                    int idx_ghost = grid_idx(g, gi, j, k);
-                    int idx_int = grid_idx(g, nx - gw - 1, j, k);
+                /* Distance from each boundary edge */
+                int lo_off[3] = { i, j, k };
+                int hi_off[3] = { Nt - 1 - i, Nt - 1 - j, Nt - 1 - k };
 
-                    double xg = grid_x(g, gi);
-                    double yg = grid_y(g, j);
-                    double zg = grid_z(g, k);
-                    double rg = sqrt(xg * xg + yg * yg + zg * zg);
-                    if (rg < 1e-10) rg = 1e-10;
+                int strides[3] = { STRIDE_X, STRIDE_Y(g), STRIDE_Z(g) };
+                double loc[3] = { x, y, z };
 
-                    double xi = grid_x(g, nx - gw - 1);
-                    double ri = sqrt(xi * xi + yg * yg + zg * zg);
-                    if (ri < 1e-10) ri = 1e-10;
+                for (int field = 0; field < NUM_FIELDS; field++) {
+                    double sommerfeld = 0.0;
 
-                    field[idx_ghost] = f0 + (field[idx_int] - f0) * ri / rg;
-                }
-            }
-        }
+                    /* Sum: -d_i f * x^i / r */
+                    for (int dir = 0; dir < 3; dir++) {
+                        double d1 = boundary_d1(src[field], idx,
+                                                strides[dir],
+                                                lo_off[dir], hi_off[dir],
+                                                g->dx);
+                        sommerfeld += -d1 * loc[dir] / r;
+                    }
 
-        /* y-faces (skip corners already done by x) */
-        /* OMP: boundary fill on y-faces, independent per (k,i) slice.
-         * Toggle: make PARALLEL=0/1 */
-#ifdef LATTICE_USE_OMP
-#pragma omp parallel for collapse(2) schedule(static)
-#endif
-        for (int k = 0; k < nz; k++) {
-            for (int i = gw; i < nx - gw; i++) {
-                /* y-lower */
-                for (int gj = 0; gj < gw; gj++) {
-                    int idx_ghost = grid_idx(g, i, gj, k);
-                    int idx_int = grid_idx(g, i, gw, k);
+                    /* Add decay: (f_asymptotic - f) / r */
+                    double f_asym = asymptotic_value(field);
+                    sommerfeld += (f_asym - src[field][idx]) / r;
 
-                    double xg = grid_x(g, i);
-                    double yg = grid_y(g, gj);
-                    double zg = grid_z(g, k);
-                    double rg = sqrt(xg * xg + yg * yg + zg * zg);
-                    if (rg < 1e-10) rg = 1e-10;
-
-                    double yi = grid_y(g, gw);
-                    double ri = sqrt(xg * xg + yi * yi + zg * zg);
-                    if (ri < 1e-10) ri = 1e-10;
-
-                    field[idx_ghost] = f0 + (field[idx_int] - f0) * ri / rg;
-                }
-
-                /* y-upper */
-                for (int gj = ny - gw; gj < ny; gj++) {
-                    int idx_ghost = grid_idx(g, i, gj, k);
-                    int idx_int = grid_idx(g, i, ny - gw - 1, k);
-
-                    double xg = grid_x(g, i);
-                    double yg = grid_y(g, gj);
-                    double zg = grid_z(g, k);
-                    double rg = sqrt(xg * xg + yg * yg + zg * zg);
-                    if (rg < 1e-10) rg = 1e-10;
-
-                    double yi = grid_y(g, ny - gw - 1);
-                    double ri = sqrt(xg * xg + yi * yi + zg * zg);
-                    if (ri < 1e-10) ri = 1e-10;
-
-                    field[idx_ghost] = f0 + (field[idx_int] - f0) * ri / rg;
-                }
-            }
-        }
-
-        /* z-faces (skip edges already done) */
-        /* OMP: boundary fill on z-faces, independent per (j,i) slice.
-         * Toggle: make PARALLEL=0/1 */
-#ifdef LATTICE_USE_OMP
-#pragma omp parallel for collapse(2) schedule(static)
-#endif
-        for (int j = gw; j < ny - gw; j++) {
-            for (int i = gw; i < nx - gw; i++) {
-                /* z-lower */
-                for (int gk = 0; gk < gw; gk++) {
-                    int idx_ghost = grid_idx(g, i, j, gk);
-                    int idx_int = grid_idx(g, i, j, gw);
-
-                    double xg = grid_x(g, i);
-                    double yg = grid_y(g, j);
-                    double zg = grid_z(g, gk);
-                    double rg = sqrt(xg * xg + yg * yg + zg * zg);
-                    if (rg < 1e-10) rg = 1e-10;
-
-                    double zi = grid_z(g, gw);
-                    double ri = sqrt(xg * xg + yg * yg + zi * zi);
-                    if (ri < 1e-10) ri = 1e-10;
-
-                    field[idx_ghost] = f0 + (field[idx_int] - f0) * ri / rg;
-                }
-
-                /* z-upper */
-                for (int gk = nz - gw; gk < nz; gk++) {
-                    int idx_ghost = grid_idx(g, i, j, gk);
-                    int idx_int = grid_idx(g, i, j, nz - gw - 1);
-
-                    double xg = grid_x(g, i);
-                    double yg = grid_y(g, j);
-                    double zg = grid_z(g, gk);
-                    double rg = sqrt(xg * xg + yg * yg + zg * zg);
-                    if (rg < 1e-10) rg = 1e-10;
-
-                    double zi = grid_z(g, nz - gw - 1);
-                    double ri = sqrt(xg * xg + yg * yg + zi * zi);
-                    if (ri < 1e-10) ri = 1e-10;
-
-                    field[idx_ghost] = f0 + (field[idx_int] - f0) * ri / rg;
+                    rhs[field][idx] = sommerfeld;
                 }
             }
         }

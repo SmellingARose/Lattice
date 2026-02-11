@@ -1,185 +1,140 @@
 /*
- * main.c — Lattice NR simulator driver
+ * Lattice — 3D Numerical Relativity Simulator
  *
- * Main evolution loop:
- *   1. Set initial data (flat or puncture)
- *   2. Time-step with RK4
- *   3. Each RK stage: boundaries -> CCZ4 RHS -> gauge RHS -> dissipation
- *   4. Monitor constraints and output
+ * CLI interface: allocate grid, set initial data, evolve with RK4.
+ *
+ * Usage:
+ *   ./lattice --N 32 --steps 1000 --CFL 0.25 --output_every 100
+ *   ./lattice --N 64 --steps 100 --puncture 1.0,0,0,0
  */
 
 #include "core/grid.h"
-#include "core/fields.h"
 #include "core/params.h"
-
+#include "core/fields.h"
+#include "initial_data/puncture.h"
+#include "evolution/ccz4_rhs.h"
+#include "boundary/sommerfeld.h"
+#include "numerics/rk4.h"
+#include "diagnostics/constraints.h"
+#include "backend/backend.h"
 #include <stdio.h>
 #include <stdlib.h>
-#include <math.h>
 #include <string.h>
 
-/* Forward declarations */
-typedef void (*rhs_func_t)(grid_t *g);
-extern void rk4_step(grid_t *g, rhs_func_t rhs_func, double dt);
-extern void enforce_algebraic_constraints(grid_t *g);
-extern void sommerfeld_apply(grid_t *g);
-extern void ccz4_rhs(grid_t *g);
-extern void gauge_rhs(grid_t *g);
-extern void dissipation_apply(grid_t *g);
-extern void constraints_l2(grid_t *g, double *ham_l2, double *mom_l2);
-extern void output_scalars(grid_t *g, double ham_l2, double mom_l2, double alpha_min);
-extern void output_slice(grid_t *g, int field_id, const char *filename);
-extern int backend_init(void);
-extern void backend_shutdown(void);
+/* Forward declaration for output */
+extern void output_1d_slice(const grid_t *g, int step, double time);
 
-/*
- * Set flat spacetime initial data.
- * alpha = 1, chi = 1, gt = delta_{ij}, everything else = 0.
- */
-static void set_flat_initial_data(grid_t *g)
+static void print_usage(void)
 {
-    GRID_LOOP_ALL(g, i, j, k) {
-        int idx = grid_idx(g, i, j, k);
-
-        g->fields[FIELD_CHI][idx] = 1.0;
-        g->fields[FIELD_GT11][idx] = 1.0;
-        g->fields[FIELD_GT12][idx] = 0.0;
-        g->fields[FIELD_GT13][idx] = 0.0;
-        g->fields[FIELD_GT22][idx] = 1.0;
-        g->fields[FIELD_GT23][idx] = 0.0;
-        g->fields[FIELD_GT33][idx] = 1.0;
-        g->fields[FIELD_TRKA][idx] = 0.0;
-        for (int a = 0; a < 6; a++) {
-            g->fields[FIELD_AT_BASE + a][idx] = 0.0;
-        }
-        g->fields[FIELD_GHAT1][idx] = 0.0;
-        g->fields[FIELD_GHAT2][idx] = 0.0;
-        g->fields[FIELD_GHAT3][idx] = 0.0;
-        g->fields[FIELD_THETA][idx] = 0.0;
-        g->fields[FIELD_ALPHA][idx] = 1.0;
-        g->fields[FIELD_BETA1][idx] = 0.0;
-        g->fields[FIELD_BETA2][idx] = 0.0;
-        g->fields[FIELD_BETA3][idx] = 0.0;
-        g->fields[FIELD_GBAUX1][idx] = 0.0;
-        g->fields[FIELD_GBAUX2][idx] = 0.0;
-        g->fields[FIELD_GBAUX3][idx] = 0.0;
-    }
+    fprintf(stderr, "Usage: lattice [options]\n");
+    fprintf(stderr, "  --N <int>           Grid points per side (default 32)\n");
+    fprintf(stderr, "  --L <float>         Domain size (default 10)\n");
+    fprintf(stderr, "  --steps <int>       Evolution steps (default 1000)\n");
+    fprintf(stderr, "  --CFL <float>       CFL factor (default 0.25)\n");
+    fprintf(stderr, "  --sigma <float>     KO dissipation (default 0.3)\n");
+    fprintf(stderr, "  --output_every <int> Output interval (default 0=off)\n");
+    fprintf(stderr, "  --puncture M,x,y,z  Add a puncture BH\n");
 }
 
-/*
- * Full RHS computation: called once per RK stage.
- *
- * Order matters:
- *   1. Zero RHS
- *   2. Apply boundary conditions (fills ghost zones)
- *   3. CCZ4 physics RHS
- *   4. Gauge RHS (must be after CCZ4 — reads dt Ghat^i for B^i eq)
- *   5. KO dissipation
- */
-static void full_rhs(grid_t *g)
+int main(int argc, char **argv)
 {
-    grid_zero_rhs(g);
-    sommerfeld_apply(g);
-    ccz4_rhs(g);
-    gauge_rhs(g);
-    dissipation_apply(g);
-}
+    sim_params_t p = default_params();
 
-/*
- * Find minimum of alpha (lapse) over the interior.
- */
-static double find_alpha_min(grid_t *g)
-{
-    double alpha_min = 1e30;
-    GRID_LOOP_INTERIOR(g, i, j, k) {
-        int idx = grid_idx(g, i, j, k);
-        double a = g->fields[FIELD_ALPHA][idx];
-        if (a < alpha_min) alpha_min = a;
-    }
-    return alpha_min;
-}
+    /* Puncture storage */
+    double bh_masses[16];
+    double bh_centers[16][3];
+    int n_bh = 0;
 
-int main(int argc, char *argv[])
-{
-    /* Initialize parameters */
-    sim_params_t params;
-    params_set_defaults(&params);
-
-    /* Parse command-line overrides */
-    int max_steps = 1000;
-    for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--nx") == 0 && i + 1 < argc) {
-            params.nx = params.ny = params.nz = atoi(argv[++i]);
-        } else if (strcmp(argv[i], "--domain") == 0 && i + 1 < argc) {
-            params.lx = params.ly = params.lz = atof(argv[++i]);
-        } else if (strcmp(argv[i], "--cfl") == 0 && i + 1 < argc) {
-            params.cfl = atof(argv[++i]);
-        } else if (strcmp(argv[i], "--steps") == 0 && i + 1 < argc) {
-            max_steps = atoi(argv[++i]);
-        } else if (strcmp(argv[i], "--output-every") == 0 && i + 1 < argc) {
-            params.output_every = atoi(argv[++i]);
-        } else if (strcmp(argv[i], "--kappa1") == 0 && i + 1 < argc) {
-            params.kappa1 = atof(argv[++i]);
-        } else if (strcmp(argv[i], "--eta") == 0 && i + 1 < argc) {
-            params.eta = atof(argv[++i]);
+    /* Parse CLI args */
+    for (int a = 1; a < argc; a++) {
+        if (strcmp(argv[a], "--N") == 0 && a + 1 < argc) {
+            p.N = atoi(argv[++a]);
+        } else if (strcmp(argv[a], "--L") == 0 && a + 1 < argc) {
+            p.L = atof(argv[++a]);
+        } else if (strcmp(argv[a], "--steps") == 0 && a + 1 < argc) {
+            p.num_steps = atoi(argv[++a]);
+        } else if (strcmp(argv[a], "--CFL") == 0 && a + 1 < argc) {
+            p.CFL = atof(argv[++a]);
+        } else if (strcmp(argv[a], "--sigma") == 0 && a + 1 < argc) {
+            p.sigma = atof(argv[++a]);
+        } else if (strcmp(argv[a], "--output_every") == 0 && a + 1 < argc) {
+            p.output_every = atoi(argv[++a]);
+        } else if (strcmp(argv[a], "--puncture") == 0 && a + 1 < argc) {
+            if (n_bh >= 16) {
+                fprintf(stderr, "Error: max 16 punctures\n");
+                return 1;
+            }
+            char *s = argv[++a];
+            if (sscanf(s, "%lf,%lf,%lf,%lf",
+                       &bh_masses[n_bh],
+                       &bh_centers[n_bh][0],
+                       &bh_centers[n_bh][1],
+                       &bh_centers[n_bh][2]) == 4) {
+                n_bh++;
+            } else {
+                fprintf(stderr, "Error: --puncture expects M,x,y,z\n");
+                return 1;
+            }
+        } else if (strcmp(argv[a], "--help") == 0 || strcmp(argv[a], "-h") == 0) {
+            print_usage();
+            return 0;
+        } else {
+            fprintf(stderr, "Unknown option: %s\n", argv[a]);
+            print_usage();
+            return 1;
         }
     }
 
-    params_init(&params);
+    /* Recompute derived parameters */
+    p.dx = p.L / p.N;
+    p.dt = p.CFL * p.dx;
 
-    printf("Lattice NR Simulator\n");
-    printf("Grid: %d x %d x %d (padded: %d)\n",
-           params.nx, params.ny, params.nz, params.nx_pad);
-    printf("Domain: %.1f x %.1f x %.1f\n", params.lx, params.ly, params.lz);
-    printf("dx = %.4e, dt = %.4e, CFL = %.3f\n", params.dx, params.dt, params.cfl);
-    printf("kappa1 = %.4f, kappa2 = %.4f, eta = %.2f\n",
-           params.kappa1, params.kappa2, params.eta);
-    printf("Fields: %d, Steps: %d\n\n", params.num_fields, max_steps);
-
-    /* Initialize backend */
-    if (backend_init() != 0) {
-        fprintf(stderr, "Error: backend init failed\n");
-        return 1;
-    }
+    printf("Lattice — 3D Numerical Relativity\n");
+    printf("  N = %d, L = %.1f, dx = %.6f, dt = %.6f\n", p.N, p.L, p.dx, p.dt);
+    printf("  steps = %d, sigma = %.2f, CFL = %.2f\n", p.num_steps, p.sigma, p.CFL);
 
     /* Allocate grid */
-    grid_t g;
-    g.params = params;
-    if (grid_alloc(&g) != 0) {
-        fprintf(stderr, "Error: grid allocation failed\n");
-        return 1;
-    }
+    backend_init();
+    grid_t *g = grid_alloc(p.N, p.L);
+
+    /* Note: grid_alloc may pad N to a multiple of 16 */
+    p.N  = g->N;
+    p.dx = g->dx;
+    p.dt = p.CFL * p.dx;
+
+    printf("  Ntotal = %d (N=%d + 2*ghost=%d)\n", g->Ntotal, g->N, g->ghost);
 
     /* Set initial data */
-    set_flat_initial_data(&g);
+    if (n_bh > 0) {
+        printf("  Initial data: Brill-Lindquist, %d puncture(s)\n", n_bh);
+        set_brill_lindquist(g, n_bh, bh_masses, (const double(*)[3])bh_centers);
+    } else {
+        printf("  Initial data: flat spacetime\n");
+        set_flat_spacetime(g);
+    }
 
-    printf("%6s  %10s  %12s  %12s  %10s\n",
-           "step", "time", "ham_l2", "mom_l2", "alpha_min");
-    printf("------  ----------  ------------  ------------  ----------\n");
+    /* Initial constraint */
+    double ham0 = compute_constraint_l2(g);
+    printf("  Initial Ham L2 = %.6e\n", ham0);
 
-    /* Main evolution loop */
-    for (int step = 0; step <= max_steps; step++) {
-        /* Output diagnostics */
-        if (step % params.output_every == 0) {
-            double ham_l2 = 0.0, mom_l2 = 0.0;
-            constraints_l2(&g, &ham_l2, &mom_l2);
-            double alpha_min = find_alpha_min(&g);
+    /* Time evolution */
+    for (int step = 1; step <= p.num_steps; step++) {
+        rk4_step(g, &p, ccz4_rhs_point, apply_sommerfeld, p.dt);
 
-            printf("%6d  %10.4e  %12.4e  %12.4e  %10.6f\n",
-                   step, g.time, ham_l2, mom_l2, alpha_min);
-
-            output_scalars(&g, ham_l2, mom_l2, alpha_min);
+        if (step % 100 == 0 || step == p.num_steps) {
+            double ham = compute_constraint_l2(g);
+            printf("  step %5d  t = %.4f  Ham L2 = %.6e\n",
+                   step, step * p.dt, ham);
         }
 
-        if (step < max_steps) {
-            rk4_step(&g, full_rhs, params.dt);
+        if (p.output_every > 0 && step % p.output_every == 0) {
+            output_1d_slice(g, step, step * p.dt);
         }
     }
 
-    printf("\nSimulation complete.\n");
-
     /* Cleanup */
-    grid_free(&g);
-    backend_shutdown();
+    grid_free(g);
+    backend_cleanup();
 
     return 0;
 }

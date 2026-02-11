@@ -1,6 +1,15 @@
-CLAUDE.md
+# Build artifacts
 build/
-lattice
-scalars.dat
 *.o
-*.dSYM/
+*.d
+lattice
+
+# Reference repository (read-only, not part of our codebase)
+grchombo-ref/
+
+# Editor/IDE
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store

@@ -1,179 +1,172 @@
 /*
- * test_single_bh.c — Tier 2 validation: single Schwarzschild puncture
+ * Lattice — 3D Numerical Relativity
+ * Single Schwarzschild puncture evolution test.
  *
- * Evolves a single Schwarzschild BH (M=1) to t=50M.
+ * Brill-Lindquist puncture: M=1.0 at origin.
+ * Grid: N=256, L=64, dx=0.25, CFL=0.25.
+ * Evolve for T=30M.
+ *
  * Pass criteria:
- *   1. Trumpet lapse: alpha_min settles to ~0.3
- *   2. Constraints bounded (no exponential growth)
- *   3. No NaN/crash
+ *   - No crash (NaN/Inf)
+ *   - Final min lapse < 0.5 (trumpet collapse)
+ *   - Hamiltonian constraint bounded (peak < 1.0)
  *
- * Grid: 64³, domain=256M (large enough for outgoing waves to leave)
- * Ref: B&S Appendix H (trumpet benchmark)
+ * Domain: boundary at 32M from puncture, clean evolution to ~30M.
+ * Requires ~15 GB RAM (run on 32GB+ machine).
+ *
+ * This is the second test in the validation ladder:
+ *   flat spacetime -> single BH -> binary
  */
 
 #include "../src/core/grid.h"
-#include "../src/core/fields.h"
 #include "../src/core/params.h"
-
+#include "../src/core/fields.h"
+#include "../src/initial_data/puncture.h"
+#include "../src/evolution/ccz4_rhs.h"
+#include "../src/boundary/sommerfeld.h"
+#include "../src/numerics/rk4.h"
+#include "../src/diagnostics/constraints.h"
+#include "../src/backend/backend.h"
 #include <stdio.h>
-#include <stdlib.h>
 #include <math.h>
-#include <string.h>
 
-/* Forward declarations */
-typedef void (*rhs_func_t)(grid_t *g);
-extern void rk4_step(grid_t *g, rhs_func_t rhs_func, double dt);
-extern void enforce_algebraic_constraints(grid_t *g);
-extern void sommerfeld_apply(grid_t *g);
-extern void ccz4_rhs(grid_t *g);
-extern void gauge_rhs(grid_t *g);
-extern void dissipation_apply(grid_t *g);
-extern void constraints_l2(grid_t *g, double *ham_l2, double *mom_l2);
-extern void output_scalars(grid_t *g, double ham_l2, double mom_l2, double alpha_min);
-extern int backend_init(void);
-extern void backend_shutdown(void);
-extern void puncture_set_single(grid_t *g, double mass, double cx, double cy, double cz);
-
-static void full_rhs(grid_t *g)
+/* Find minimum lapse over interior domain */
+static double min_lapse(const grid_t *g)
 {
-    grid_zero_rhs(g);
-    sommerfeld_apply(g);
-    ccz4_rhs(g);
-    gauge_rhs(g);
-    dissipation_apply(g);
+    int lo = g->ghost;
+    int hi = g->ghost + g->N;
+    double min_val = 1.0e30;
+
+    for (int k = lo; k < hi; k++) {
+        for (int j = lo; j < hi; j++) {
+            for (int i = lo; i < hi; i++) {
+                int idx = IDX(g, i, j, k);
+                double a = g->fields[FIELD_LAPSE][idx];
+                if (a < min_val) min_val = a;
+            }
+        }
+    }
+    return min_val;
 }
 
-static double find_alpha_min(grid_t *g)
+/* Check for NaN/Inf in all fields */
+static int check_finite(const grid_t *g)
 {
-    double alpha_min = 1e30;
-    GRID_LOOP_INTERIOR(g, i, j, k) {
-        int idx = grid_idx(g, i, j, k);
-        double a = g->fields[FIELD_ALPHA][idx];
-        if (a < alpha_min) alpha_min = a;
+    int lo = g->ghost;
+    int hi = g->ghost + g->N;
+
+    for (int f = 0; f < NUM_FIELDS; f++) {
+        for (int k = lo; k < hi; k++) {
+            for (int j = lo; j < hi; j++) {
+                for (int i = lo; i < hi; i++) {
+                    int idx = IDX(g, i, j, k);
+                    double v = g->fields[f][idx];
+                    if (!isfinite(v)) return 0;
+                }
+            }
+        }
     }
-    return alpha_min;
+    return 1;
 }
 
-int main(int argc, char *argv[])
+int main(void)
 {
-    sim_params_t params;
-    params_set_defaults(&params);
+    printf("=== Single BH Evolution Test ===\n");
 
-    /* Default BH test parameters.
-     * dx = L / (nx - 2*gw - 1) = 128/128 = 1.0M — resolves puncture structure.
-     * Boundary at 64M from center, safe for t_final=50M (causal contact ~64M). */
-    params.nx = params.ny = params.nz = 137;
-    params.lx = params.ly = params.lz = 128.0;
-    params.cfl = 0.25;
-    params.kappa1 = 0.02;
-    params.kappa2 = 0.0;
-    params.eta = 2.0;
+    /* N=256, L=64, dx=0.25, T=30M.
+     * Boundary at 32M — no reflections reach puncture by T=30M. */
+    sim_params_t p = default_params();
+    p.N     = 256;
+    p.L     = 64.0;
+    p.CFL   = 0.25;
+    p.sigma = 0.3;
+    p.dx    = p.L / p.N;
+    p.dt    = p.CFL * p.dx;
 
-    double t_final = 50.0; /* evolve to t=50M */
+    double T_final = 30.0;
+    p.num_steps = (int)(T_final / p.dt + 0.5);
 
-    for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--nx") == 0 && i + 1 < argc)
-            params.nx = params.ny = params.nz = atoi(argv[++i]);
-        else if (strcmp(argv[i], "--domain") == 0 && i + 1 < argc)
-            params.lx = params.ly = params.lz = atof(argv[++i]);
-        else if (strcmp(argv[i], "--tfinal") == 0 && i + 1 < argc)
-            t_final = atof(argv[++i]);
-    }
-
-    params_init(&params);
     backend_init();
+    grid_t *g = grid_alloc(p.N, p.L);
 
-    grid_t g;
-    g.params = params;
-    if (grid_alloc(&g) != 0) {
-        fprintf(stderr, "FAIL: grid allocation\n");
-        return 1;
-    }
+    /* Recompute after possible padding */
+    p.N  = g->N;
+    p.dx = g->dx;
+    p.dt = p.CFL * p.dx;
+    p.num_steps = (int)(T_final / p.dt + 0.5);
 
-    /* Set Schwarzschild puncture offset by dx/2 from origin, M=1.
-     * Offset avoids placing a grid point at the coordinate singularity (r=0),
-     * which causes steep chi gradients through the floor value and RHS blowup.
-     * Standard practice: GRChombo uses cell-centered grids for the same reason. */
-    puncture_set_single(&g, 1.0, 0.5 * params.dx, 0.5 * params.dy, 0.5 * params.dz);
+    printf("  N = %d, dx = %.4f, dt = %.6f, steps = %d\n",
+           g->N, g->dx, p.dt, p.num_steps);
 
-    /* Enforce chi/alpha floors on initial data — puncture has chi,alpha -> 0
-     * at the coordinate singularity (r=0). Without this, the first RK step
-     * reads near-zero chi and 1/chi^2 terms in Rchi blow up immediately. */
-    enforce_algebraic_constraints(&g);
+    /* Brill-Lindquist: single puncture M=1 at origin */
+    double mass = 1.0;
+    double center[1][3] = {{0.0, 0.0, 0.0}};
+    set_brill_lindquist(g, 1, &mass, center);
 
-    int max_steps = (int)(t_final / params.dt) + 1;
+    double ham0 = compute_constraint_l2(g);
+    double ml0  = min_lapse(g);
+    printf("  Initial: Ham L2 = %.6e, min lapse = %.6f\n", ham0, ml0);
 
-    printf("test_single_bh: %dx%dx%d, domain=%.0f, t_final=%.1f, dt=%.4e, steps=%d\n",
-           params.nx, params.ny, params.nz, params.lx, t_final, params.dt, max_steps);
+    /* Evolve */
+    int diag_every = p.num_steps / 50;
+    if (diag_every < 1) diag_every = 1;
 
-    printf("\n%6s  %10s  %12s  %12s  %10s\n",
-           "step", "time", "ham_l2", "mom_l2", "alpha_min");
-    printf("------  ----------  ------------  ------------  ----------\n");
+    double ham_peak = 0.0;
+    int crashed = 0;
 
-    double ham_l2 = 0.0, mom_l2 = 0.0;
-    double alpha_min = find_alpha_min(&g);
-    double max_ham = 0.0;
-    int failed = 0;
+    for (int step = 1; step <= p.num_steps; step++) {
+        rk4_step(g, &p, ccz4_rhs_point, apply_sommerfeld, p.dt);
 
-    for (int step = 0; step <= max_steps; step++) {
-        if (step % (max_steps / 20 + 1) == 0 || step == max_steps) {
-            constraints_l2(&g, &ham_l2, &mom_l2);
-            alpha_min = find_alpha_min(&g);
-
-            printf("%6d  %10.4e  %12.4e  %12.4e  %10.6f\n",
-                   step, g.time, ham_l2, mom_l2, alpha_min);
-
-            if (ham_l2 > max_ham) max_ham = ham_l2;
-
-            /* Check for NaN */
-            if (isnan(ham_l2) || isnan(alpha_min)) {
-                fprintf(stderr, "FAIL: NaN detected at step %d, t=%.4f\n", step, g.time);
-                failed = 1;
+        if (step % diag_every == 0 || step == p.num_steps) {
+            if (!check_finite(g)) {
+                printf("\n  CRASH: NaN/Inf at step %d (t = %.2f M)\n",
+                       step, step * p.dt);
+                crashed = 1;
                 break;
             }
 
-            /* Check for blowup */
-            if (ham_l2 > 1e10) {
-                fprintf(stderr, "FAIL: constraint blowup at step %d, t=%.4f\n", step, g.time);
-                failed = 1;
-                break;
-            }
-        }
+            double ham = compute_constraint_l2(g);
+            double ml  = min_lapse(g);
+            double t   = step * p.dt;
+            double pct = 100.0 * step / p.num_steps;
 
-        if (step < max_steps) {
-            rk4_step(&g, full_rhs, params.dt);
-        }
-    }
+            if (ham > ham_peak) ham_peak = ham;
 
-    printf("\n--- Summary ---\n");
-    printf("  Final time:   %.4f M\n", g.time);
-    printf("  alpha_min:    %.6f\n", alpha_min);
-    printf("  max ham_l2:   %.4e\n", max_ham);
-    printf("  final ham_l2: %.4e\n", ham_l2);
-    printf("  final mom_l2: %.4e\n", mom_l2);
-
-    if (!failed) {
-        /* Check trumpet lapse: alpha_min should settle around 0.3 (±0.15) */
-        if (alpha_min > 0.1 && alpha_min < 0.5) {
-            printf("  Trumpet lapse: OK (alpha_min = %.4f, expected ~0.3)\n", alpha_min);
-        } else {
-            printf("  Trumpet lapse: MARGINAL (alpha_min = %.4f, expected ~0.3)\n", alpha_min);
-            /* Don't fail — the exact value depends on resolution and gauge settling */
-        }
-
-        /* Check constraints don't blow up */
-        if (ham_l2 < 1.0 && mom_l2 < 1.0) {
-            printf("  Constraints: BOUNDED\n");
-        } else {
-            printf("  Constraints: WARNING (ham=%.2e, mom=%.2e)\n", ham_l2, mom_l2);
+            printf("\r  step %4d/%d  [%5.1f%%]  t = %6.2f M  Ham L2 = %.4e  min(alpha) = %.4f",
+                   step, p.num_steps, pct, t, ham, ml);
+            fflush(stdout);
         }
     }
+    printf("\n");
 
-    int pass = !failed;
-    printf("\n%s\n", pass ? "PASS: single BH test" : "FAIL: single BH test");
+    if (!crashed) {
+        double ham_final = compute_constraint_l2(g);
+        double ml_final  = min_lapse(g);
 
-    grid_free(&g);
-    backend_shutdown();
+        printf("\n  Final:    Ham L2 = %.6e, min lapse = %.6f\n", ham_final, ml_final);
+        printf("  Peak Ham: %.6e\n", ham_peak);
 
-    return pass ? 0 : 1;
+        /* Pass criteria */
+        int lapse_ok      = (ml_final < 0.5);
+        int finite_ok     = check_finite(g);
+        int constraint_ok = (ham_peak < 1.0);
+
+        printf("\n  Lapse collapsed:     %s (final=%.4f, want < 0.5)\n",
+               lapse_ok ? "YES" : "NO", ml_final);
+        printf("  Fields finite:       %s\n",
+               finite_ok ? "YES" : "NO");
+        printf("  Constraints bounded: %s (peak=%.4e, want < 1.0)\n",
+               constraint_ok ? "YES" : "NO", ham_peak);
+
+        int passed = lapse_ok && finite_ok && constraint_ok;
+        printf("\n  %s\n", passed ? "PASSED" : "FAILED");
+
+        grid_free(g);
+        backend_cleanup();
+        return passed ? 0 : 1;
+    }
+
+    grid_free(g);
+    backend_cleanup();
+    return 1;
 }

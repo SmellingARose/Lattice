@@ -1,109 +1,142 @@
 /*
- * finite_diff.h — Finite difference macros (header-only)
+ * Lattice — 3D Numerical Relativity
+ * 4th-order finite difference stencils (all static inline).
  *
- * All FD stencils are 4th-order centered. KO dissipation is 6th-order.
- * Ghost width of 4 is required for all stencils.
+ * Stencil coefficients from GRChombo FourthOrderDerivatives.hpp.
+ * All derivatives go through these functions — no hand-coded stencils.
  *
- * Arguments:
- *   f     — pointer to field array (double*)
- *   idx   — linear index of center point
- *   s     — stride in the differentiation direction
- *   dx    — grid spacing in the differentiation direction
- *   vel   — advection velocity (for upwind stencil)
- *
- * Coefficients from standard 4th-order centered differences:
- *   D1: (-1, 8, 0, -8, 1) / (12 dx)
- *   D2: (-1, 16, -30, 16, -1) / (12 dx^2)
- *   KO6: (1, -6, 15, -20, 15, -6, 1) / 64 / dx  [7-point, 6th-order]
- *
- * B&S Ch. 8 (finite differencing); arXiv:gr-qc/0206072 (advection terms)
+ * Ref: GRChombo Source/BoxUtils/FourthOrderDerivatives.hpp
  */
 
 #ifndef LATTICE_FINITE_DIFF_H
 #define LATTICE_FINITE_DIFF_H
 
-/*
- * 4th-order centered first derivative: df/dx
- * Stencil: (-1, 8, 0, -8, 1) / (12 dx)
- */
-#define FD_D1(f, idx, s, dx) \
-    (((f)[(idx) - 2*(s)] \
-      - 8.0 * (f)[(idx) - (s)] \
-      + 8.0 * (f)[(idx) + (s)] \
-      - (f)[(idx) + 2*(s)]) / (12.0 * (dx)))
+#include <math.h>
+
+#ifdef LATTICE_GPU
+#pragma omp declare target
+#endif
 
 /*
- * 4th-order centered second derivative: d^2f/dx^2
- * Stencil: (-1, 16, -30, 16, -1) / (12 dx^2)
+ * 4th-order first derivative: d f / d x
+ * f: field array, idx: flat index, s: stride for direction, dx: spacing
  */
-#define FD_D2(f, idx, s, dx) \
-    ((-(f)[(idx) - 2*(s)] \
-      + 16.0 * (f)[(idx) - (s)] \
-      - 30.0 * (f)[(idx)] \
-      + 16.0 * (f)[(idx) + (s)] \
-      - (f)[(idx) + 2*(s)]) / (12.0 * (dx) * (dx)))
+static inline double fd_d1(const double *f, int idx, int s, double dx)
+{
+    /* coefficients: 1/12, 2/3 — GRChombo lines 36-46 */
+    return (  (1.0 / 12.0) * f[idx - 2*s]
+            - (2.0 /  3.0) * f[idx -   s]
+            + (2.0 /  3.0) * f[idx +   s]
+            - (1.0 / 12.0) * f[idx + 2*s] ) / dx;
+}
 
 /*
- * Mixed partial: d^2f/(dx dy)
- * Composed from two 4th-order first derivatives.
- * Applies D1_x to D1_y (or vice versa — symmetric).
+ * 4th-order second derivative: d^2 f / d x^2
+ * Ref: GRChombo lines 114-128
  */
-#define FD_D1D1(f, idx, sx, sy, dx, dy) \
-    ((FD_D1(f, (idx) - 2*(sx), sy, dy) \
-      - 8.0 * FD_D1(f, (idx) - (sx), sy, dy) \
-      + 8.0 * FD_D1(f, (idx) + (sx), sy, dy) \
-      - FD_D1(f, (idx) + 2*(sx), sy, dy)) / (12.0 * (dx)))
+static inline double fd_d2(const double *f, int idx, int s, double dx)
+{
+    double dx2 = dx * dx;
+    return ( -(1.0 / 12.0) * f[idx - 2*s]
+             + (4.0 /  3.0) * f[idx -   s]
+             - (5.0 /  2.0) * f[idx]
+             + (4.0 /  3.0) * f[idx +   s]
+             - (1.0 / 12.0) * f[idx + 2*s] ) / dx2;
+}
 
 /*
- * 4th-order upwind advection: vel * df/dx
- *
- * Decomposes into centered derivative + sign-dependent dissipation:
- *   FD_ADV = vel * D1_centered + |vel| * h^4 * D5 / 12
- * where D5 is the 5th undivided difference (matching direction).
- *
- * For vel > 0 (left-biased stencil, points -3 to +2):
- *   vel * (-f[-3] + 6f[-2] - 18f[-1] + 10f[0] + 3f[+1]) / (-12 dx)
- *   = vel * (f[-3] - 6f[-2] + 18f[-1] - 10f[0] - 3f[+1]) / (12 dx)
- *
- * For vel < 0 (right-biased stencil, points -2 to +3):
- *   vel * (3f[-1] + 10f[0] - 18f[+1] + 6f[+2] - f[+3]) / (12 dx)
- *
- * Ref: Zlochower et al., gr-qc/0505055
+ * 4th-order mixed second derivative: d^2 f / (d x_a d x_b)
+ * s1, s2: strides for the two directions
+ * Ref: GRChombo mixed_diff2, lines 163-192
  */
-#define FD_ADV_LEFT(f, idx, s, dx, vel) \
-    ((vel) * (-(f)[(idx) - 3*(s)] \
-              + 6.0 * (f)[(idx) - 2*(s)] \
-              - 18.0 * (f)[(idx) - (s)] \
-              + 10.0 * (f)[(idx)] \
-              + 3.0 * (f)[(idx) + (s)]) / (12.0 * (dx)))
+static inline double fd_d2_mixed(const double *f, int idx, int s1, int s2,
+                                 double dx)
+{
+    double dx2 = dx * dx;
 
-#define FD_ADV_RIGHT(f, idx, s, dx, vel) \
-    ((vel) * (-3.0 * (f)[(idx) - (s)] \
-              - 10.0 * (f)[(idx)] \
-              + 18.0 * (f)[(idx) + (s)] \
-              - 6.0 * (f)[(idx) + 2*(s)] \
-              + (f)[(idx) + 3*(s)]) / (12.0 * (dx)))
+    double wff = 1.0 / 144.0;   /* 6.944e-3 = (1/12)^2           */
+    double wnf =  1.0 / 18.0;   /* 5.556e-2 = (1/12)*(2/3)       */
+    double wnn =  4.0 /  9.0;   /* 4.444e-1 = (2/3)^2            */
 
-#define FD_ADV(f, idx, s, dx, vel) \
-    ((vel) >= 0.0 \
-     ? FD_ADV_LEFT(f, idx, s, dx, vel) \
-     : FD_ADV_RIGHT(f, idx, s, dx, vel))
+    return ( wff * f[idx - 2*s1 - 2*s2]
+           - wnf * f[idx - 2*s1 -   s2]
+           + wnf * f[idx - 2*s1 +   s2]
+           - wff * f[idx - 2*s1 + 2*s2]
+
+           - wnf * f[idx -   s1 - 2*s2]
+           + wnn * f[idx -   s1 -   s2]
+           - wnn * f[idx -   s1 +   s2]
+           + wnf * f[idx -   s1 + 2*s2]
+
+           + wnf * f[idx +   s1 - 2*s2]
+           - wnn * f[idx +   s1 -   s2]
+           + wnn * f[idx +   s1 +   s2]
+           - wnf * f[idx +   s1 + 2*s2]
+
+           - wff * f[idx + 2*s1 - 2*s2]
+           + wnf * f[idx + 2*s1 -   s2]
+           - wnf * f[idx + 2*s1 +   s2]
+           + wff * f[idx + 2*s1 + 2*s2] ) / dx2;
+}
 
 /*
- * 6th-order Kreiss-Oliger dissipation operator
- * Stencil: (1, -6, 15, -20, 15, -6, 1) / 64
- * Applied as: rhs -= eps * (KO6_x + KO6_y + KO6_z) / dx
+ * 4th-order upwind advection derivative: beta^a d_a f
+ * vel: velocity component in this direction (determines upwind side)
+ * Ref: GRChombo advection_term, lines 269-301
  *
- * Note: requires 3 ghost points on each side (fits in ghost_width=4).
- * Ref: Kreiss & Oliger (1973); Babiuc et al., arXiv:0709.3559
+ * Upwind stencil (vel > 0):   w0*f[i-1] + w1*f[i] + w2*f[i+1] + w3*f[i+2] + w4*f[i+3]
+ * Downwind stencil (vel < 0): mirror of upwind
  */
-#define FD_KO6(f, idx, s, dx) \
-    (((f)[(idx) - 3*(s)] \
-      - 6.0 * (f)[(idx) - 2*(s)] \
-      + 15.0 * (f)[(idx) - (s)] \
-      - 20.0 * (f)[(idx)] \
-      + 15.0 * (f)[(idx) + (s)] \
-      - 6.0 * (f)[(idx) + 2*(s)] \
-      + (f)[(idx) + 3*(s)]) / (64.0 * (dx)))
+static inline double fd_adv(const double *f, int idx, int s, double vel,
+                            double dx)
+{
+    double w0 = -1.0 / 4.0;
+    double w1 = -5.0 / 6.0;
+    double w2 = +3.0 / 2.0;
+    double w3 = -1.0 / 2.0;
+    double w4 = +1.0 / 12.0;
+
+    if (vel > 0.0) {
+        return vel * ( w0 * f[idx -   s]
+                     + w1 * f[idx]
+                     + w2 * f[idx +   s]
+                     + w3 * f[idx + 2*s]
+                     + w4 * f[idx + 3*s] ) / dx;
+    } else {
+        return vel * (-w4 * f[idx - 3*s]
+                     - w3 * f[idx - 2*s]
+                     - w2 * f[idx -   s]
+                     - w1 * f[idx]
+                     - w0 * f[idx +   s] ) / dx;
+    }
+}
+
+/*
+ * 6th-order Kreiss-Oliger dissipation operator.
+ * Returns the dissipation term for one direction; caller sums over directions
+ * and multiplies by sigma.
+ *
+ * Stencil: 7 points, divided by dx (not dx^6) following GRChombo convention.
+ * Ref: GRChombo dissipation_term, lines 361-378
+ */
+static inline double fd_ko(const double *f, int idx, int s, double dx)
+{
+    double wvf = 1.0 / 64.0;     /* 1.5625e-2 */
+    double wf  = 6.0 / 64.0;     /* 9.375e-2  */
+    double wn  = 15.0 / 64.0;    /* 2.34375e-1 */
+    double wl  = 20.0 / 64.0;    /* 3.125e-1  */
+
+    return ( wvf * f[idx - 3*s]
+           - wf  * f[idx - 2*s]
+           + wn  * f[idx -   s]
+           - wl  * f[idx]
+           + wn  * f[idx +   s]
+           - wf  * f[idx + 2*s]
+           + wvf * f[idx + 3*s] ) / dx;
+}
+
+#ifdef LATTICE_GPU
+#pragma omp end declare target
+#endif
 
 #endif /* LATTICE_FINITE_DIFF_H */

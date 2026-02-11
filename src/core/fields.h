@@ -1,121 +1,77 @@
 /*
- * fields.h — Field enumeration and metadata for CCZ4 + Einstein-Maxwell
+ * Lattice — 3D Numerical Relativity
+ * Field enum and loop macros for CCZ4 evolution.
  *
- * Conformal factor convention:
- *   chi = e^{-4 phi}
- *   W   = chi^{1/2} = e^{-2 phi}
- *
- * Near punctures: chi -> 0, W -> 0.
- * In flat space:  chi = 1, W = 1.
- *
- * Field enum is APPEND-ONLY. Never reorder existing entries.
- *
- * Symmetric tensors use flat array [xx, xy, xz, yy, yz, zz] (indices 0-5).
- * Access via SYM(i,j) macro or SYM_XX..SYM_ZZ constants.
+ * 25 evolved fields for vacuum CCZ4 (Phase 1).
+ * Ref: arXiv:1106.2254, GRChombo CCZ4Vars.hpp
  */
 
 #ifndef LATTICE_FIELDS_H
 #define LATTICE_FIELDS_H
 
-/* Symmetric tensor index: maps (i,j) in {0,1,2} to flat index 0-5 */
-#define SYM(i, j) ((i) <= (j) ? (i) * (5 - (i)) / 2 + (j) : (j) * (5 - (j)) / 2 + (i))
+#define GR_SPACEDIM 3
 
+/* Evolved field indices — append-only, never reorder */
 enum {
-    SYM_XX = 0,
-    SYM_XY = 1,
-    SYM_XZ = 2,
-    SYM_YY = 3,
-    SYM_YZ = 4,
-    SYM_ZZ = 5
+    FIELD_CHI = 0,   /* conformal factor chi                   */
+
+    FIELD_H11,       /* conformal metric h_ij (symmetric 3x3)  */
+    FIELD_H12,
+    FIELD_H13,
+    FIELD_H22,
+    FIELD_H23,
+    FIELD_H33,
+
+    FIELD_K,         /* trace of extrinsic curvature K          */
+
+    FIELD_A11,       /* traceless conformal ext. curvature A_ij */
+    FIELD_A12,
+    FIELD_A13,
+    FIELD_A22,
+    FIELD_A23,
+    FIELD_A33,
+
+    FIELD_THETA,     /* CCZ4 constraint damping scalar          */
+
+    FIELD_GAMMA1,    /* conformal connection functions Gamma^i   */
+    FIELD_GAMMA2,
+    FIELD_GAMMA3,
+
+    FIELD_LAPSE,     /* lapse alpha                             */
+
+    FIELD_SHIFT1,    /* shift beta^i                            */
+    FIELD_SHIFT2,
+    FIELD_SHIFT3,
+
+    FIELD_B1,        /* Gamma-driver auxiliary B^i              */
+    FIELD_B2,
+    FIELD_B3,
+
+    NUM_FIELDS       /* = 25                                    */
 };
 
-/* Base offsets for symmetric tensor field groups */
-#define FIELD_GT_BASE  FIELD_GT11
-#define FIELD_AT_BASE  FIELD_AT11
-
-typedef enum {
-    /* Conformal factor: chi = e^{-4 phi} */
-    FIELD_CHI = 0,
-
-    /* Conformal metric gamma_tilde_{ij} (6 components) */
-    FIELD_GT11, /* xx */
-    FIELD_GT12, /* xy */
-    FIELD_GT13, /* xz */
-    FIELD_GT22, /* yy */
-    FIELD_GT23, /* yz */
-    FIELD_GT33, /* zz */
-
-    /* Trace of extrinsic curvature K */
-    FIELD_TRKA,
-
-    /* Tracefree extrinsic curvature A_tilde_{ij} (6 components) */
-    FIELD_AT11, /* xx */
-    FIELD_AT12, /* xy */
-    FIELD_AT13, /* xz */
-    FIELD_AT22, /* yy */
-    FIELD_AT23, /* yz */
-    FIELD_AT33, /* zz */
-
-    /* Modified conformal connection Gamma_hat^i */
-    FIELD_GHAT1,
-    FIELD_GHAT2,
-    FIELD_GHAT3,
-
-    /* CCZ4 constraint damping scalar Theta */
-    FIELD_THETA,
-
-    /* Lapse */
-    FIELD_ALPHA,
-
-    /* Shift beta^i */
-    FIELD_BETA1,
-    FIELD_BETA2,
-    FIELD_BETA3,
-
-    /* Gamma-driver auxiliary B^i */
-    FIELD_GBAUX1,
-    FIELD_GBAUX2,
-    FIELD_GBAUX3,
-
-    NUM_VACUUM_FIELDS, /* = 25 */
-
-    /* Einstein-Maxwell: electric field E^i */
-    FIELD_EX = NUM_VACUUM_FIELDS,
-    FIELD_EY,
-    FIELD_EZ,
-
-    /* Einstein-Maxwell: magnetic field B^i */
-    FIELD_BX,
-    FIELD_BY,
-    FIELD_BZ,
-
-    NUM_TOTAL_FIELDS /* = 31 */
-} field_id_t;
+/* First field index for symmetric tensor components */
+#define FIELD_H_START FIELD_H11
+#define FIELD_A_START FIELD_A11
 
 /*
- * Background (asymptotic) value for Sommerfeld boundary conditions.
- * f ~ f0 + u(t - r) / r  as  r -> infinity.
+ * Symmetric 3x3 index mapping: (i,j) -> flat index 0..5
+ * Ordering: 00,01,02,11,12,22 matching GRChombo convention.
  */
-static inline double field_background_value(int field_id)
-{
-    switch (field_id) {
-    case FIELD_CHI:   return 1.0;
-    case FIELD_GT11:  return 1.0;
-    case FIELD_GT22:  return 1.0;
-    case FIELD_GT33:  return 1.0;
-    case FIELD_ALPHA: return 1.0;
-    default:          return 0.0;
-    }
-}
+static const int sym_table[3][3] = {
+    {0, 1, 2},
+    {1, 3, 4},
+    {2, 4, 5}
+};
+#define SYM_INDEX(i, j) (sym_table[(i)][(j)])
 
-/*
- * Falloff power for Sommerfeld boundary conditions.
- * All fields fall off as 1/r.
- */
-static inline double field_falloff_power(int field_id)
-{
-    (void)field_id;
-    return 1.0;
-}
+/* Loop macros matching GRChombo's FOR() convention */
+#define FOR1(i) for (int (i) = 0; (i) < GR_SPACEDIM; ++(i))
+#define FOR2(i, j) FOR1(i) FOR1(j)
+#define FOR3(i, j, k) FOR1(i) FOR1(j) FOR1(k)
+#define FOR4(i, j, k, l) FOR1(i) FOR1(j) FOR1(k) FOR1(l)
+
+/* Kronecker delta */
+#define DELTA(i, j) ((i) == (j) ? 1.0 : 0.0)
 
 #endif /* LATTICE_FIELDS_H */

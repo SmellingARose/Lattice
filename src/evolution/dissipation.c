@@ -1,62 +1,36 @@
 /*
- * dissipation.c — Kreiss-Oliger numerical dissipation
+ * Lattice — 3D Numerical Relativity
+ * Kreiss-Oliger dissipation.
  *
- * Applies 6th-order KO dissipation to all evolved fields:
- *   rhs[f][idx] -= eps(x) * (KO6_x + KO6_y + KO6_z)
+ * Adds sigma * sum_dir(fd_ko) to each field's RHS at point (i,j,k).
+ * 6th-order operator using 7-point stencil.
  *
- * Spatially varying dissipation coefficient (arXiv:2404.01137):
- *   eps(x) = W(x) * eps_CA
- * where W = chi^{1/2} (conformal factor, -> 0 at punctures, -> 1 in weak field).
- *
- * Gauge variables (alpha, beta, B): eps_CA = 0.99
- * Other CCZ4 variables:              eps_CA = 0.3
+ * Ref: GRChombo FourthOrderDerivatives.hpp:361-415
  */
 
-#include "../core/grid.h"
 #include "../core/fields.h"
+#include "../core/grid.h"
 #include "../numerics/finite_diff.h"
 
-#include <math.h>
-
-static int is_gauge_field(int f)
+#ifdef LATTICE_GPU
+#pragma omp declare target
+#endif
+void add_ko_dissipation(double **rhs, const double *const *src,
+                        const grid_t *g, double sigma,
+                        int i, int j, int k)
 {
-    return (f == FIELD_ALPHA
-         || f == FIELD_BETA1 || f == FIELD_BETA2 || f == FIELD_BETA3
-         || f == FIELD_GBAUX1 || f == FIELD_GBAUX2 || f == FIELD_GBAUX3);
-}
+    int idx = IDX(g, i, j, k);
+    int sx = STRIDE_X;
+    int sy = STRIDE_Y(g);
+    int sz = STRIDE_Z(g);
+    double dx = g->dx;
 
-void dissipation_apply(grid_t *g)
-{
-    const double dx = g->params.dx;
-    const double dy = g->params.dy;
-    const double dz = g->params.dz;
-    const int sx = grid_stride_x(g);
-    const int sy = grid_stride_y(g);
-    const int sz = grid_stride_z(g);
-    const int nf = g->params.num_fields;
-    const double eps_gauge = g->params.ko_eps_gauge;
-    const double eps_other = g->params.ko_eps_other;
-
-    /* OMP: per-point dissipation, no cross-point dependencies.
-     * Toggle: make PARALLEL=0/1 */
-    GRID_LOOP_INTERIOR_OMP(g, i, j, k) {
-        int idx = grid_idx(g, i, j, k);
-
-        /* W = chi^{1/2} — spatially varying multiplier.
-         * Floor W at 0.1 so dissipation remains active at punctures.
-         * Without this, high-frequency modes at the puncture grow unchecked. */
-        double chi = g->rk_scratch[FIELD_CHI][idx];
-        double W = fmax(sqrt(fmax(chi, 0.0)), 0.1);
-
-        for (int f = 0; f < nf; f++) {
-            double eps_ca = is_gauge_field(f) ? eps_gauge : eps_other;
-            double eps = W * eps_ca;
-
-            double ko = FD_KO6(g->rk_scratch[f], idx, sx, dx)
-                      + FD_KO6(g->rk_scratch[f], idx, sy, dy)
-                      + FD_KO6(g->rk_scratch[f], idx, sz, dz);
-
-            g->rhs[f][idx] -= eps * ko;
-        }
+    for (int f = 0; f < NUM_FIELDS; f++) {
+        rhs[f][idx] += sigma * (fd_ko(src[f], idx, sx, dx)
+                              + fd_ko(src[f], idx, sy, dx)
+                              + fd_ko(src[f], idx, sz, dx));
     }
 }
+#ifdef LATTICE_GPU
+#pragma omp end declare target
+#endif

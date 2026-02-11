@@ -1,135 +1,87 @@
 # Lattice — 3D Numerical Relativity Simulator
+# Build system
 #
 # Usage:
-#   make                  Optimized build with OpenMP parallelism
-#   make PARALLEL=0       Build without OpenMP (single-threaded)
-#   make debug            Debug build with sanitizers (no OMP)
-#   make test-flat        Run flat spacetime test
-#   make test-bh          Run single BH test
-#   make test             Run all tests
-#   make test-convergence Convergence verification
-#   make clean            Remove build artifacts
+#   make                    # optimized build (CPU backend)
+#   make BACKEND=gpu        # OpenMP target GPU offloading
+#   make debug              # debug build with sanitizers
+#   make test               # run all tests
+#   make clean
 
-BACKEND  ?= cpu
-CC       ?= cc
-PARALLEL ?= 1
+CC      = clang
+BACKEND ?= cpu
 
-CFLAGS_BASE = -std=c17 -Wall -Wextra -Werror
+# Source files (common to all backends)
+CORE_SRC    = src/core/grid.c
+EVOLUTION_SRC = src/evolution/ccz4_rhs.c src/evolution/dissipation.c
+NUMERICS_SRC  = src/numerics/rk4.c
+INITIAL_SRC   = src/initial_data/puncture.c
+DIAG_SRC      = src/diagnostics/constraints.c
+BOUNDARY_SRC  = src/boundary/sommerfeld.c
+IO_SRC        = src/io/output.c
+MAIN_SRC      = src/main.c
 
-# Optimized flags
-CFLAGS_OPT = $(CFLAGS_BASE) -O3 -ffast-math -march=native
-# Debug flags (no OMP — sanitizers + OMP don't mix well)
-CFLAGS_DBG = $(CFLAGS_BASE) -O0 -g -fsanitize=address,undefined
-
-# Default to optimized
-CFLAGS ?= $(CFLAGS_OPT)
-
-LDFLAGS += -lm
-
-# --- OpenMP / Parallel ---
-ifeq ($(PARALLEL),1)
-    CFLAGS += -DLATTICE_USE_OMP
-    ifeq ($(shell uname),Darwin)
-        # macOS: clang needs libomp from Homebrew
-        ifneq ($(wildcard /opt/homebrew/opt/libomp),)
-            CFLAGS  += -Xpreprocessor -fopenmp -I/opt/homebrew/opt/libomp/include
-            LDFLAGS += -L/opt/homebrew/opt/libomp/lib -lomp
-        else ifneq ($(wildcard /usr/local/opt/libomp),)
-            CFLAGS  += -Xpreprocessor -fopenmp -I/usr/local/opt/libomp/include
-            LDFLAGS += -L/usr/local/opt/libomp/lib -lomp
-        else
-            $(warning OpenMP requested but libomp not found. Install: brew install libomp)
-            CFLAGS := $(filter-out -DLATTICE_USE_OMP,$(CFLAGS))
-        endif
-    else
-        # Linux: GCC has built-in OpenMP
-        CFLAGS  += -fopenmp
-        LDFLAGS += -fopenmp
-    endif
+# Backend selection
+ifeq ($(BACKEND),cpu)
+    BACKEND_SRC = src/backend/backend_cpu.c
+    OMP_PREFIX ?= $(shell brew --prefix libomp 2>/dev/null || echo /opt/homebrew/opt/libomp)
+    BACKEND_FLAGS = -Xclang -fopenmp -I$(OMP_PREFIX)/include
+    BACKEND_LIBS = -L$(OMP_PREFIX)/lib -lomp
+else ifeq ($(BACKEND),gpu)
+    BACKEND_SRC = src/backend/backend_gpu.c
+    BACKEND_FLAGS = -fopenmp -fopenmp-targets=nvptx64 -DLATTICE_GPU
+    BACKEND_LIBS =
+else
+    $(error Unknown BACKEND=$(BACKEND). Use cpu or gpu)
 endif
 
-# Source files
-CORE_SRC    = src/core/grid.c
-BACKEND_SRC = src/backend/backend_$(BACKEND).c
-NUMERICS_SRC = src/numerics/rk4.c
-BOUNDARY_SRC = src/boundary/sommerfeld.c
-IO_SRC       = src/io/output.c
-DIAG_SRC     = src/diagnostics/constraints.c
-GEOM_SRC     = src/geometry/christoffel.c src/geometry/ricci.c
-EVOL_SRC     = src/evolution/ccz4_rhs.c src/evolution/gauge_rhs.c \
-               src/evolution/dissipation.c
-MAIN_SRC     = src/main.c
+ALL_SRC = $(CORE_SRC) $(EVOLUTION_SRC) $(NUMERICS_SRC) $(INITIAL_SRC) \
+          $(DIAG_SRC) $(BOUNDARY_SRC) $(IO_SRC) $(BACKEND_SRC)
 
-ALL_SRC = $(CORE_SRC) $(BACKEND_SRC) $(NUMERICS_SRC) $(BOUNDARY_SRC) \
-          $(IO_SRC) $(DIAG_SRC) $(GEOM_SRC) $(EVOL_SRC) $(MAIN_SRC)
+# Compiler flags
+INCLUDES = -I src
+CFLAGS_BASE = -std=c17 -Wall -Wextra -Werror $(INCLUDES) $(BACKEND_FLAGS)
+CFLAGS_OPT  = $(CFLAGS_BASE) -O3 -ffast-math -march=native
+CFLAGS_DBG  = $(CFLAGS_BASE) -O0 -g -fsanitize=address,undefined -DDEBUG
 
-# Object files
-BUILDDIR = build
-ALL_OBJ = $(patsubst src/%.c,$(BUILDDIR)/%.o,$(ALL_SRC))
+LDFLAGS = $(BACKEND_LIBS) -lm
 
-# Library objects (everything except main.c)
-LIB_SRC = $(filter-out src/main.c,$(ALL_SRC))
-LIB_OBJ = $(patsubst src/%.c,$(BUILDDIR)/%.o,$(LIB_SRC))
+# Build directory
+BUILD = build
 
-# Binary names
-BIN = lattice
-TEST_FLAT_BIN = build/test_flat
-TEST_BH_BIN       = build/test_bh
-TEST_BH_SMOKE_BIN = build/test_bh_smoke
+# Targets
+.PHONY: all debug test test-single-bh clean
 
-.PHONY: all debug test test-flat test-bh test-bh-smoke test-convergence clean
+all: $(BUILD)/lattice
 
-all: $(BIN)
+$(BUILD)/lattice: $(ALL_SRC) $(MAIN_SRC)
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS_OPT) -o $@ $(ALL_SRC) $(MAIN_SRC) $(LDFLAGS)
+	@echo "Built: $@"
 
-$(BIN): $(ALL_OBJ)
-	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+debug: $(BUILD)/lattice_debug
 
-# Debug build (single-threaded, sanitizers)
-debug: CFLAGS = $(CFLAGS_DBG)
-debug: clean $(BIN)
+$(BUILD)/lattice_debug: $(ALL_SRC) $(MAIN_SRC)
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS_DBG) -o $@ $(ALL_SRC) $(MAIN_SRC) $(LDFLAGS)
+	@echo "Built: $@ (debug)"
 
-# Compile rule
-$(BUILDDIR)/%.o: src/%.c
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c -o $@ $<
+# Tests
+$(BUILD)/test_flat: tests/test_flat.c $(ALL_SRC)
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS_OPT) -o $@ tests/test_flat.c $(ALL_SRC) $(LDFLAGS)
 
-# Test binaries
-$(TEST_FLAT_BIN): $(LIB_OBJ) $(BUILDDIR)/test_flat.o
-	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+$(BUILD)/test_single_bh: tests/test_single_bh.c $(ALL_SRC)
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS_OPT) -o $@ tests/test_single_bh.c $(ALL_SRC) $(LDFLAGS)
 
-$(BUILDDIR)/test_flat.o: tests/test_flat.c
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c -o $@ $<
+test: $(BUILD)/test_flat
+	@echo "=== Running tests ==="
+	$(BUILD)/test_flat
 
-$(TEST_BH_BIN): $(LIB_OBJ) $(BUILDDIR)/test_single_bh.o $(BUILDDIR)/initial_data/puncture.o
-	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
-
-$(BUILDDIR)/test_single_bh.o: tests/test_single_bh.c
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c -o $@ $<
-
-# Test runners
-test-flat: $(TEST_FLAT_BIN)
-	./$(TEST_FLAT_BIN)
-
-test-bh: $(TEST_BH_BIN)
-	./$(TEST_BH_BIN)
-
-$(TEST_BH_SMOKE_BIN): $(LIB_OBJ) $(BUILDDIR)/test_bh_smoke.o $(BUILDDIR)/initial_data/puncture.o
-	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
-
-$(BUILDDIR)/test_bh_smoke.o: tests/test_bh_smoke.c
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c -o $@ $<
-
-test-bh-smoke: $(TEST_BH_SMOKE_BIN)
-	./$(TEST_BH_SMOKE_BIN)
-
-test: test-flat test-bh
-
-test-convergence: $(TEST_FLAT_BIN)
-	./tests/convergence.sh
+test-single-bh: $(BUILD)/test_single_bh
+	@echo "=== Running single BH test ==="
+	$(BUILD)/test_single_bh
 
 clean:
-	rm -rf $(BUILDDIR) $(BIN)
-	rm -f scalars.dat
+	rm -rf $(BUILD)

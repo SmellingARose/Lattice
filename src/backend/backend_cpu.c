@@ -1,49 +1,28 @@
 /*
- * backend_cpu.c — CPU backend with OpenMP parallelism
+ * Lattice — 3D Numerical Relativity
+ * CPU backend: OpenMP parallel triple loop.
  *
- * Field update loops use collapse(2) on outer two dimensions (z, y)
- * with x as the innermost (unit-stride) loop for cache efficiency.
+ * z (outer, parallelized) -> y -> x (inner, unit stride)
  */
 
 #include "backend.h"
 
-int backend_init(void)
+void backend_compute_rhs(double **rhs, const double *const *src,
+                         const grid_t *g, const sim_params_t *p,
+                         rhs_point_func_t func)
 {
-    return 0;
-}
+    int lo = g->ghost;
+    int hi = g->ghost + g->N;
 
-void backend_shutdown(void)
-{
-}
-
-void backend_field_update(grid_t *g, double *dst, const double *src,
-                          const double *rhs, double dt_factor, int field_id)
-{
-    (void)field_id;
-    const int nx = g->params.nx;
-    const int ny = g->params.ny;
-    const int nz = g->params.nz;
-    const int sx = grid_stride_x(g);
-    const int sy = grid_stride_y(g);
-    const int sz = grid_stride_z(g);
-
-#pragma omp parallel for collapse(2) schedule(static)
-    for (int k = 0; k < nz; k++) {
-        for (int j = 0; j < ny; j++) {
-            for (int i = 0; i < nx; i++) {
-                int idx = i * sx + j * sy + k * sz;
-                dst[idx] = src[idx] + dt_factor * rhs[idx];
+    #pragma omp parallel for collapse(2) schedule(static)
+    for (int k = lo; k < hi; k++) {
+        for (int j = lo; j < hi; j++) {
+            for (int i = lo; i < hi; i++) {
+                func(rhs, src, g, p, i, j, k);
             }
         }
     }
 }
 
-void backend_sync_to_device(grid_t *g)
-{
-    (void)g;
-}
-
-void backend_sync_to_host(grid_t *g)
-{
-    (void)g;
-}
+void backend_init(void) { /* no-op for CPU */ }
+void backend_cleanup(void) { /* no-op for CPU */ }

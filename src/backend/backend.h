@@ -1,43 +1,32 @@
 /*
- * backend.h — Backend abstraction for CPU/GPU dispatch
+ * Lattice — 3D Numerical Relativity
+ * Backend abstraction layer.
  *
- * Physics kernels never include platform headers directly.
- * All platform interaction goes through this interface.
- *
- * Backends: cpu (OpenMP), metal, cuda, hip
+ * CPU backend = OpenMP triple loop calling the C RHS function.
+ * GPU backends (Metal/CUDA/HIP) are stubs for now.
  */
 
 #ifndef LATTICE_BACKEND_H
 #define LATTICE_BACKEND_H
 
 #include "../core/grid.h"
+#include "../core/params.h"
 
-/*
- * Initialize backend. Returns 0 on success.
- */
-int backend_init(void);
+/* Point-wise RHS function signature.
+ * Called for each interior grid point (i,j,k).
+ * Reads from src arrays, writes to rhs arrays. */
+typedef void (*rhs_point_func_t)(double **rhs, const double *const *src,
+                                 const grid_t *g, const sim_params_t *p,
+                                 int i, int j, int k);
 
-/*
- * Shutdown backend and release resources.
- */
-void backend_shutdown(void);
+/* Compute RHS over the entire interior grid.
+ * Dispatches to the selected backend (OpenMP, Metal, CUDA, HIP). */
+void backend_compute_rhs(double **rhs, const double *const *src,
+                         const grid_t *g, const sim_params_t *p,
+                         rhs_point_func_t func);
 
-/*
- * Update a single field for one RK4 sub-step:
- *   dst[idx] = src[idx] + dt_factor * rhs[idx]
- * for all interior points.
- */
-void backend_field_update(grid_t *g, double *dst, const double *src,
-                          const double *rhs, double dt_factor, int field_id);
-
-/*
- * Sync field data to device (GPU). No-op for CPU backend.
- */
-void backend_sync_to_device(grid_t *g);
-
-/*
- * Sync field data from device to host. No-op for CPU backend.
- */
-void backend_sync_to_host(grid_t *g);
+/* Backend lifecycle (no-op for CPU) */
+void backend_init(void);
+void backend_cleanup(void);
 
 #endif /* LATTICE_BACKEND_H */
