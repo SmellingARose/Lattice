@@ -4,11 +4,12 @@
 
 C codebase implementing the CCZ4 (conformal covariant Z4) formulation of
 Einstein's field equations for evolving black hole spacetimes through inspiral,
-merger, and ringdown. Multi-platform GPU acceleration via compile-time backend
-dispatch: physics kernels are pure C, a thin abstraction layer swaps
-CPU (OpenMP) / Metal / CUDA / HIP.
+merger, and ringdown. GPU acceleration via OpenMP target offloading — physics
+kernels are pure C, a thin backend abstraction swaps CPU (OpenMP threads) and
+GPU (OpenMP target teams) with no platform-specific code.
 
-Primary dev target: Apple M4 (16 GB unified memory, 10 GPU cores).
+Primary dev target: Apple M4 (16 GB unified memory) for CPU, NVIDIA HPC GPUs
+(V100/A100/H100) for production runs. Requires GCC 15+ for GPU offloading.
 
 ## Approach
 
@@ -98,17 +99,12 @@ lattice/
 │   │   └── params.h            # simulation parameters
 │   ├── backend/
 │   │   ├── backend.h           # abstract interface
-│   │   ├── backend_cpu.c       # OpenMP implementation
-│   │   ├── backend_metal.m     # Metal implementation
-│   │   ├── backend_cuda.cu     # CUDA implementation
-│   │   └── backend_hip.c       # HIP/ROCm implementation
+│   │   ├── backend_cpu.c       # OpenMP threads (CPU)
+│   │   └── backend_gpu.c       # OpenMP target offloading (GPU)
 │   ├── evolution/
 │   │   ├── ccz4_rhs.c          # CCZ4 right-hand-side
-│   │   ├── gauge_rhs.c         # lapse + shift evolution
 │   │   └── dissipation.c       # Kreiss-Oliger dissipation
 │   ├── geometry/
-│   │   ├── christoffel.c       # Christoffel symbols
-│   │   ├── ricci.c             # Ricci tensor with Z terms
 │   │   └── tensor_utils.h      # inline tensor operations
 │   ├── numerics/
 │   │   ├── finite_diff.h       # FD_D1, FD_D2 macros (4th-order)
@@ -122,9 +118,6 @@ lattice/
 │   │   └── sommerfeld.c        # radiative boundary conditions
 │   └── io/
 │       └── output.c            # data output
-├── metal/
-│   ├── ccz4_rhs.metal
-│   └── rk4_update.metal
 ├── tests/
 │   ├── test_flat.c             # flat spacetime stability
 │   ├── test_single_bh.c        # single puncture evolution
@@ -139,23 +132,44 @@ lattice/
 ## Build & Test
 
 ```bash
-make                    # optimized build (-O3 -ffast-math -march=native)
-make BACKEND=metal      # Metal GPU backend
-make BACKEND=cuda       # CUDA backend
-make BACKEND=hip        # HIP/ROCm backend
+make                    # CPU build (-O3 -ffast-math -march=native)
+make BACKEND=gpu        # GPU build (OpenMP target offloading, requires GCC 15+)
 make debug              # debug build (-O0 -g -fsanitize=address,undefined)
 make test               # all tests
 make test-convergence   # 3-resolution convergence verification
 make clean
 ```
 
-Backend flag: `BACKEND=cpu|metal|cuda|hip`. Default is `cpu` (OpenMP).
+Backend flag: `BACKEND=cpu|gpu`. Default is `cpu` (OpenMP threads).
 Time integrator: `--rk classic|ck45`. Default is `ck45` (Carpenter-Kennedy 2N
 low-storage, 3 memory blocks). Use `--rk classic` for standard 4-stage RK4
 (4 memory blocks).
-Compiler: `clang` on macOS, `gcc`/`nvcc` on Linux.
-No external dependencies beyond standard C and Accelerate (macOS).
+Compiler: `clang` on macOS (CPU only), `gcc-15` on Linux (CPU + GPU).
+No external dependencies beyond standard C and libomp.
 Debug builds enable NaN/Inf checking — any floating-point trap is a bug.
+
+### GPU backend requirements
+
+GPU offloading uses OpenMP target (`#pragma omp target teams distribute
+parallel for`). No CUDA, HIP, or Metal code — the same C physics kernels run
+on both CPU and GPU.
+
+**Requirements:**
+- GCC 15+ with `-foffload=nvptx-none` (NVIDIA) or `-foffload=amdgcn-amdhsa` (AMD)
+- `GOMP_NVPTX_NATIVE_GPU_THREAD_STACK_SIZE=16384` env var (required — the CCZ4
+  RHS kernel uses ~4 KB stack per thread for derivative tensors, Christoffel
+  symbols, and Ricci tensor locals; GCC 13's default stack is too small)
+- HPC-class GPU with 1:2 FP64:FP32 ratio (V100, A100, H100, MI250X, MI300X).
+  Consumer GPUs (1:32 ratio) have negligible FP64 throughput.
+
+```bash
+# Example: GPU build on Linux with GCC 15 targeting NVIDIA
+make BACKEND=gpu CC=gcc-15
+
+# Run with stack size env var
+export GOMP_NVPTX_NATIVE_GPU_THREAD_STACK_SIZE=16384
+./build/lattice --N 256 --steps 400 --puncture 1.0,0,0,0
+```
 
 ## Code Style
 
@@ -252,10 +266,16 @@ flat spacetime -> single BH -> binary.
 
 ## Hardware Constraints
 
-Apple M4 (16 GB) is the primary dev target. No platform-specific code outside
-`src/backend/` and `metal/`. Practical grid limit on M4: ~128^3 in FP64
-(~8 GB for 25 fields x 4 RK stages). Metal GPU has no native FP64 — Metal
-shaders use FP32.
+**CPU dev target:** Apple M4 (16 GB). Practical grid limit: 128^3 with CK45
+(~5 GB for 25 fields x 3 blocks). N=256 barely fits (10.3 GB CK45).
+Measured performance: ~4.5 sec/step at N=128 (~23 GFLOPS effective FP64).
+
+**GPU production targets:** NVIDIA V100/A100/H100 via OpenMP target offloading.
+Estimated 20-100x speedup over M4 CPU (0.05-0.2 sec/step at N=128).
+N=256 requires 40+ GB GPU memory. N=512 requires H200 (141 GB) or multi-GPU.
+
+No platform-specific code outside `src/backend/`. Physics kernels are pure C
+with `#pragma omp declare target` guards for GPU compilation.
 
 ## DEVLOG.md
 

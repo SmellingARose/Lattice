@@ -251,3 +251,52 @@ and updates (single core).
 Flat spacetime (N=32, 1000 steps, CK45): Ham L2 = 5.3e-14 — PASSED (< 1e-10).
 Classic RK4 unchanged and also passing.
 Single BH (N=256) allocates successfully with CK45 (10.3 GB) — evolution running.
+
+## 2026-02-11: GPU Strategy — OpenMP Target with GCC 15
+
+### Decision: No native CUDA/HIP/Metal backends needed
+
+The existing `backend_gpu.c` uses OpenMP target offloading, which already works
+for everything except the per-thread stack overflow (see GPU investigation above).
+GCC 15 adds `GOMP_NVPTX_NATIVE_GPU_THREAD_STACK_SIZE` to control native GPU
+thread stack at runtime, which fixes the root cause. No need to write
+platform-specific GPU code.
+
+Deleted references to Metal/CUDA/HIP backends from CLAUDE.md. The architecture
+is now: CPU (OpenMP threads) + GPU (OpenMP target), both using the same C
+physics kernels. GPU_ARCH flag in Makefile selects NVIDIA (`nvptx-none`) or
+AMD (`amdgcn-amdhsa`) offload target.
+
+### Performance benchmarks (M4 CPU, CK45, flat spacetime)
+
+| Grid (N) | Wall time/step | ns/point | CPU cores used |
+|-----------|---------------|----------|----------------|
+| 32 | 0.082s | 500 | 4.3 |
+| 64 | 0.62s | 473 | 5.4 |
+| 128 | 4.53s | 431 | 6.0 |
+
+Effective throughput: ~23 GFLOPS FP64 (5.4% of M4's 424 GFLOPS peak).
+Scaling is linear in N^3 as expected.
+
+### FP64 GPU comparison: why the P40 was the wrong test card
+
+The Tesla P40 (GP102) has a 1:32 FP64:FP32 ratio = 367 GFLOPS FP64 peak.
+The M4 CPU has 424 GFLOPS FP64 peak. The P40 is actually *slower* than the
+laptop for FP64 work, even ignoring the stack overflow. HPC-class GPUs have
+1:2 FP64:FP32 ratio:
+
+| Hardware | FP64 GFLOPS | Memory BW | Est. speedup vs M4 |
+|----------|-------------|-----------|---------------------|
+| M4 CPU (measured) | 424 | 120 GB/s | 1× |
+| Tesla P40 | 367 | 346 GB/s | 0.5-1.5× (not worth it) |
+| V100 | 7,000 | 900 GB/s | 15-30× |
+| A100 | 9,700 | 2,039 GB/s | 20-50× |
+| H100 | 34,000 | 3,350 GB/s | 50-100× |
+
+### Updated Makefile
+
+- `BACKEND=gpu` now passes `-foffload=$(GPU_ARCH)` with `GPU_ARCH` defaulting
+  to `nvptx-none`. Set `GPU_ARCH=amdgcn-amdhsa` for AMD GPUs.
+- Added `-fcf-protection=none -fno-stack-protector` flags (required for nvptx).
+- Header comment documents the required `GOMP_NVPTX_NATIVE_GPU_THREAD_STACK_SIZE`
+  env var.

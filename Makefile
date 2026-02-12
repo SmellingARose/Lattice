@@ -2,11 +2,14 @@
 # Build system
 #
 # Usage:
-#   make                    # optimized build (CPU backend)
-#   make BACKEND=gpu        # OpenMP target GPU offloading
+#   make                    # optimized CPU build (OpenMP threads)
+#   make BACKEND=gpu        # GPU build (OpenMP target, requires GCC 15+)
+#   make BACKEND=gpu GPU_ARCH=amdgcn-amdhsa  # AMD GPU target
 #   make debug              # debug build with sanitizers
 #   make test               # run all tests
 #   make clean
+#
+# GPU runtime: export GOMP_NVPTX_NATIVE_GPU_THREAD_STACK_SIZE=16384
 
 BACKEND ?= cpu
 
@@ -43,7 +46,13 @@ ifeq ($(BACKEND),cpu)
     endif
 else ifeq ($(BACKEND),gpu)
     BACKEND_SRC = src/backend/backend_gpu.c
-    BACKEND_FLAGS = -fopenmp -fopenmp-targets=nvptx64 -DLATTICE_GPU
+    # GPU offloading via OpenMP target. Requires GCC 15+ for stack size control.
+    # Set GOMP_NVPTX_NATIVE_GPU_THREAD_STACK_SIZE=16384 at runtime.
+    # GPU_ARCH: nvptx-none (NVIDIA, default) or amdgcn-amdhsa (AMD)
+    GPU_ARCH ?= nvptx-none
+    BACKEND_FLAGS = -fopenmp -foffload=$(GPU_ARCH) -fcf-protection=none \
+                    -fno-stack-protector \
+                    -foffload-options="-lm -fno-stack-protector" -DLATTICE_GPU
     BACKEND_LIBS =
 else
     $(error Unknown BACKEND=$(BACKEND). Use cpu or gpu)
