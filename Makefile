@@ -73,7 +73,7 @@ LDFLAGS = $(BACKEND_LIBS) -lm
 BUILD = build
 
 # Targets
-.PHONY: all debug test test-single-bh clean
+.PHONY: all debug test test-single-bh test-convergence clean
 
 all: $(BUILD)/lattice
 
@@ -98,13 +98,22 @@ $(BUILD)/test_single_bh: tests/test_single_bh.c $(ALL_SRC)
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS_OPT) -o $@ tests/test_single_bh.c $(ALL_SRC) $(LDFLAGS)
 
-test: $(BUILD)/test_flat
+test: $(BUILD)/test_flat $(BUILD)/test_convergence
 	@echo "=== Running tests ==="
 	$(BUILD)/test_flat
+	$(BUILD)/test_convergence
 
 test-single-bh: $(BUILD)/test_single_bh
 	@echo "=== Running single BH test ==="
 	$(BUILD)/test_single_bh
+
+$(BUILD)/test_convergence: tests/test_convergence.c $(ALL_SRC)
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS_OPT) -o $@ tests/test_convergence.c $(ALL_SRC) $(LDFLAGS)
+
+test-convergence: $(BUILD)/test_convergence
+	@echo "=== Running convergence test ==="
+	$(BUILD)/test_convergence
 
 clean:
 	rm -rf $(BUILD)
