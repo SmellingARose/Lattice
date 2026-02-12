@@ -73,7 +73,7 @@ LDFLAGS = $(BACKEND_LIBS) -lm
 BUILD = build
 
 # Targets
-.PHONY: all debug test test-single-bh test-convergence clean
+.PHONY: all debug test test-single-bh test-convergence test-constraints clean
 
 all: $(BUILD)/lattice
 
@@ -114,6 +114,14 @@ $(BUILD)/test_convergence: tests/test_convergence.c $(ALL_SRC)
 test-convergence: $(BUILD)/test_convergence
 	@echo "=== Running convergence test ==="
 	$(BUILD)/test_convergence
+
+$(BUILD)/test_constraints: tests/test_constraints.c $(ALL_SRC)
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS_OPT) -o $@ tests/test_constraints.c $(ALL_SRC) $(LDFLAGS)
+
+test-constraints: $(BUILD)/test_constraints
+	@echo "=== Running constraint tests ==="
+	$(BUILD)/test_constraints
 
 clean:
 	rm -rf $(BUILD)
