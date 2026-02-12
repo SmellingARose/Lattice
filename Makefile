@@ -73,7 +73,7 @@ LDFLAGS = $(BACKEND_LIBS) -lm
 BUILD = build
 
 # Targets
-.PHONY: all debug test test-single-bh test-convergence test-constraints clean
+.PHONY: all debug test test-single-bh test-convergence test-constraints test-head-on clean
 
 all: $(BUILD)/lattice
 
@@ -122,6 +122,14 @@ $(BUILD)/test_constraints: tests/test_constraints.c $(ALL_SRC)
 test-constraints: $(BUILD)/test_constraints
 	@echo "=== Running constraint tests ==="
 	$(BUILD)/test_constraints
+
+$(BUILD)/test_head_on: tests/test_head_on.c $(ALL_SRC)
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS_OPT) -o $@ tests/test_head_on.c $(ALL_SRC) $(LDFLAGS)
+
+test-head-on: $(BUILD)/test_head_on
+	@echo "=== Running head-on binary test ==="
+	$(BUILD)/test_head_on
 
 clean:
 	rm -rf $(BUILD)

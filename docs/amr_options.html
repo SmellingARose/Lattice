@@ -1,0 +1,612 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lattice AMR Options</title>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --border: #30363d;
+    --text: #e6edf3; --text-dim: #8b949e; --accent: #58a6ff;
+    --green: #3fb950; --red: #f85149; --orange: #d29922; --purple: #bc8cff;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; background: var(--bg); color: var(--text); line-height: 1.7; padding: 2rem; max-width: 1100px; margin: 0 auto; }
+  h1 { font-size: 2.2rem; margin-bottom: 0.3rem; color: var(--accent); }
+  h2 { font-size: 1.6rem; margin: 2.5rem 0 1rem; color: var(--accent); border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; }
+  h3 { font-size: 1.15rem; margin: 1.5rem 0 0.5rem; color: var(--purple); }
+  p { margin-bottom: 1rem; }
+  .subtitle { color: var(--text-dim); font-size: 1.05rem; margin-bottom: 2rem; }
+  .diagram { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; margin: 1.5rem 0; text-align: center; overflow-x: auto; }
+  .diagram svg { max-width: 100%; }
+  .caption { color: var(--text-dim); font-size: 0.9rem; margin-top: 0.75rem; font-style: italic; }
+  .card-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin: 1.5rem 0; }
+  @media (max-width: 750px) { .card-grid { grid-template-columns: 1fr; } }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.25rem; }
+  .card h3 { margin-top: 0; }
+  .card.rec { border-color: var(--green); }
+  .card.rec h3::after { content: ' \2605'; color: var(--green); }
+  .pro { color: var(--green); }
+  .con { color: var(--red); }
+  .neutral { color: var(--orange); }
+  ul { margin: 0.5rem 0 0.75rem 1.25rem; }
+  ul li { margin-bottom: 0.25rem; }
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.95rem; }
+  th, td { padding: 0.5rem 0.75rem; text-align: left; border: 1px solid var(--border); }
+  th { background: var(--surface); color: var(--accent); }
+  .hl { background: #1a2332; border-left: 3px solid var(--accent); padding: 1rem 1.25rem; margin: 1.5rem 0; border-radius: 0 6px 6px 0; }
+  .tag { display: inline-block; padding: 0.1rem 0.45rem; border-radius: 4px; font-size: 0.78rem; font-weight: 600; }
+  .tg { background: #1a3a1a; color: var(--green); }
+  .tn { background: #3a2a1a; color: var(--orange); }
+  .tr { background: #3a1a1a; color: var(--red); }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .ref { font-size: 0.85rem; color: var(--text-dim); }
+  .toc { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.25rem 1.5rem; margin: 1.5rem 0; }
+  .toc ol { padding-left: 1.5rem; }
+  .toc li { margin: 0.25rem 0; }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+  .cols2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+  @media (max-width: 750px) { .cols2 { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+
+<h1>Adaptive Mesh Refinement for Lattice</h1>
+<p class="subtitle">A guide to AMR approaches for N-body black hole simulations in numerical relativity</p>
+
+<div class="toc">
+<strong>Contents</strong>
+<ol>
+  <li><a href="#what">What is AMR and why do we need it?</a></li>
+  <li><a href="#problem">The problem: uniform grids can't do binary BHs</a></li>
+  <li><a href="#types">AMR approaches compared</a></li>
+  <li><a href="#levels">How many refinement levels?</a></li>
+  <li><a href="#blocks">Block size</a></li>
+  <li><a href="#criteria">Refinement criteria</a></li>
+  <li><a href="#ratio">Refinement ratio</a></li>
+  <li><a href="#techniques">Critical techniques: CAKO, CAHD, SSL</a></li>
+  <li><a href="#sota">State of the art: most BHs ever simulated</a></li>
+  <li><a href="#rec">Recommendation for Lattice</a></li>
+  <li><a href="#refs">References</a></li>
+</ol>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="what">1. What is AMR?</h2>
+
+<p>In numerical relativity, we solve Einstein's equations on a 3D grid. The grid spacing <strong>dx</strong> determines accuracy: smaller dx = more accurate, but also more memory and compute. The problem is that black holes need <em>very</em> fine resolution (dx ~ M/50) while the gravitational waves propagate far away where coarse resolution (dx ~ 2M) is fine.</p>
+
+<p><strong>Adaptive Mesh Refinement</strong> solves this by using different resolutions in different regions: fine grids where BHs are, coarse grids everywhere else.</p>
+
+<div class="diagram">
+<svg viewBox="0 0 800 350" xmlns="http://www.w3.org/2000/svg">
+  <!-- Uniform grid (left) -->
+  <text x="150" y="25" fill="#8b949e" text-anchor="middle" font-size="14" font-weight="600">Uniform Grid</text>
+  <!-- Coarse grid lines -->
+  <g stroke="#30363d" stroke-width="0.5">
+    <line x1="30" y1="40" x2="30" y2="310"/><line x1="60" y1="40" x2="60" y2="310"/>
+    <line x1="90" y1="40" x2="90" y2="310"/><line x1="120" y1="40" x2="120" y2="310"/>
+    <line x1="150" y1="40" x2="150" y2="310"/><line x1="180" y1="40" x2="180" y2="310"/>
+    <line x1="210" y1="40" x2="210" y2="310"/><line x1="240" y1="40" x2="240" y2="310"/>
+    <line x1="270" y1="40" x2="270" y2="310"/>
+    <line x1="30" y1="40" x2="270" y2="40"/><line x1="30" y1="70" x2="270" y2="70"/>
+    <line x1="30" y1="100" x2="270" y2="100"/><line x1="30" y1="130" x2="270" y2="130"/>
+    <line x1="30" y1="160" x2="270" y2="160"/><line x1="30" y1="190" x2="270" y2="190"/>
+    <line x1="30" y1="220" x2="270" y2="220"/><line x1="30" y1="250" x2="270" y2="250"/>
+    <line x1="30" y1="280" x2="270" y2="280"/><line x1="30" y1="310" x2="270" y2="310"/>
+  </g>
+  <!-- BH dots -->
+  <circle cx="120" cy="130" r="8" fill="#f85149" opacity="0.8"/>
+  <circle cx="180" cy="220" r="8" fill="#f85149" opacity="0.8"/>
+  <text x="150" y="340" fill="#f85149" text-anchor="middle" font-size="12">BHs only ~1 cell across. Can't resolve them.</text>
+
+  <!-- Arrow -->
+  <text x="370" y="175" fill="#58a6ff" text-anchor="middle" font-size="28" font-weight="bold">&rarr;</text>
+  <text x="370" y="200" fill="#8b949e" text-anchor="middle" font-size="11">add AMR</text>
+
+  <!-- AMR grid (right) -->
+  <text x="600" y="25" fill="#8b949e" text-anchor="middle" font-size="14" font-weight="600">AMR Grid</text>
+  <!-- Coarse grid -->
+  <g stroke="#30363d" stroke-width="0.5">
+    <line x1="470" y1="40" x2="470" y2="310"/><line x1="510" y1="40" x2="510" y2="310"/>
+    <line x1="550" y1="40" x2="550" y2="310"/><line x1="590" y1="40" x2="590" y2="310"/>
+    <line x1="630" y1="40" x2="630" y2="310"/><line x1="670" y1="40" x2="670" y2="310"/>
+    <line x1="710" y1="40" x2="710" y2="310"/><line x1="750" y1="40" x2="750" y2="310"/>
+    <line x1="470" y1="40" x2="750" y2="40"/><line x1="470" y1="70" x2="750" y2="70"/>
+    <line x1="470" y1="100" x2="750" y2="100"/><line x1="470" y1="130" x2="750" y2="130"/>
+    <line x1="470" y1="160" x2="750" y2="160"/><line x1="470" y1="190" x2="750" y2="190"/>
+    <line x1="470" y1="220" x2="750" y2="220"/><line x1="470" y1="250" x2="750" y2="250"/>
+    <line x1="470" y1="280" x2="750" y2="280"/><line x1="470" y1="310" x2="750" y2="310"/>
+  </g>
+  <!-- Level 1 refined region around BH1 -->
+  <rect x="530" y="85" width="60" height="60" fill="none" stroke="#58a6ff" stroke-width="2" rx="2"/>
+  <g stroke="#58a6ff" stroke-width="0.5" opacity="0.6">
+    <line x1="540" y1="85" x2="540" y2="145"/><line x1="550" y1="85" x2="550" y2="145"/>
+    <line x1="560" y1="85" x2="560" y2="145"/><line x1="570" y1="85" x2="570" y2="145"/>
+    <line x1="580" y1="85" x2="580" y2="145"/>
+    <line x1="530" y1="95" x2="590" y2="95"/><line x1="530" y1="105" x2="590" y2="105"/>
+    <line x1="530" y1="115" x2="590" y2="115"/><line x1="530" y1="125" x2="590" y2="125"/>
+    <line x1="530" y1="135" x2="590" y2="135"/>
+  </g>
+  <!-- Level 2 finest -->
+  <rect x="545" y="100" width="30" height="30" fill="none" stroke="#3fb950" stroke-width="2" rx="1"/>
+  <g stroke="#3fb950" stroke-width="0.4" opacity="0.5">
+    <line x1="548" y1="100" x2="548" y2="130"/><line x1="551" y1="100" x2="551" y2="130"/>
+    <line x1="554" y1="100" x2="554" y2="130"/><line x1="557" y1="100" x2="557" y2="130"/>
+    <line x1="560" y1="100" x2="560" y2="130"/><line x1="563" y1="100" x2="563" y2="130"/>
+    <line x1="566" y1="100" x2="566" y2="130"/><line x1="569" y1="100" x2="569" y2="130"/>
+    <line x1="572" y1="100" x2="572" y2="130"/>
+    <line x1="545" y1="103" x2="575" y2="103"/><line x1="545" y1="106" x2="575" y2="106"/>
+    <line x1="545" y1="109" x2="575" y2="109"/><line x1="545" y1="112" x2="575" y2="112"/>
+    <line x1="545" y1="115" x2="575" y2="115"/><line x1="545" y1="118" x2="575" y2="118"/>
+    <line x1="545" y1="121" x2="575" y2="121"/><line x1="545" y1="124" x2="575" y2="124"/>
+    <line x1="545" y1="127" x2="575" y2="127"/>
+  </g>
+  <circle cx="560" cy="115" r="5" fill="#f85149" opacity="0.9"/>
+
+  <!-- Level 1 around BH2 -->
+  <rect x="610" y="185" width="60" height="60" fill="none" stroke="#58a6ff" stroke-width="2" rx="2"/>
+  <g stroke="#58a6ff" stroke-width="0.5" opacity="0.6">
+    <line x1="620" y1="185" x2="620" y2="245"/><line x1="630" y1="185" x2="630" y2="245"/>
+    <line x1="640" y1="185" x2="640" y2="245"/><line x1="650" y1="185" x2="650" y2="245"/>
+    <line x1="660" y1="185" x2="660" y2="245"/>
+    <line x1="610" y1="195" x2="670" y2="195"/><line x1="610" y1="205" x2="670" y2="205"/>
+    <line x1="610" y1="215" x2="670" y2="215"/><line x1="610" y1="225" x2="670" y2="225"/>
+    <line x1="610" y1="235" x2="670" y2="235"/>
+  </g>
+  <!-- Level 2 finest -->
+  <rect x="625" y="200" width="30" height="30" fill="none" stroke="#3fb950" stroke-width="2" rx="1"/>
+  <g stroke="#3fb950" stroke-width="0.4" opacity="0.5">
+    <line x1="628" y1="200" x2="628" y2="230"/><line x1="631" y1="200" x2="631" y2="230"/>
+    <line x1="634" y1="200" x2="634" y2="230"/><line x1="637" y1="200" x2="637" y2="230"/>
+    <line x1="640" y1="200" x2="640" y2="230"/><line x1="643" y1="200" x2="643" y2="230"/>
+    <line x1="646" y1="200" x2="646" y2="230"/><line x1="649" y1="200" x2="649" y2="230"/>
+    <line x1="652" y1="200" x2="652" y2="230"/>
+    <line x1="625" y1="203" x2="655" y2="203"/><line x1="625" y1="206" x2="655" y2="206"/>
+    <line x1="625" y1="209" x2="655" y2="209"/><line x1="625" y1="212" x2="655" y2="212"/>
+    <line x1="625" y1="215" x2="655" y2="215"/><line x1="625" y1="218" x2="655" y2="218"/>
+    <line x1="625" y1="221" x2="655" y2="221"/><line x1="625" y1="224" x2="655" y2="224"/>
+    <line x1="625" y1="227" x2="655" y2="227"/>
+  </g>
+  <circle cx="640" cy="215" r="5" fill="#f85149" opacity="0.9"/>
+
+  <!-- Legend -->
+  <rect x="470" y="290" width="10" height="3" fill="#30363d"/><text x="485" y="295" fill="#8b949e" font-size="10">Coarse (dx=2M)</text>
+  <rect x="560" y="290" width="10" height="3" fill="#58a6ff"/><text x="575" y="295" fill="#8b949e" font-size="10">Medium (dx=M)</text>
+  <rect x="650" y="290" width="10" height="3" fill="#3fb950"/><text x="665" y="295" fill="#8b949e" font-size="10">Fine (dx=M/4)</text>
+
+  <text x="600" y="340" fill="#3fb950" text-anchor="middle" font-size="12">BHs well-resolved. Boundary far away. Same memory.</text>
+</svg>
+<p class="caption">Left: uniform grid wastes resolution on empty space and under-resolves BHs. Right: AMR puts fine grids only where needed.</p>
+</div>
+
+<p>The key idea: each black hole gets its own set of nested, increasingly fine grids. The wave zone and far field use coarse grids. Total memory is <strong>much less</strong> than a uniform grid at the finest resolution.</p>
+
+<!-- ============================================================ -->
+<h2 id="problem">2. The Problem We Hit</h2>
+
+<p>Our head-on binary test (m=0.5 each, d=10M separation) at N=128, dx=0.5 showed the BHs <strong>dissolving into the grid</strong>. The lapse relaxed back toward flat spacetime instead of forming trumpets. Why?</p>
+
+<div class="hl">
+<strong>Each BH has coordinate radius ~M/4 = 0.125 for m=0.5.</strong> At dx=0.5, that's a quarter of one grid cell. The finite differences can't represent gradients that steep. The numerical dissipation (KO) smooths the BH away in a few timesteps.
+</div>
+
+<p>To resolve a BH, you need at least <strong>~30 grid points across the horizon</strong>. For m=0.5 (horizon radius ~0.25M), that means dx &le; 0.25/30 &approx; 0.008. But with a uniform grid at dx=0.008 and L=64, you'd need N=8000 &mdash; <strong>512 billion grid points</strong>, ~100 TB of RAM. Impossible.</p>
+
+<p>AMR solves this: dx=0.008 near each BH, dx=2.0 in the wave zone. With 10 refinement levels, the total memory is ~1-10 GB instead of 100 TB.</p>
+
+<!-- ============================================================ -->
+<h2 id="types">3. AMR Approaches Compared</h2>
+
+<div class="card-grid">
+
+<div class="card">
+<h3>Block-Structured (Berger-Oliger)</h3>
+<p class="ref"><span class="tag tg">Proven N=25</span> GRChombo, CarpetX, BAM</p>
+<p>Rectangular boxes at different resolutions, nested inside each other. An algorithm (Berger-Rigoutsos) clusters cells that need refinement into boxes.</p>
+<ul>
+  <li class="pro">Proven at N=25 BHs (GRChombo 2025)</li>
+  <li class="pro">Large contiguous arrays &rarr; good cache &amp; GPU perf</li>
+  <li class="pro">Well-understood inter-level interpolation</li>
+  <li class="con">Bounding-box waste: if 2 BHs are near each other, their boxes merge into one big rectangle covering empty space</li>
+  <li class="con">Regridding (rebuilding boxes) costs 5-15% of runtime</li>
+  <li class="con">Rectangles are a poor fit for spherical BH structure</li>
+</ul>
+</div>
+
+<div class="card rec">
+<h3>Oct-Tree Block AMR</h3>
+<p class="ref"><span class="tag tn">New but scaling proven</span> AthenaK, GR-Athena++</p>
+<p>A tree of cubes: one root splits into 8 children, each child can split again. Each leaf holds a small uniform block (e.g. 16&sup3; cells). Refines exactly where needed.</p>
+<ul>
+  <li class="pro">No bounding-box waste &mdash; perfect for scattered N-body</li>
+  <li class="pro">80% GPU scaling at 65,536 GPUs (AthenaK on Frontier)</li>
+  <li class="pro">Chi-based refinement auto-tracks any number of BHs</li>
+  <li class="pro">16&sup3; blocks map perfectly to GPU warps/wavefronts</li>
+  <li class="con">Tree traversal less cache-friendly than flat arrays</li>
+  <li class="con">More complex neighbor-finding across tree levels</li>
+  <li class="con">Newer approach, less battle-tested for NR specifically</li>
+</ul>
+</div>
+
+<div class="card">
+<h3>Wavelet Octree (Dendro-GR)</h3>
+<p class="ref"><span class="tag tn">Niche</span> Dendro-GR</p>
+<p>Like oct-tree, but uses wavelet coefficients to decide where to refine. Mathematically optimal error-driven refinement.</p>
+<ul>
+  <li class="pro">Wavelet error directly measures where refinement is needed</li>
+  <li class="pro">800 GFLOPS on single A100 GPU</li>
+  <li class="pro">No tunable parameters for refinement decisions</li>
+  <li class="con">Complex wavelet machinery to implement</li>
+  <li class="con">Small community, less support</li>
+  <li class="con">Wavelet transform overhead on every regrid</li>
+</ul>
+</div>
+
+<div class="card">
+<h3>Discontinuous Galerkin (SpECTRE)</h3>
+<p class="ref"><span class="tag tn">Binary only</span> SpECTRE (SXS)</p>
+<p>Not finite differences &mdash; uses high-order polynomials per element. Exponential convergence for smooth solutions. Elements communicate only through boundary fluxes.</p>
+<ul>
+  <li class="pro">Exponential convergence (spectral accuracy)</li>
+  <li class="pro">Minimal inter-element communication</li>
+  <li class="pro">p-refinement: increase polynomial order instead of splitting cells</li>
+  <li class="con">Requires excision (cut out BH interiors) &mdash; fails for N-body mergers</li>
+  <li class="con">Uses generalized harmonic formulation, not CCZ4</li>
+  <li class="con">Would require rewriting everything. Only proven for N=2.</li>
+</ul>
+</div>
+
+<div class="card">
+<h3>AMReX Framework (Library)</h3>
+<p class="ref"><span class="tag tn">Mature framework</span> CarpetX, GRTeclyn, GRaM-X</p>
+<p>Not an AMR <em>type</em> but an AMR <em>library</em>. DOE-funded C++17 framework providing block-structured Berger-Oliger AMR with GPU backends (CUDA/HIP/SYCL). You write physics kernels; AMReX handles ghost zones, subcycling, load balancing, and MPI.</p>
+<ul>
+  <li class="pro">Production-quality infrastructure: saves months of AMR plumbing</li>
+  <li class="pro">Exascale-proven: 67-77% weak scaling on 4096 Frontier nodes (CarpetX)</li>
+  <li class="pro">Multi-GPU vendor: CUDA + HIP + SYCL &mdash; no platform-specific code</li>
+  <li class="pro">CarpetX has 4th-order subcycling via dense output interpolation</li>
+  <li class="pro">Active DOE funding, monthly releases, large community</li>
+  <li class="con"><strong>C++17 required</strong> &mdash; our C17 code would need C++ wrappers or rewrite</li>
+  <li class="con"><strong>Block-structured only</strong> &mdash; same bounding-box waste as Berger-Oliger for N-body</li>
+  <li class="con">No OpenMP target &mdash; uses CUDA/HIP/SYCL portability layer instead</li>
+  <li class="con">GRTeclyn (GRChombo&rarr;AMReX port) still not production-ready after years of work</li>
+  <li class="con">Large dependency (~500k+ lines C++). No longer "no external dependencies"</li>
+</ul>
+<p class="ref">NR codes on AMReX: <strong>CarpetX</strong> (Einstein Toolkit driver, production), <strong>GRTeclyn</strong> (CCZ4 port of GRChombo, in development), <strong>GRaM-X</strong> &amp; <strong>AsterX</strong> (GRMHD, published but BBH waveform accuracy undemonstrated).</p>
+</div>
+
+<div class="card">
+<h3>Fixed Mesh Refinement (FMR)</h3>
+<p class="ref"><span class="tag tr">Insufficient for N-body</span> BAM, old Carpet</p>
+<p>Pre-set nested boxes that move with BHs. No dynamic regridding. Simple and predictable.</p>
+<ul>
+  <li class="pro">Dead simple to implement</li>
+  <li class="pro">No regridding cost, predictable performance</li>
+  <li class="pro">Good for well-understood binary setups</li>
+  <li class="con">Can't handle chaotic orbits (must know BH positions in advance)</li>
+  <li class="con">Fails for N&gt;2 &mdash; box overlap wastes memory quadratically</li>
+  <li class="con">BAM's 3-body sims hit domain-size limits</li>
+</ul>
+</div>
+
+</div>
+
+<div class="diagram">
+<svg viewBox="0 0 800 340" xmlns="http://www.w3.org/2000/svg">
+  <!-- Block-structured diagram -->
+  <text x="100" y="20" fill="#8b949e" text-anchor="middle" font-size="12" font-weight="600">Block-Structured</text>
+  <text x="100" y="34" fill="#8b949e" text-anchor="middle" font-size="10">(hand-rolled or AMReX)</text>
+  <rect x="10" y="45" width="180" height="180" fill="none" stroke="#30363d" stroke-width="1"/>
+  <!-- Level 1 box covering both BHs -->
+  <rect x="25" y="60" width="150" height="150" fill="#58a6ff" fill-opacity="0.08" stroke="#58a6ff" stroke-width="1.5"/>
+  <!-- BH positions -->
+  <circle cx="60" cy="105" r="6" fill="#f85149"/>
+  <circle cx="145" cy="170" r="6" fill="#f85149"/>
+  <!-- Waste area label -->
+  <text x="100" y="240" fill="#f85149" font-size="9" text-anchor="middle">wasted: refines empty</text>
+  <text x="100" y="252" fill="#f85149" font-size="9" text-anchor="middle">space between BHs</text>
+
+  <!-- Oct-tree diagram -->
+  <text x="310" y="20" fill="#8b949e" text-anchor="middle" font-size="12" font-weight="600">Oct-Tree Block</text>
+  <text x="310" y="34" fill="#8b949e" text-anchor="middle" font-size="10">(AthenaK-style)</text>
+  <rect x="220" y="45" width="180" height="180" fill="none" stroke="#30363d" stroke-width="1"/>
+  <!-- Only cells around each BH refined -->
+  <rect x="240" y="70" width="45" height="45" fill="#58a6ff" fill-opacity="0.08" stroke="#58a6ff" stroke-width="1.5"/>
+  <rect x="248" y="78" width="22" height="22" fill="#3fb950" fill-opacity="0.08" stroke="#3fb950" stroke-width="1.5"/>
+  <circle cx="259" cy="89" r="5" fill="#f85149"/>
+  <rect x="320" y="145" width="45" height="45" fill="#58a6ff" fill-opacity="0.08" stroke="#58a6ff" stroke-width="1.5"/>
+  <rect x="328" y="153" width="22" height="22" fill="#3fb950" fill-opacity="0.08" stroke="#3fb950" stroke-width="1.5"/>
+  <circle cx="339" cy="164" r="5" fill="#f85149"/>
+  <text x="310" y="252" fill="#3fb950" text-anchor="middle" font-size="9">Independent patches, no waste</text>
+
+  <!-- AMReX diagram -->
+  <text x="520" y="20" fill="#8b949e" text-anchor="middle" font-size="12" font-weight="600">AMReX (Library)</text>
+  <text x="520" y="34" fill="#8b949e" text-anchor="middle" font-size="10">(block-structured + GPU backends)</text>
+  <rect x="430" y="45" width="180" height="180" fill="none" stroke="#30363d" stroke-width="1"/>
+  <!-- Same bounding-box as block-structured but with a library icon -->
+  <rect x="445" y="60" width="150" height="150" fill="#58a6ff" fill-opacity="0.08" stroke="#58a6ff" stroke-width="1.5"/>
+  <circle cx="475" cy="105" r="6" fill="#f85149"/>
+  <circle cx="560" cy="170" r="6" fill="#f85149"/>
+  <!-- Library badge -->
+  <rect x="450" y="188" width="70" height="16" rx="3" fill="#bc8cff" fill-opacity="0.2" stroke="#bc8cff" stroke-width="0.8"/>
+  <text x="485" y="199" fill="#bc8cff" text-anchor="middle" font-size="8" font-weight="600">C++17 LIBRARY</text>
+  <text x="520" y="240" fill="#d29922" font-size="9" text-anchor="middle">same bounding-box waste,</text>
+  <text x="520" y="252" fill="#d29922" font-size="9" text-anchor="middle">but GPU + MPI for free</text>
+
+  <!-- FMR fail diagram -->
+  <text x="720" y="20" fill="#8b949e" text-anchor="middle" font-size="12" font-weight="600">FMR</text>
+  <text x="720" y="34" fill="#8b949e" text-anchor="middle" font-size="10">(N=5 chaos)</text>
+  <rect x="630" y="45" width="180" height="180" fill="none" stroke="#30363d" stroke-width="1"/>
+  <!-- 5 BHs with overlapping boxes -->
+  <circle cx="675" cy="90" r="4" fill="#f85149"/>
+  <circle cx="720" cy="125" r="4" fill="#f85149"/>
+  <circle cx="695" cy="165" r="4" fill="#f85149"/>
+  <circle cx="760" cy="100" r="4" fill="#f85149"/>
+  <circle cx="750" cy="185" r="4" fill="#f85149"/>
+  <rect x="655" y="72" width="125" height="130" fill="#f85149" fill-opacity="0.06" stroke="#f85149" stroke-width="1.5" stroke-dasharray="4,3"/>
+  <text x="720" y="240" fill="#f85149" text-anchor="middle" font-size="9">All boxes merge into one.</text>
+  <text x="720" y="252" fill="#f85149" text-anchor="middle" font-size="9">Nearly as costly as uniform.</text>
+</svg>
+<p class="caption">For N scattered BHs: block-structured (and AMReX) wastes space on bounding boxes. Oct-tree refines only where needed. FMR degrades to near-uniform. AMReX trades the bounding-box cost for production-quality GPU + MPI infrastructure.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="levels">4. How Many Refinement Levels?</h2>
+
+<p>Each level doubles the resolution (with standard 2:1 ratio). The number of levels determines the <strong>dynamic range</strong> &mdash; the ratio between coarsest and finest grid spacing.</p>
+
+<table>
+<tr><th>Levels</th><th>Dynamic range</th><th>Finest dx (if coarsest=2M)</th><th>Use case</th><th>Argument</th></tr>
+<tr><td>4-6</td><td>16&times; &ndash; 64&times;</td><td>M/8 &ndash; M/32</td><td>Head-on, basic binary</td>
+  <td><span class="pro">Simple to debug, fast regrid.</span> <span class="con">Not enough for production waveforms.</span></td></tr>
+<tr><td>8-10</td><td>256&times; &ndash; 1024&times;</td><td>M/128 &ndash; M/512</td><td>Binary inspiral, equal-mass N-body</td>
+  <td><span class="pro">Good balance of accuracy and cost.</span> <span class="con">May miss small remnants.</span></td></tr>
+<tr><td>10-12</td><td>1024&times; &ndash; 4096&times;</td><td>M/512 &ndash; M/2048</td><td>Production binary, mass ratio ~10:1</td>
+  <td><span class="pro">What real codes use. Handles unequal mass.</span> <span class="con">Deep hierarchy = complex subcycling.</span></td></tr>
+<tr><td>12-14</td><td>4096&times; &ndash; 16384&times;</td><td>M/2048 &ndash; M/8192</td><td>N=25 cluster, extreme mass ratio</td>
+  <td><span class="pro">Required for GRChombo's 25-BH run.</span> <span class="con">Tiny timestep on finest level.</span></td></tr>
+</table>
+
+<div class="hl">
+<strong>For Lattice:</strong> Start with <strong>10 configurable levels</strong>. This handles binary inspiral and equal-mass N-body. Can increase to 12-14 when needed for larger N or unequal masses.
+</div>
+
+<div class="diagram">
+<svg viewBox="0 0 700 200" xmlns="http://www.w3.org/2000/svg">
+  <text x="350" y="18" fill="#8b949e" text-anchor="middle" font-size="13" font-weight="600">Nested Refinement Levels (2D slice)</text>
+  <!-- Level 0: coarsest -->
+  <rect x="50" y="30" width="600" height="160" fill="none" stroke="#30363d" stroke-width="1.5"/>
+  <text x="60" y="50" fill="#30363d" font-size="11">L0: dx=2M (wave zone)</text>
+  <!-- Level 1 -->
+  <rect x="200" y="55" width="250" height="110" fill="#58a6ff" fill-opacity="0.05" stroke="#58a6ff" stroke-width="1.5"/>
+  <text x="210" y="73" fill="#58a6ff" font-size="11">L1: dx=M</text>
+  <!-- Level 2 -->
+  <rect x="260" y="75" width="120" height="70" fill="#bc8cff" fill-opacity="0.06" stroke="#bc8cff" stroke-width="1.5"/>
+  <text x="270" y="91" fill="#bc8cff" font-size="11">L2: dx=M/2</text>
+  <!-- Level 3: finest -->
+  <rect x="285" y="92" width="60" height="38" fill="#3fb950" fill-opacity="0.08" stroke="#3fb950" stroke-width="1.5"/>
+  <text x="293" y="106" fill="#3fb950" font-size="10">L3: M/4</text>
+  <circle cx="315" cy="115" r="5" fill="#f85149"/>
+  <!-- Labels -->
+  <text x="520" y="105" fill="#8b949e" font-size="11" text-anchor="middle">Each level: 2&times; finer</text>
+  <text x="520" y="120" fill="#8b949e" font-size="11" text-anchor="middle">4 levels = 16&times; ratio</text>
+  <text x="520" y="135" fill="#8b949e" font-size="11" text-anchor="middle">10 levels = 1024&times; ratio</text>
+</svg>
+<p class="caption">Each level doubles resolution. The BH sits at the finest level; gravitational waves propagate outward through coarser levels.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="blocks">5. Block Size</h2>
+
+<p>In oct-tree block AMR, each leaf of the tree holds a uniform block of cells. The block size determines the <strong>granularity</strong> of refinement.</p>
+
+<table>
+<tr><th>Block size</th><th>For</th><th>Against</th></tr>
+<tr><td><strong>8&sup3;</strong></td>
+  <td class="pro">Maximum refinement flexibility. Refine exactly where needed.</td>
+  <td class="con">Too much metadata overhead per block. Poor GPU occupancy (only 512 cells).</td></tr>
+<tr><td><strong>16&sup3;</strong> &starf;</td>
+  <td class="pro">Sweet spot. Good GPU occupancy (4096 cells). Matches cache lines. What AthenaK uses.</td>
+  <td class="con">Slightly coarser granularity than 8&sup3;.</td></tr>
+<tr><td><strong>32&sup3;</strong></td>
+  <td class="pro">Fewer blocks = less tree overhead. Great GPU kernel size.</td>
+  <td class="con">Over-refines: a 32&sup3; block might only need refinement in one corner, wasting 7/8 of the cells.</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="criteria">6. Refinement Criteria</h2>
+
+<p>How does the code decide <em>where</em> to refine? This is critical for N-body &mdash; you can't hard-code BH positions.</p>
+
+<div class="card-grid">
+
+<div class="card rec">
+<h3>Gradient of &chi; (conformal factor)</h3>
+<p>Refine wherever |&nabla;&chi;| exceeds a threshold. Since &chi; &rarr; 0 at each puncture, this <strong>automatically detects and tracks all BHs</strong> without knowing their positions.</p>
+<ul>
+  <li class="pro">Puncture-agnostic: works for any N</li>
+  <li class="pro">Naturally gives more levels to smaller BHs (steeper gradients)</li>
+  <li class="pro">Cheap to compute (one derivative per point)</li>
+  <li class="con">Doesn't adapt to wave features or constraint violations</li>
+</ul>
+</div>
+
+<div class="card">
+<h3>&chi;-min (threshold on conformal factor)</h3>
+<p>Refine wherever &chi; &lt; threshold. Even simpler than gradient-based.</p>
+<ul>
+  <li class="pro">Trivial to implement</li>
+  <li class="pro">Automatically tracks all BHs</li>
+  <li class="con">Doesn't distinguish BH sizes &mdash; all get same refinement</li>
+  <li class="con">Threshold needs tuning per scenario</li>
+</ul>
+</div>
+
+<div class="card">
+<h3>Truncation error estimate</h3>
+<p>Compute the solution at two resolutions; the difference estimates the error. Refine where error is large.</p>
+<ul>
+  <li class="pro">Mathematically optimal &mdash; refines where the error actually is</li>
+  <li class="con">~50% more expensive (need shadow hierarchy)</li>
+  <li class="con">Frequent regridding = high overhead</li>
+  <li class="con">GR-Athena++ found it gave only 3rd-order convergence vs 5th for sphere-in-sphere</li>
+</ul>
+</div>
+
+<div class="card">
+<h3>Sphere-in-sphere (L2)</h3>
+<p>Refine all blocks within a spherical region around each puncture.</p>
+<ul>
+  <li class="pro">Best mesh efficiency in the GR-Athena++ comparison</li>
+  <li class="pro">Simple, predictable geometry</li>
+  <li class="con">Needs to know puncture positions (requires a tracker)</li>
+  <li class="con">Not agnostic &mdash; harder for large N</li>
+</ul>
+</div>
+
+</div>
+
+<!-- ============================================================ -->
+<h2 id="ratio">7. Refinement Ratio</h2>
+
+<table>
+<tr><th>Ratio</th><th>For</th><th>Against</th></tr>
+<tr><td><strong>2:1</strong> &starf;</td>
+  <td>Standard. Simple prolongation/restriction. Stable. What everyone uses. Well-understood interpolation.</td>
+  <td>Need more levels to reach same dynamic range (10 levels for 1024&times;).</td></tr>
+<tr><td><strong>4:1</strong></td>
+  <td>Half as many levels. Less subcycling overhead.</td>
+  <td>Harder interpolation (4th-order across 4:1 boundary is tricky). Larger resolution jumps cause reflection artifacts.</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="techniques">8. Critical Techniques: CAKO, CAHD, SSL</h2>
+
+<p>A 2024 paper by Etienne (<a href="https://arxiv.org/abs/2404.01137">arXiv:2404.01137</a>) identified three improvements that reduce constraint violations at AMR boundaries by <strong>2-5 orders of magnitude</strong>. These are infrastructure-agnostic &mdash; pure physics fixes that work with any AMR scheme.</p>
+
+<div class="card-grid">
+
+<div class="card" style="grid-column: span 2;">
+<h3 style="color: var(--green);">Why these matter</h3>
+<p>Without these fixes, the dominant source of numerical error in a moving-puncture AMR simulation is <strong>not</strong> the finite difference truncation error &mdash; it's noise generated at AMR refinement boundaries. The gauge dynamics create a sharp superluminal wave that causes "seven-decade jumps" in constraint violation when crossing between refinement levels. These three techniques eliminate that problem.</p>
+</div>
+
+</div>
+
+<div class="card-grid">
+
+<div class="card">
+<h3>CAKO &mdash; Curvature-Adjusted KO Dissipation</h3>
+<p>Multiply the Kreiss-Oliger dissipation coefficient by W = e<sup>-2&phi;</sup> (the conformal factor). Near punctures, W &rarr; 0, so dissipation vanishes &mdash; preserving sharp physical features. In the wave zone, full dissipation suppresses numerical noise.</p>
+<ul>
+  <li class="pro">Eliminates artificial damping of BH structure</li>
+  <li class="pro">Allows &epsilon;<sub>KO</sub> = 0.99 for gauge variables (near CFL max) without harming physics</li>
+  <li class="con">Minimal: one extra multiply per dissipation term</li>
+</ul>
+</div>
+
+<div class="card">
+<h3>CAHD &mdash; Coarse-grid Adjusted Hamiltonian Damping</h3>
+<p>Scale constraint damping (&kappa;1) based on local grid spacing. On coarser AMR levels, increase damping by 2<sup>n</sup>. This ensures consistent damping strength across all refinement levels.</p>
+<ul>
+  <li class="pro">Maintains consistent constraint damping across resolution changes</li>
+  <li class="pro">Prevents constraint violation buildup on coarse levels</li>
+  <li class="con">Need to know the local refinement level (trivial with AMR metadata)</li>
+</ul>
+</div>
+
+<div class="card" style="grid-column: span 2;">
+<h3>SSL &mdash; Slow-Start Lapse</h3>
+<p>At early times, the 1+log gauge condition creates a sharp superluminal gauge wave that propagates outward. When this wave crosses AMR refinement boundaries, it generates massive constraint violations. SSL adds a Gaussian-damped term to the lapse equation that <strong>slows down gauge evolution at early times</strong>, letting the gauge wave form more gradually.</p>
+<ul>
+  <li class="pro">Eliminates the dominant source of AMR boundary noise</li>
+  <li class="pro">Only active for the first ~10-20M of evolution, then vanishes</li>
+  <li class="con">Adds one term to the lapse equation, one tunable timescale parameter</li>
+</ul>
+</div>
+
+</div>
+
+<div class="hl">
+<strong>Combined effect:</strong> 2 orders of magnitude reduction in strong-field constraint violations, <strong>5 orders of magnitude</strong> in the wave-extraction zone. Previously obscured l=m=6 gravitational wave modes become visible above the numerical noise floor. <em>Not adopting these from the start would mean fighting a known problem with a known solution.</em>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sota">9. State of the Art</h2>
+
+<table>
+<tr><th>N (BHs)</th><th>Code</th><th>Year</th><th>AMR Type</th><th>Levels</th><th>Key Finding</th></tr>
+<tr><td><strong>25</strong></td><td>GRChombo</td><td>2025</td><td>Block-structured (Berger-Oliger)</td><td>12-14</td><td>Hierarchical mergers in compact cluster. The record.</td></tr>
+<tr><td>3-4</td><td>BAM</td><td>2025</td><td>Moving boxes (FMR)</td><td>11</td><td>Binary-single &amp; binary-binary scattering. Hit domain limits.</td></tr>
+<tr><td>2</td><td>AthenaK</td><td>2024</td><td>Oct-tree block</td><td>12</td><td>GPU-native. 80% scaling on 65k GPUs.</td></tr>
+<tr><td>2</td><td>CarpetX/AMReX</td><td>2025</td><td>Block-structured (AMReX)</td><td>10-12</td><td>67-77% scaling on 4096 Frontier nodes. 4th-order subcycling.</td></tr>
+<tr><td>2</td><td>GRaM-X/AMReX</td><td>2022</td><td>Block-structured (AMReX)</td><td>~10</td><td>First GPU GRMHD on AMReX. BBH waveform accuracy undemonstrated.</td></tr>
+<tr><td>2</td><td>SpECTRE</td><td>2024</td><td>DG elements</td><td>hp-adaptive</td><td>First DG BBH merger. 18 orbits.</td></tr>
+<tr><td>2</td><td>Dendro-GR</td><td>2023</td><td>Wavelet octree</td><td>~12</td><td>800 GFLOPS per A100. Mass ratio 100:1.</td></tr>
+</table>
+
+<p>The bottlenecks for large N:</p>
+<ul>
+  <li><strong>Timestep:</strong> dt &propto; dx<sub>min</sub> &propto; M/N for N equal-mass BHs. More BHs = tinier timestep.</li>
+  <li><strong>Initial data:</strong> N-puncture elliptic solve gets harder with N. Brill-Lindquist is analytic but only for zero momentum.</li>
+  <li><strong>Chaos:</strong> N-body GR is chaotic. Small numerical errors &rarr; exponentially diverging trajectories.</li>
+  <li><strong>Load balance:</strong> N patches of different sizes moving at different speeds = dynamic imbalance.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="rec">10. Recommendation for Lattice</h2>
+
+<div class="card rec" style="font-size: 1.05rem;">
+<h3>Oct-tree block AMR</h3>
+
+<table>
+<tr><th>Decision</th><th>Choice</th><th>Why</th></tr>
+<tr><td>AMR type</td><td><strong>Oct-tree block</strong></td><td>No bounding-box waste. Best for N scattered BHs. GPU-native.</td></tr>
+<tr><td>Block size</td><td><strong>16&sup3;</strong></td><td>Sweet spot for GPU occupancy and cache. Matches our alignment.</td></tr>
+<tr><td>Refinement ratio</td><td><strong>2:1</strong></td><td>Standard, stable, simple interpolation.</td></tr>
+<tr><td>Refinement criterion</td><td><strong>&nabla;&chi; gradient</strong></td><td>Auto-tracks any N BHs. More levels for smaller BHs.</td></tr>
+<tr><td>Max levels</td><td><strong>10 (configurable)</strong></td><td>Enough for binary &amp; equal-mass N-body. Increase as needed.</td></tr>
+<tr><td>Time subcycling</td><td><strong>Yes, 2:1 per level</strong></td><td>Keeps CFL constant. Required for efficiency.</td></tr>
+<tr><td>Techniques</td><td><strong>CAKO + CAHD + SSL</strong></td><td>2-5 orders of magnitude less AMR boundary noise.</td></tr>
+</table>
+
+<h3 style="color: var(--orange); margin-top: 1.5rem;">Why not AMReX?</h3>
+<p>AMReX would save us months of AMR plumbing (ghost zones, subcycling, load balancing, MPI). But it forces three trade-offs:</p>
+<ul>
+  <li><strong>C++17 dependency</strong> &mdash; our pure-C17 codebase would need C++ wrappers or partial rewrite. GRTeclyn (the GRChombo&rarr;AMReX port) has been underway for years and is still not production-ready.</li>
+  <li><strong>Block-structured only</strong> &mdash; AMReX provides Berger-Oliger, not oct-tree. For N=10+ scattered BHs, the bounding-box waste is the exact problem we're trying to avoid.</li>
+  <li><strong>No OpenMP target</strong> &mdash; AMReX uses CUDA/HIP/SYCL. We'd abandon our OpenMP target GPU strategy.</li>
+</ul>
+<p>If our goal were N=2 binary only, AMReX (via CarpetX) would be the pragmatic choice. For N=10+ chaotic N-body, oct-tree is the better fit.</p>
+
+<p style="margin-top: 1rem;">This gives us the best path from head-on binary through N=10+ chaotic BHs, using our existing CCZ4 + moving puncture + OpenMP target architecture. The oct-tree maps naturally to GPU dispatch (one kernel per block), and the &nabla;&chi; criterion makes the system completely agnostic to the number of BHs.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="refs">11. References</h2>
+
+<table>
+<tr><th>Paper</th><th>What</th></tr>
+<tr><td><a href="https://arxiv.org/abs/2505.01495">arXiv:2505.01495</a></td><td>GRChombo 25-BH cluster simulation (the record)</td></tr>
+<tr><td><a href="https://arxiv.org/abs/2404.01137">arXiv:2404.01137</a></td><td>CAKO/CAHD/SSL: 2-5 OOM improvement at AMR boundaries</td></tr>
+<tr><td><a href="https://arxiv.org/abs/2409.10383">arXiv:2409.10383</a></td><td>AthenaK: GPU-native oct-tree AMR for NR</td></tr>
+<tr><td><a href="https://arxiv.org/abs/2312.05438">arXiv:2312.05438</a></td><td>GR-Athena++: AMR refinement strategy comparison</td></tr>
+<tr><td><a href="https://arxiv.org/abs/2410.00265">arXiv:2410.00265</a></td><td>SpECTRE: first DG BBH merger</td></tr>
+<tr><td><a href="https://arxiv.org/abs/2505.03934">arXiv:2505.03934</a></td><td>BAM: 3-4 body BH encounters</td></tr>
+<tr><td><a href="https://arxiv.org/abs/2403.12179">arXiv:2403.12179</a></td><td>AMReX post-ECP: looking beyond exascale (2024)</td></tr>
+<tr><td><a href="https://arxiv.org/abs/2503.09629">arXiv:2503.09629</a></td><td>CarpetX: GPU subcycling on AMReX, 4th-order (2025)</td></tr>
+<tr><td><a href="https://arxiv.org/abs/2210.17509">arXiv:2210.17509</a></td><td>GRaM-X: GPU GRMHD on CarpetX/AMReX</td></tr>
+<tr><td><a href="https://arxiv.org/abs/2406.11669">arXiv:2406.11669</a></td><td>AsterX: GPU GRMHD on CarpetX/AMReX</td></tr>
+<tr><td><a href="https://arxiv.org/abs/2406.11626">arXiv:2406.11626</a></td><td>ExaGRyPE: task-based spacetree AMR</td></tr>
+<tr><td><a href="https://arxiv.org/abs/2505.00097">arXiv:2505.00097</a></td><td>superB/NRPy: memory-efficient NR (1.78 GB vs 98 GB)</td></tr>
+<tr><td><a href="https://arxiv.org/abs/gr-qc/0606079">gr-qc/0606079</a></td><td>Sperhake 2006: head-on BL collision benchmark</td></tr>
+<tr><td><a href="https://arxiv.org/abs/gr-qc/9309016">gr-qc/9309016</a></td><td>Anninos 1993: first head-on collision</td></tr>
+</table>
+
+<hr>
+<p class="ref" style="text-align: center; margin-top: 1rem;">Lattice &mdash; 3D Numerical Relativity Simulator &mdash; February 2026</p>
+
+</body>
+</html>
