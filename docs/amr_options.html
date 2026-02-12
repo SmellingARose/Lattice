@@ -61,6 +61,7 @@
   <li><a href="#what">What is AMR and why do we need it?</a></li>
   <li><a href="#problem">The problem: uniform grids can't do binary BHs</a></li>
   <li><a href="#types">AMR approaches compared</a></li>
+  <li><a href="#octree-vs-box">How oct-tree and block-structured actually work</a></li>
   <li><a href="#amrex">Deep dive: AMReX vs hand-rolled AMR</a></li>
   <li><a href="#levels">How many refinement levels?</a></li>
   <li><a href="#blocks">Block size</a></li>
@@ -354,7 +355,287 @@
 </div>
 
 <!-- ============================================================ -->
-<h2 id="amrex">4. Deep Dive: AMReX vs Hand-Rolled AMR</h2>
+<h2 id="octree-vs-box">4. How Oct-Tree and Block-Structured Actually Work</h2>
+
+<p>These are the two serious contenders for Lattice. They solve the same problem &mdash; put fine grids near BHs, coarse grids far away &mdash; but the <em>mechanism</em> is completely different. This matters because the mechanism determines memory waste, GPU efficiency, and how well the code scales to many BHs.</p>
+
+<h3>Block-structured: tag, cluster, nest</h3>
+
+<p>The algorithm works in three steps every time it regrids:</p>
+<ol>
+  <li><strong>Tag</strong> &mdash; mark every cell that needs refinement (e.g. where |&nabla;&chi;| is large)</li>
+  <li><strong>Cluster</strong> &mdash; the Berger-Rigoutsos algorithm groups tagged cells into rectangular boxes. It splits boxes recursively along the dimension with the longest edge until each box meets a "fill ratio" threshold (typically 70-80% of cells are actually tagged).</li>
+  <li><strong>Nest</strong> &mdash; create a finer level covering those boxes. Each box becomes a contiguous rectangular array of cells at 2&times; resolution.</li>
+</ol>
+
+<div class="diagram">
+<svg viewBox="0 0 800 330" xmlns="http://www.w3.org/2000/svg">
+  <text x="400" y="22" fill="#8b949e" text-anchor="middle" font-size="14" font-weight="600">Block-Structured Refinement: Step by Step</text>
+
+  <!-- Step 1: Tag -->
+  <text x="130" y="52" fill="#58a6ff" text-anchor="middle" font-size="12" font-weight="600">Step 1: Tag cells</text>
+  <rect x="30" y="60" width="200" height="200" fill="none" stroke="#30363d" stroke-width="1"/>
+  <!-- Grid lines -->
+  <g stroke="#30363d" stroke-width="0.3">
+    <line x1="50" y1="60" x2="50" y2="260"/><line x1="70" y1="60" x2="70" y2="260"/>
+    <line x1="90" y1="60" x2="90" y2="260"/><line x1="110" y1="60" x2="110" y2="260"/>
+    <line x1="130" y1="60" x2="130" y2="260"/><line x1="150" y1="60" x2="150" y2="260"/>
+    <line x1="170" y1="60" x2="170" y2="260"/><line x1="190" y1="60" x2="190" y2="260"/>
+    <line x1="210" y1="60" x2="210" y2="260"/>
+    <line x1="30" y1="80" x2="230" y2="80"/><line x1="30" y1="100" x2="230" y2="100"/>
+    <line x1="30" y1="120" x2="230" y2="120"/><line x1="30" y1="140" x2="230" y2="140"/>
+    <line x1="30" y1="160" x2="230" y2="160"/><line x1="30" y1="180" x2="230" y2="180"/>
+    <line x1="30" y1="200" x2="230" y2="200"/><line x1="30" y1="220" x2="230" y2="220"/>
+    <line x1="30" y1="240" x2="230" y2="240"/>
+  </g>
+  <!-- Tagged cells near BH1 (top-left region) -->
+  <rect x="50" y="80" width="20" height="20" fill="#f85149" fill-opacity="0.3"/>
+  <rect x="70" y="80" width="20" height="20" fill="#f85149" fill-opacity="0.3"/>
+  <rect x="50" y="100" width="20" height="20" fill="#f85149" fill-opacity="0.3"/>
+  <rect x="70" y="100" width="20" height="20" fill="#f85149" fill-opacity="0.3"/>
+  <rect x="90" y="100" width="20" height="20" fill="#f85149" fill-opacity="0.3"/>
+  <rect x="70" y="120" width="20" height="20" fill="#f85149" fill-opacity="0.3"/>
+  <circle cx="72" cy="102" r="4" fill="#f85149"/>
+  <!-- Tagged cells near BH2 (bottom-right) -->
+  <rect x="150" y="180" width="20" height="20" fill="#f85149" fill-opacity="0.3"/>
+  <rect x="170" y="180" width="20" height="20" fill="#f85149" fill-opacity="0.3"/>
+  <rect x="150" y="200" width="20" height="20" fill="#f85149" fill-opacity="0.3"/>
+  <rect x="170" y="200" width="20" height="20" fill="#f85149" fill-opacity="0.3"/>
+  <rect x="190" y="200" width="20" height="20" fill="#f85149" fill-opacity="0.3"/>
+  <rect x="170" y="220" width="20" height="20" fill="#f85149" fill-opacity="0.3"/>
+  <circle cx="172" cy="202" r="4" fill="#f85149"/>
+  <text x="130" y="285" fill="#8b949e" text-anchor="middle" font-size="10">Cells near each BH are flagged</text>
+
+  <!-- Arrow -->
+  <text x="265" y="165" fill="#58a6ff" font-size="22">&rarr;</text>
+
+  <!-- Step 2: Cluster into rectangles -->
+  <text x="410" y="52" fill="#58a6ff" text-anchor="middle" font-size="12" font-weight="600">Step 2: Cluster into boxes</text>
+  <rect x="310" y="60" width="200" height="200" fill="none" stroke="#30363d" stroke-width="1"/>
+  <!-- BH1 bounding box -->
+  <rect x="330" y="78" width="82" height="68" fill="#58a6ff" fill-opacity="0.1" stroke="#58a6ff" stroke-width="1.5"/>
+  <circle cx="352" cy="102" r="4" fill="#f85149"/>
+  <!-- Wasted cells label -->
+  <text x="395" y="92" fill="#d29922" font-size="8">wasted</text>
+  <text x="395" y="102" fill="#d29922" font-size="8">corners</text>
+  <!-- BH2 bounding box -->
+  <rect x="430" y="178" width="82" height="68" fill="#58a6ff" fill-opacity="0.1" stroke="#58a6ff" stroke-width="1.5"/>
+  <circle cx="452" cy="202" r="4" fill="#f85149"/>
+  <text x="496" y="192" fill="#d29922" font-size="8">wasted</text>
+  <text x="496" y="202" fill="#d29922" font-size="8">corners</text>
+  <text x="410" y="285" fill="#8b949e" text-anchor="middle" font-size="10">Berger-Rigoutsos finds bounding rectangles</text>
+  <text x="410" y="298" fill="#d29922" text-anchor="middle" font-size="10">Corners are refined but don't need to be</text>
+
+  <!-- Arrow -->
+  <text x="545" y="165" fill="#58a6ff" font-size="22">&rarr;</text>
+
+  <!-- Step 3: Nest finer level -->
+  <text x="690" y="52" fill="#58a6ff" text-anchor="middle" font-size="12" font-weight="600">Step 3: Refine boxes at 2&times;</text>
+  <rect x="590" y="60" width="200" height="200" fill="none" stroke="#30363d" stroke-width="1"/>
+  <!-- BH1 refined box with 2x grid -->
+  <rect x="610" y="78" width="82" height="68" fill="#58a6ff" fill-opacity="0.1" stroke="#58a6ff" stroke-width="1.5"/>
+  <g stroke="#3fb950" stroke-width="0.3" opacity="0.6">
+    <line x1="620" y1="78" x2="620" y2="146"/><line x1="630" y1="78" x2="630" y2="146"/>
+    <line x1="640" y1="78" x2="640" y2="146"/><line x1="650" y1="78" x2="650" y2="146"/>
+    <line x1="660" y1="78" x2="660" y2="146"/><line x1="670" y1="78" x2="670" y2="146"/>
+    <line x1="680" y1="78" x2="680" y2="146"/>
+    <line x1="610" y1="88" x2="692" y2="88"/><line x1="610" y1="98" x2="692" y2="98"/>
+    <line x1="610" y1="108" x2="692" y2="108"/><line x1="610" y1="118" x2="692" y2="118"/>
+    <line x1="610" y1="128" x2="692" y2="128"/><line x1="610" y1="138" x2="692" y2="138"/>
+  </g>
+  <circle cx="632" cy="102" r="4" fill="#f85149"/>
+  <!-- BH2 refined box with 2x grid -->
+  <rect x="710" y="178" width="82" height="68" fill="#58a6ff" fill-opacity="0.1" stroke="#58a6ff" stroke-width="1.5"/>
+  <g stroke="#3fb950" stroke-width="0.3" opacity="0.6">
+    <line x1="720" y1="178" x2="720" y2="246"/><line x1="730" y1="178" x2="730" y2="246"/>
+    <line x1="740" y1="178" x2="740" y2="246"/><line x1="750" y1="178" x2="750" y2="246"/>
+    <line x1="760" y1="178" x2="760" y2="246"/><line x1="770" y1="178" x2="770" y2="246"/>
+    <line x1="780" y1="178" x2="780" y2="246"/>
+    <line x1="710" y1="188" x2="792" y2="188"/><line x1="710" y1="198" x2="792" y2="198"/>
+    <line x1="710" y1="208" x2="792" y2="208"/><line x1="710" y1="218" x2="792" y2="218"/>
+    <line x1="710" y1="228" x2="792" y2="228"/><line x1="710" y1="238" x2="792" y2="238"/>
+  </g>
+  <circle cx="732" cy="202" r="4" fill="#f85149"/>
+  <text x="690" y="285" fill="#8b949e" text-anchor="middle" font-size="10">Each box gets a 2&times; finer grid inside it</text>
+  <text x="690" y="298" fill="#3fb950" text-anchor="middle" font-size="10">Contiguous arrays &mdash; good for cache</text>
+</svg>
+<p class="caption">Block-structured AMR tags cells, clusters them into rectangles, then fills each rectangle with a finer grid. The rectangles are contiguous arrays (good for performance) but inevitably refine some cells that don't need it (the corners).</p>
+</div>
+
+<h3>Oct-tree: recursive subdivision of cubes</h3>
+
+<p>The oct-tree starts with one cube covering the whole domain. If any cell in a cube needs refinement, it splits into 8 children (2&times;2&times;2). Each child can split again. The tree stops splitting when no cell in a leaf needs refinement. Each leaf holds a small uniform block (e.g. 16&sup3; cells).</p>
+
+<div class="diagram">
+<svg viewBox="0 0 800 330" xmlns="http://www.w3.org/2000/svg">
+  <text x="400" y="22" fill="#8b949e" text-anchor="middle" font-size="14" font-weight="600">Oct-Tree Refinement: Recursive Subdivision (2D slice = Quadtree)</text>
+
+  <!-- Step 1: Root -->
+  <text x="110" y="52" fill="#3fb950" text-anchor="middle" font-size="12" font-weight="600">Level 0: one root block</text>
+  <rect x="20" y="60" width="180" height="180" fill="none" stroke="#30363d" stroke-width="1.5"/>
+  <circle cx="65" cy="110" r="4" fill="#f85149"/>
+  <circle cx="150" cy="190" r="4" fill="#f85149"/>
+  <text x="110" y="260" fill="#8b949e" text-anchor="middle" font-size="10">BHs somewhere inside</text>
+
+  <!-- Arrow -->
+  <text x="225" y="155" fill="#3fb950" font-size="22">&rarr;</text>
+
+  <!-- Step 2: First split -->
+  <text x="370" y="52" fill="#3fb950" text-anchor="middle" font-size="12" font-weight="600">Level 1: split where needed</text>
+  <rect x="280" y="60" width="180" height="180" fill="none" stroke="#30363d" stroke-width="1.5"/>
+  <!-- Quadrants -->
+  <line x1="370" y1="60" x2="370" y2="240" stroke="#30363d" stroke-width="0.5"/>
+  <line x1="280" y1="150" x2="460" y2="150" stroke="#30363d" stroke-width="0.5"/>
+  <!-- Top-left has BH1, needs refinement -->
+  <rect x="280" y="60" width="90" height="90" fill="#58a6ff" fill-opacity="0.08" stroke="#58a6ff" stroke-width="1.5"/>
+  <circle cx="325" cy="110" r="4" fill="#f85149"/>
+  <!-- Bottom-right has BH2, needs refinement -->
+  <rect x="370" y="150" width="90" height="90" fill="#58a6ff" fill-opacity="0.08" stroke="#58a6ff" stroke-width="1.5"/>
+  <circle cx="410" cy="190" r="4" fill="#f85149"/>
+  <!-- Other two quadrants: not refined (grey X) -->
+  <text x="415" y="112" fill="#30363d" text-anchor="middle" font-size="16">&times;</text>
+  <text x="325" y="202" fill="#30363d" text-anchor="middle" font-size="16">&times;</text>
+  <text x="370" y="260" fill="#8b949e" text-anchor="middle" font-size="10">Only 2 of 4 quadrants split</text>
+  <text x="370" y="273" fill="#3fb950" text-anchor="middle" font-size="10">Empty quadrants left coarse</text>
+
+  <!-- Arrow -->
+  <text x="485" y="155" fill="#3fb950" font-size="22">&rarr;</text>
+
+  <!-- Step 3: Second split -->
+  <text x="640" y="52" fill="#3fb950" text-anchor="middle" font-size="12" font-weight="600">Level 2: split again near BHs</text>
+  <rect x="550" y="60" width="180" height="180" fill="none" stroke="#30363d" stroke-width="1.5"/>
+  <line x1="640" y1="60" x2="640" y2="240" stroke="#30363d" stroke-width="0.5"/>
+  <line x1="550" y1="150" x2="730" y2="150" stroke="#30363d" stroke-width="0.5"/>
+  <!-- Top-left: subdivided further -->
+  <line x1="595" y1="60" x2="595" y2="150" stroke="#58a6ff" stroke-width="0.5"/>
+  <line x1="550" y1="105" x2="640" y2="105" stroke="#58a6ff" stroke-width="0.5"/>
+  <!-- Only the sub-quadrant with BH1 gets finest level -->
+  <rect x="550" y="60" width="45" height="45" fill="#3fb950" fill-opacity="0.1" stroke="#3fb950" stroke-width="1.5"/>
+  <!-- Fine grid inside -->
+  <g stroke="#3fb950" stroke-width="0.2" opacity="0.5">
+    <line x1="555" y1="60" x2="555" y2="105"/><line x1="560" y1="60" x2="560" y2="105"/>
+    <line x1="565" y1="60" x2="565" y2="105"/><line x1="570" y1="60" x2="570" y2="105"/>
+    <line x1="575" y1="60" x2="575" y2="105"/><line x1="580" y1="60" x2="580" y2="105"/>
+    <line x1="585" y1="60" x2="585" y2="105"/><line x1="590" y1="60" x2="590" y2="105"/>
+    <line x1="550" y1="65" x2="595" y2="65"/><line x1="550" y1="70" x2="595" y2="70"/>
+    <line x1="550" y1="75" x2="595" y2="75"/><line x1="550" y1="80" x2="595" y2="80"/>
+    <line x1="550" y1="85" x2="595" y2="85"/><line x1="550" y1="90" x2="595" y2="90"/>
+    <line x1="550" y1="95" x2="595" y2="95"/><line x1="550" y1="100" x2="595" y2="100"/>
+  </g>
+  <circle cx="573" cy="82" r="3" fill="#f85149"/>
+  <!-- Other sub-quadrants not refined -->
+  <text x="618" y="85" fill="#30363d" text-anchor="middle" font-size="12">&times;</text>
+  <text x="573" y="132" fill="#30363d" text-anchor="middle" font-size="12">&times;</text>
+  <text x="618" y="132" fill="#30363d" text-anchor="middle" font-size="12">&times;</text>
+
+  <!-- Bottom-right: subdivided -->
+  <line x1="685" y1="150" x2="685" y2="240" stroke="#58a6ff" stroke-width="0.5"/>
+  <line x1="640" y1="195" x2="730" y2="195" stroke="#58a6ff" stroke-width="0.5"/>
+  <!-- Only sub-quadrant with BH2 -->
+  <rect x="640" y="150" width="45" height="45" fill="#3fb950" fill-opacity="0.1" stroke="#3fb950" stroke-width="1.5"/>
+  <g stroke="#3fb950" stroke-width="0.2" opacity="0.5">
+    <line x1="645" y1="150" x2="645" y2="195"/><line x1="650" y1="150" x2="650" y2="195"/>
+    <line x1="655" y1="150" x2="655" y2="195"/><line x1="660" y1="150" x2="660" y2="195"/>
+    <line x1="665" y1="150" x2="665" y2="195"/><line x1="670" y1="150" x2="670" y2="195"/>
+    <line x1="675" y1="150" x2="675" y2="195"/><line x1="680" y1="150" x2="680" y2="195"/>
+    <line x1="640" y1="155" x2="685" y2="155"/><line x1="640" y1="160" x2="685" y2="160"/>
+    <line x1="640" y1="165" x2="685" y2="165"/><line x1="640" y1="170" x2="685" y2="170"/>
+    <line x1="640" y1="175" x2="685" y2="175"/><line x1="640" y1="180" x2="685" y2="180"/>
+    <line x1="640" y1="185" x2="685" y2="185"/><line x1="640" y1="190" x2="685" y2="190"/>
+  </g>
+  <circle cx="662" cy="172" r="3" fill="#f85149"/>
+  <text x="708" y="172" fill="#30363d" text-anchor="middle" font-size="12">&times;</text>
+  <text x="662" y="222" fill="#30363d" text-anchor="middle" font-size="12">&times;</text>
+  <text x="708" y="222" fill="#30363d" text-anchor="middle" font-size="12">&times;</text>
+
+  <!-- Top-right and bottom-left still coarse -->
+  <text x="685" y="112" fill="#30363d" text-anchor="middle" font-size="16">&times;</text>
+  <text x="595" y="202" fill="#30363d" text-anchor="middle" font-size="16">&times;</text>
+
+  <text x="640" y="260" fill="#8b949e" text-anchor="middle" font-size="10">Only the sub-cells containing BHs are refined</text>
+  <text x="640" y="273" fill="#3fb950" text-anchor="middle" font-size="10">Zero wasted refinement</text>
+</svg>
+<p class="caption">Oct-tree (shown as 2D quadtree) recursively subdivides only the cells that contain features. At each split, 3 out of 4 children (7 out of 8 in 3D) are typically left coarse. This is why oct-tree wastes almost nothing.</p>
+</div>
+
+<h3>The core difference: shapes vs splits</h3>
+
+<div class="diagram">
+<svg viewBox="0 0 800 300" xmlns="http://www.w3.org/2000/svg">
+  <text x="400" y="22" fill="#8b949e" text-anchor="middle" font-size="14" font-weight="600">Why Oct-Tree Wins for Scattered Objects</text>
+
+  <!-- N=5 BHs scattered: Block-structured -->
+  <text x="200" y="52" fill="#58a6ff" text-anchor="middle" font-size="12" font-weight="600">Block-Structured (N=5 BHs)</text>
+  <rect x="30" y="60" width="340" height="220" fill="none" stroke="#30363d" stroke-width="1"/>
+  <!-- 5 BHs -->
+  <circle cx="80" cy="100" r="5" fill="#f85149"/>
+  <circle cx="200" cy="140" r="5" fill="#f85149"/>
+  <circle cx="310" cy="90" r="5" fill="#f85149"/>
+  <circle cx="120" cy="220" r="5" fill="#f85149"/>
+  <circle cx="280" cy="240" r="5" fill="#f85149"/>
+  <!-- Bounding boxes with waste shown -->
+  <rect x="58" y="78" width="46" height="46" fill="#58a6ff" fill-opacity="0.1" stroke="#58a6ff" stroke-width="1"/>
+  <rect x="178" y="118" width="46" height="46" fill="#58a6ff" fill-opacity="0.1" stroke="#58a6ff" stroke-width="1"/>
+  <rect x="288" y="68" width="46" height="46" fill="#58a6ff" fill-opacity="0.1" stroke="#58a6ff" stroke-width="1"/>
+  <rect x="98" y="198" width="46" height="46" fill="#58a6ff" fill-opacity="0.1" stroke="#58a6ff" stroke-width="1"/>
+  <rect x="258" y="218" width="46" height="46" fill="#58a6ff" fill-opacity="0.1" stroke="#58a6ff" stroke-width="1"/>
+  <!-- Corner waste shading on one box -->
+  <rect x="58" y="78" width="10" height="10" fill="#d29922" fill-opacity="0.2"/>
+  <rect x="94" y="78" width="10" height="10" fill="#d29922" fill-opacity="0.2"/>
+  <rect x="58" y="114" width="10" height="10" fill="#d29922" fill-opacity="0.2"/>
+  <rect x="94" y="114" width="10" height="10" fill="#d29922" fill-opacity="0.2"/>
+  <!-- Efficiency label -->
+  <rect x="60" y="160" width="115" height="22" rx="4" fill="#d29922" fill-opacity="0.15"/>
+  <text x="117" y="175" fill="#d29922" text-anchor="middle" font-size="9" font-weight="600">~70-80% fill ratio per box</text>
+
+  <!-- N=5 BHs scattered: Oct-tree -->
+  <text x="600" y="52" fill="#3fb950" text-anchor="middle" font-size="12" font-weight="600">Oct-Tree (N=5 BHs)</text>
+  <rect x="430" y="60" width="340" height="220" fill="none" stroke="#30363d" stroke-width="1"/>
+  <!-- 5 BHs with tight oct-tree blocks -->
+  <circle cx="480" cy="100" r="5" fill="#f85149"/>
+  <circle cx="600" cy="140" r="5" fill="#f85149"/>
+  <circle cx="710" cy="90" r="5" fill="#f85149"/>
+  <circle cx="520" cy="220" r="5" fill="#f85149"/>
+  <circle cx="680" cy="240" r="5" fill="#f85149"/>
+  <!-- Tight square blocks around each (no corner waste) -->
+  <rect x="464" y="84" width="32" height="32" fill="#3fb950" fill-opacity="0.1" stroke="#3fb950" stroke-width="1"/>
+  <rect x="584" y="124" width="32" height="32" fill="#3fb950" fill-opacity="0.1" stroke="#3fb950" stroke-width="1"/>
+  <rect x="694" y="74" width="32" height="32" fill="#3fb950" fill-opacity="0.1" stroke="#3fb950" stroke-width="1"/>
+  <rect x="504" y="204" width="32" height="32" fill="#3fb950" fill-opacity="0.1" stroke="#3fb950" stroke-width="1"/>
+  <rect x="664" y="224" width="32" height="32" fill="#3fb950" fill-opacity="0.1" stroke="#3fb950" stroke-width="1"/>
+  <!-- Intermediate oct-tree regions (medium level) shown lightly -->
+  <rect x="452" y="72" width="56" height="56" fill="none" stroke="#58a6ff" stroke-width="0.5" stroke-dasharray="3,2"/>
+  <rect x="572" y="112" width="56" height="56" fill="none" stroke="#58a6ff" stroke-width="0.5" stroke-dasharray="3,2"/>
+  <rect x="682" y="62" width="56" height="56" fill="none" stroke="#58a6ff" stroke-width="0.5" stroke-dasharray="3,2"/>
+  <rect x="492" y="192" width="56" height="56" fill="none" stroke="#58a6ff" stroke-width="0.5" stroke-dasharray="3,2"/>
+  <rect x="652" y="212" width="56" height="56" fill="none" stroke="#58a6ff" stroke-width="0.5" stroke-dasharray="3,2"/>
+  <!-- Efficiency label -->
+  <rect x="460" y="160" width="130" height="22" rx="4" fill="#3fb950" fill-opacity="0.15"/>
+  <text x="525" y="175" fill="#3fb950" text-anchor="middle" font-size="9" font-weight="600">~100% fill ratio per block</text>
+</svg>
+<p class="caption">With 5 scattered BHs: block-structured boxes have wasted corners (~20-30% of cells unnecessary). Oct-tree blocks hug the BH exactly. The waste gap grows with N &mdash; more BHs means more corners being unnecessarily refined.</p>
+</div>
+
+<table>
+<tr><th>Property</th><th>Block-Structured</th><th>Oct-Tree</th></tr>
+<tr><td><strong>Fundamental unit</strong></td><td>Rectangular box (arbitrary size)</td><td>Cube leaf (fixed size, e.g. 16&sup3;)</td></tr>
+<tr><td><strong>How it refines</strong></td><td>Cluster tagged cells &rarr; bounding rectangles</td><td>Split cube into 8 children. Repeat.</td></tr>
+<tr><td><strong>Shape of refined region</strong></td><td>Union of rectangles. Rectangular corners are refined unnecessarily.</td><td>Tree of cubes. Only occupied cubes are refined.</td></tr>
+<tr><td><strong>Fill efficiency (N=2)</strong></td><td>~80%. Modest corner waste.</td><td>~95%. Nearly perfect.</td></tr>
+<tr><td><strong>Fill efficiency (N=25)</strong></td><td>~60-70%. More objects = more rectangular overhead.</td><td>~95%. Same &mdash; each BH gets its own tree branch.</td></tr>
+<tr><td><strong>Memory per BH</strong></td><td>Grows slightly with N (more box overlap)</td><td>Constant per BH (independent branches)</td></tr>
+<tr><td><strong>Regridding</strong></td><td>Berger-Rigoutsos clustering (5-15% of runtime)</td><td>Walk tree, check criterion per leaf (~1-3% of runtime)</td></tr>
+<tr><td><strong>Data layout</strong></td><td>Each box is a contiguous array. Great cache.</td><td>Each leaf is a 16&sup3; block. Good cache, slightly more indirection.</td></tr>
+<tr><td><strong>Neighbor finding</strong></td><td>Direct index &mdash; boxes are rectangular arrays</td><td>Tree traversal &mdash; need to walk parent/sibling pointers</td></tr>
+<tr><td><strong>GPU mapping</strong></td><td>One kernel per box. Boxes can be large (good occupancy) but variable-sized (complicates batching).</td><td>One kernel per 16&sup3; block. Uniform size &rarr; perfect for batching into GPU warps.</td></tr>
+</table>
+
+<div class="hl">
+<strong>The key insight:</strong> Block-structured AMR's efficiency <em>degrades</em> with more BHs because rectangles are a poor fit for point-like objects scattered in 3D space. Oct-tree efficiency stays <em>constant</em> because each BH gets its own independent branch of the tree. For N=2, the difference is small. For N=10+, it's significant.
+</div>
+
+<!-- ============================================================ -->
+<h2 id="amrex">5. Deep Dive: AMReX vs Hand-Rolled AMR</h2>
 
 <p>The biggest architectural decision is whether to <strong>use a library</strong> (AMReX) or <strong>build our own</strong> AMR infrastructure. This is not a minor choice &mdash; it determines our language, GPU strategy, and how much control we have over data layout. Here's the full picture.</p>
 
@@ -535,7 +816,7 @@
 </div>
 
 <!-- ============================================================ -->
-<h2 id="levels">5. How Many Refinement Levels?</h2>
+<h2 id="levels">6. How Many Refinement Levels?</h2>
 
 <p>Each level doubles the resolution (with standard 2:1 ratio). The number of levels determines the <strong>dynamic range</strong> &mdash; the ratio between coarsest and finest grid spacing.</p>
 
@@ -580,7 +861,7 @@
 </div>
 
 <!-- ============================================================ -->
-<h2 id="blocks">6. Block Size</h2>
+<h2 id="blocks">7. Block Size</h2>
 
 <p>In oct-tree block AMR, each leaf of the tree holds a uniform block of cells. The block size determines the <strong>granularity</strong> of refinement.</p>
 
@@ -598,7 +879,7 @@
 </table>
 
 <!-- ============================================================ -->
-<h2 id="criteria">7. Refinement Criteria</h2>
+<h2 id="criteria">8. Refinement Criteria</h2>
 
 <p>How does the code decide <em>where</em> to refine? This is critical for N-body &mdash; you can't hard-code BH positions.</p>
 
@@ -651,7 +932,7 @@
 </div>
 
 <!-- ============================================================ -->
-<h2 id="ratio">8. Refinement Ratio</h2>
+<h2 id="ratio">9. Refinement Ratio</h2>
 
 <table>
 <tr><th>Ratio</th><th>For</th><th>Against</th></tr>
@@ -664,7 +945,7 @@
 </table>
 
 <!-- ============================================================ -->
-<h2 id="techniques">9. Critical Techniques: CAKO, CAHD, SSL</h2>
+<h2 id="techniques">10. Critical Techniques: CAKO, CAHD, SSL</h2>
 
 <p>A 2024 paper by Etienne (<a href="https://arxiv.org/abs/2404.01137">arXiv:2404.01137</a>) identified three improvements that reduce constraint violations at AMR boundaries by <strong>2-5 orders of magnitude</strong>. These are infrastructure-agnostic &mdash; pure physics fixes that work with any AMR scheme.</p>
 
@@ -716,7 +997,7 @@
 </div>
 
 <!-- ============================================================ -->
-<h2 id="sota">10. State of the Art</h2>
+<h2 id="sota">11. State of the Art</h2>
 
 <table>
 <tr><th>N (BHs)</th><th>Code</th><th>Year</th><th>AMR Type</th><th>Levels</th><th>Key Finding</th></tr>
@@ -787,7 +1068,7 @@
 <p>So the 25-BH run worked because Berger-Rigoutsos is <em>good enough</em> — not because it's optimal. Each rectangular patch still wastes some cells at corners, but nothing like a single bounding box. An oct-tree approach would be more memory-efficient, but no oct-tree NR code has demonstrated N&gt;2 yet.</p>
 
 <!-- ============================================================ -->
-<h2 id="rec">11. Recommendation for Lattice</h2>
+<h2 id="rec">12. Recommendation for Lattice</h2>
 
 <div class="card rec" style="font-size: 1.05rem;">
 <h3>Oct-tree block AMR</h3>
@@ -816,7 +1097,7 @@
 </div>
 
 <!-- ============================================================ -->
-<h2 id="refs">12. References</h2>
+<h2 id="refs">13. References</h2>
 
 <table>
 <tr><th>Paper</th><th>What</th></tr>
