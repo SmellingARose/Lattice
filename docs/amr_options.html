@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Lattice AMR Options</title>
+<title>Lattice — Oct-Tree AMR for N-Body Black Holes</title>
 <style>
   :root {
     --bg: #0d1117; --surface: #161b22; --border: #30363d;
@@ -52,8 +52,8 @@
 </head>
 <body>
 
-<h1>Adaptive Mesh Refinement for Lattice</h1>
-<p class="subtitle">A guide to AMR approaches for N-body black hole simulations in numerical relativity</p>
+<h1>Oct-Tree AMR for N-Body Black Holes</h1>
+<p class="subtitle">Why oct-tree block AMR is the right choice for Lattice &mdash; compared against block-structured, AMReX, wavelet, DG, and FMR approaches</p>
 
 <div class="toc">
 <strong>Contents</strong>
@@ -62,7 +62,7 @@
   <li><a href="#problem">The problem: uniform grids can't do binary BHs</a></li>
   <li><a href="#types">AMR approaches compared</a></li>
   <li><a href="#octree-vs-box">How oct-tree and block-structured actually work</a></li>
-  <li><a href="#amrex">Deep dive: AMReX vs hand-rolled AMR</a></li>
+  <li><a href="#why-octree">Why oct-tree scales with N</a></li>
   <li><a href="#levels">How many refinement levels?</a></li>
   <li><a href="#blocks">Block size</a></li>
   <li><a href="#criteria">Refinement criteria</a></li>
@@ -635,184 +635,72 @@
 </div>
 
 <!-- ============================================================ -->
-<h2 id="amrex">5. Deep Dive: AMReX vs Hand-Rolled AMR</h2>
+<h2 id="why-octree">5. Why Oct-Tree Scales with N</h2>
 
-<p>The biggest architectural decision is whether to <strong>use a library</strong> (AMReX) or <strong>build our own</strong> AMR infrastructure. This is not a minor choice &mdash; it determines our language, GPU strategy, and how much control we have over data layout. Here's the full picture.</p>
+<p>The fundamental reason to choose oct-tree over block-structured for N-body: <strong>oct-tree cost scales linearly with N, while block-structured cost grows super-linearly.</strong></p>
 
-<h3>What is AMReX?</h3>
+<h3>Memory scaling</h3>
 
-<p><a href="https://amrex-codes.github.io/">AMReX</a> is a C++17 framework from Lawrence Berkeley National Lab (DOE-funded) that provides block-structured Berger-Oliger AMR out of the box. You write physics kernels; AMReX handles ghost zone exchange, time subcycling, prolongation/restriction between levels, load balancing, and MPI domain decomposition. It has native GPU backends for CUDA, HIP, and SYCL.</p>
-
-<div class="diagram">
-<svg viewBox="0 0 800 420" xmlns="http://www.w3.org/2000/svg">
-  <!-- Title -->
-  <text x="400" y="24" fill="#8b949e" text-anchor="middle" font-size="14" font-weight="600">Architecture Comparison: AMReX Library vs Hand-Rolled</text>
-
-  <!-- LEFT: AMReX stack -->
-  <text x="200" y="55" fill="#bc8cff" text-anchor="middle" font-size="13" font-weight="600">Using AMReX</text>
-
-  <!-- Your physics layer -->
-  <rect x="60" y="70" width="280" height="50" rx="6" fill="#3fb950" fill-opacity="0.12" stroke="#3fb950" stroke-width="1.5"/>
-  <text x="200" y="92" fill="#3fb950" text-anchor="middle" font-size="12" font-weight="600">Your Physics Kernels</text>
-  <text x="200" y="107" fill="#8b949e" text-anchor="middle" font-size="10">CCZ4 RHS, constraints, gauge &mdash; pure C</text>
-
-  <!-- Arrow down -->
-  <text x="200" y="132" fill="#8b949e" text-anchor="middle" font-size="14">&darr;</text>
-
-  <!-- C++ wrapper layer -->
-  <rect x="60" y="140" width="280" height="40" rx="6" fill="#d29922" fill-opacity="0.12" stroke="#d29922" stroke-width="1.5"/>
-  <text x="200" y="158" fill="#d29922" text-anchor="middle" font-size="11" font-weight="600">C++ Wrapper Layer</text>
-  <text x="200" y="172" fill="#8b949e" text-anchor="middle" font-size="9">extern &quot;C&quot; bridges, AMReX ParallelFor lambdas</text>
-
-  <!-- Arrow down -->
-  <text x="200" y="195" fill="#8b949e" text-anchor="middle" font-size="14">&darr;</text>
-
-  <!-- AMReX layer (big) -->
-  <rect x="60" y="202" width="280" height="100" rx="6" fill="#58a6ff" fill-opacity="0.12" stroke="#58a6ff" stroke-width="1.5"/>
-  <text x="200" y="225" fill="#58a6ff" text-anchor="middle" font-size="12" font-weight="600">AMReX (~500k lines C++17)</text>
-  <text x="200" y="243" fill="#8b949e" text-anchor="middle" font-size="9">MultiFab &bull; FArrayBox &bull; FluxRegister</text>
-  <text x="200" y="257" fill="#8b949e" text-anchor="middle" font-size="9">Berger-Rigoutsos &bull; Subcycling &bull; Ghost zones</text>
-  <text x="200" y="271" fill="#8b949e" text-anchor="middle" font-size="9">MPI domain decomp &bull; Load balancing &bull; I/O</text>
-  <text x="200" y="290" fill="#8b949e" text-anchor="middle" font-size="9">GPU: CUDA / HIP / SYCL portability layer</text>
-
-  <!-- Arrow down -->
-  <text x="200" y="318" fill="#8b949e" text-anchor="middle" font-size="14">&darr;</text>
-
-  <!-- Hardware -->
-  <rect x="60" y="325" width="130" height="35" rx="6" fill="#30363d" stroke="#30363d" stroke-width="1"/>
-  <text x="125" y="347" fill="#8b949e" text-anchor="middle" font-size="10">NVIDIA / AMD / Intel GPU</text>
-  <rect x="210" y="325" width="130" height="35" rx="6" fill="#30363d" stroke="#30363d" stroke-width="1"/>
-  <text x="275" y="347" fill="#8b949e" text-anchor="middle" font-size="10">CPU (MPI + threads)</text>
-
-  <!-- Annotations -->
-  <text x="200" y="385" fill="#d29922" text-anchor="middle" font-size="10" font-weight="600">You write: physics + C++ glue</text>
-  <text x="200" y="400" fill="#58a6ff" text-anchor="middle" font-size="10" font-weight="600">AMReX handles: everything else</text>
-
-  <!-- RIGHT: Hand-rolled stack -->
-  <text x="600" y="55" fill="#3fb950" text-anchor="middle" font-size="13" font-weight="600">Hand-Rolled (Lattice)</text>
-
-  <!-- Your physics layer -->
-  <rect x="460" y="70" width="280" height="50" rx="6" fill="#3fb950" fill-opacity="0.12" stroke="#3fb950" stroke-width="1.5"/>
-  <text x="600" y="92" fill="#3fb950" text-anchor="middle" font-size="12" font-weight="600">Your Physics Kernels</text>
-  <text x="600" y="107" fill="#8b949e" text-anchor="middle" font-size="10">CCZ4 RHS, constraints, gauge &mdash; pure C</text>
-
-  <!-- Arrow down -->
-  <text x="600" y="132" fill="#8b949e" text-anchor="middle" font-size="14">&darr;</text>
-
-  <!-- Your AMR layer -->
-  <rect x="460" y="140" width="280" height="100" rx="6" fill="#3fb950" fill-opacity="0.08" stroke="#3fb950" stroke-width="1.5"/>
-  <text x="600" y="163" fill="#3fb950" text-anchor="middle" font-size="12" font-weight="600">Your AMR Infrastructure (pure C)</text>
-  <text x="600" y="181" fill="#8b949e" text-anchor="middle" font-size="9">Oct-tree &bull; 16&sup3; blocks &bull; Ghost fill</text>
-  <text x="600" y="195" fill="#8b949e" text-anchor="middle" font-size="9">Prolongation / restriction &bull; Subcycling</text>
-  <text x="600" y="209" fill="#8b949e" text-anchor="middle" font-size="9">&nabla;&chi; refinement criterion &bull; Load balancing</text>
-  <text x="600" y="228" fill="#8b949e" text-anchor="middle" font-size="9">GPU: OpenMP target (same C kernels)</text>
-
-  <!-- Arrow down -->
-  <text x="600" y="256" fill="#8b949e" text-anchor="middle" font-size="14">&darr;</text>
-
-  <!-- Backend layer -->
-  <rect x="460" y="263" width="280" height="40" rx="6" fill="#3fb950" fill-opacity="0.05" stroke="#3fb950" stroke-width="1"/>
-  <text x="600" y="281" fill="#3fb950" text-anchor="middle" font-size="11" font-weight="600">Backend Abstraction (existing)</text>
-  <text x="600" y="295" fill="#8b949e" text-anchor="middle" font-size="9">backend_cpu.c / backend_gpu.c &bull; OpenMP target</text>
-
-  <!-- Arrow down -->
-  <text x="600" y="318" fill="#8b949e" text-anchor="middle" font-size="14">&darr;</text>
-
-  <!-- Hardware -->
-  <rect x="460" y="325" width="130" height="35" rx="6" fill="#30363d" stroke="#30363d" stroke-width="1"/>
-  <text x="525" y="347" fill="#8b949e" text-anchor="middle" font-size="10">NVIDIA / AMD GPU</text>
-  <rect x="610" y="325" width="130" height="35" rx="6" fill="#30363d" stroke="#30363d" stroke-width="1"/>
-  <text x="675" y="347" fill="#8b949e" text-anchor="middle" font-size="10">CPU (OpenMP threads)</text>
-
-  <!-- Annotations -->
-  <text x="600" y="385" fill="#3fb950" text-anchor="middle" font-size="10" font-weight="600">You write: everything (pure C17)</text>
-  <text x="600" y="400" fill="#3fb950" text-anchor="middle" font-size="10" font-weight="600">Full control, no dependencies</text>
-</svg>
-<p class="caption">Left: AMReX provides the middle layers but requires C++17 and uses CUDA/HIP/SYCL for GPU. Right: hand-rolled keeps everything in pure C with OpenMP target, but you build the AMR infrastructure yourself.</p>
-</div>
-
-<h3>What AMReX gives you for free</h3>
-
-<div class="cols2">
-<div>
-<p><strong>Infrastructure you don't write:</strong></p>
-<ul>
-  <li>Ghost zone exchange between patches and across MPI ranks</li>
-  <li>Berger-Rigoutsos grid generation (automatic box clustering)</li>
-  <li>Prolongation (coarse &rarr; fine) and restriction (fine &rarr; coarse)</li>
-  <li>Subcycling with flux registers for conservation</li>
-  <li>Space-filling curve load balancing</li>
-  <li>MPI domain decomposition</li>
-  <li>Checkpoint/restart, HDF5 output</li>
-</ul>
-</div>
-<div>
-<p><strong>NR codes already using AMReX:</strong></p>
-<table style="font-size: 0.85rem;">
-<tr><th>Code</th><th>Status</th></tr>
-<tr><td><strong>CarpetX</strong></td><td><span class="tag tg">Production</span> Einstein Toolkit driver. 4th-order subcycling.</td></tr>
-<tr><td><strong>GRTeclyn</strong></td><td><span class="tag tn">In dev</span> GRChombo&rarr;AMReX port. CCZ4. Years of work, not production.</td></tr>
-<tr><td><strong>GRaM-X</strong></td><td><span class="tag tn">Published</span> GRMHD. BBH waveform accuracy undemonstrated.</td></tr>
-<tr><td><strong>AsterX</strong></td><td><span class="tag tn">Published</span> GRMHD on CarpetX.</td></tr>
-</table>
-</div>
-</div>
-
-<h3>What AMReX costs you</h3>
+<p>Each BH needs ~10 refinement levels of nested grids. In an oct-tree, each BH gets its own independent branch of the tree. Adding a 6th BH costs the same as adding the 2nd. In block-structured AMR, the Berger-Rigoutsos clustering must create rectangular boxes that may overlap or include empty space between nearby BHs.</p>
 
 <div class="diagram">
-<svg viewBox="0 0 800 200" xmlns="http://www.w3.org/2000/svg">
-  <text x="400" y="20" fill="#8b949e" text-anchor="middle" font-size="13" font-weight="600">The Three Trade-offs</text>
-
-  <!-- Trade-off 1: Language -->
-  <rect x="20" y="35" width="240" height="150" rx="8" fill="#f85149" fill-opacity="0.06" stroke="#f85149" stroke-width="1"/>
-  <text x="140" y="58" fill="#f85149" text-anchor="middle" font-size="12" font-weight="600">1. Language: C &rarr; C++</text>
-  <text x="140" y="78" fill="#8b949e" text-anchor="middle" font-size="10">AMReX requires C++17 compiler.</text>
-  <text x="140" y="93" fill="#8b949e" text-anchor="middle" font-size="10">Physics kernels stay C (extern &quot;C&quot;),</text>
-  <text x="140" y="108" fill="#8b949e" text-anchor="middle" font-size="10">but driver code must be C++.</text>
-  <text x="140" y="130" fill="#f85149" text-anchor="middle" font-size="10" font-weight="600">Cautionary tale:</text>
-  <text x="140" y="145" fill="#8b949e" text-anchor="middle" font-size="10">GRTeclyn (GRChombo&rarr;AMReX)</text>
-  <text x="140" y="160" fill="#8b949e" text-anchor="middle" font-size="10">still not production after years.</text>
-
-  <!-- Trade-off 2: AMR type -->
-  <rect x="280" y="35" width="240" height="150" rx="8" fill="#f85149" fill-opacity="0.06" stroke="#f85149" stroke-width="1"/>
-  <text x="400" y="58" fill="#f85149" text-anchor="middle" font-size="12" font-weight="600">2. Block-Structured Only</text>
-  <text x="400" y="78" fill="#8b949e" text-anchor="middle" font-size="10">AMReX = Berger-Oliger.</text>
-  <text x="400" y="93" fill="#8b949e" text-anchor="middle" font-size="10">No oct-tree option.</text>
-  <text x="400" y="113" fill="#8b949e" text-anchor="middle" font-size="10">For N=10+ scattered BHs,</text>
-  <text x="400" y="128" fill="#8b949e" text-anchor="middle" font-size="10">rectangular bounding boxes</text>
-  <text x="400" y="143" fill="#8b949e" text-anchor="middle" font-size="10">waste memory on empty space.</text>
-  <text x="400" y="163" fill="#8b949e" text-anchor="middle" font-size="10">(Berger-Rigoutsos mitigates, not solves.)</text>
-
-  <!-- Trade-off 3: GPU strategy -->
-  <rect x="540" y="35" width="240" height="150" rx="8" fill="#f85149" fill-opacity="0.06" stroke="#f85149" stroke-width="1"/>
-  <text x="660" y="58" fill="#f85149" text-anchor="middle" font-size="12" font-weight="600">3. GPU: No OpenMP Target</text>
-  <text x="660" y="78" fill="#8b949e" text-anchor="middle" font-size="10">AMReX uses CUDA / HIP / SYCL</text>
-  <text x="660" y="93" fill="#8b949e" text-anchor="middle" font-size="10">via ParallelFor + C++ lambdas.</text>
-  <text x="660" y="113" fill="#8b949e" text-anchor="middle" font-size="10">Our OpenMP target approach</text>
-  <text x="660" y="128" fill="#8b949e" text-anchor="middle" font-size="10">would be abandoned.</text>
-  <text x="660" y="148" fill="#8b949e" text-anchor="middle" font-size="10">Physics kernels still compile for</text>
-  <text x="660" y="163" fill="#8b949e" text-anchor="middle" font-size="10">CPU &mdash; but GPU path changes completely.</text>
+<svg viewBox="0 0 800 240" xmlns="http://www.w3.org/2000/svg">
+  <text x="400" y="22" fill="#8b949e" text-anchor="middle" font-size="14" font-weight="600">Memory Cost vs Number of Black Holes</text>
+  <!-- Axes -->
+  <line x1="100" y1="200" x2="700" y2="200" stroke="#30363d" stroke-width="1"/>
+  <line x1="100" y1="200" x2="100" y2="40" stroke="#30363d" stroke-width="1"/>
+  <text x="400" y="230" fill="#8b949e" text-anchor="middle" font-size="11">Number of BHs (N)</text>
+  <text x="60" y="120" fill="#8b949e" text-anchor="middle" font-size="11" transform="rotate(-90, 60, 120)">Memory</text>
+  <!-- N labels -->
+  <text x="160" y="215" fill="#8b949e" text-anchor="middle" font-size="10">2</text>
+  <text x="280" y="215" fill="#8b949e" text-anchor="middle" font-size="10">5</text>
+  <text x="400" y="215" fill="#8b949e" text-anchor="middle" font-size="10">10</text>
+  <text x="520" y="215" fill="#8b949e" text-anchor="middle" font-size="10">15</text>
+  <text x="640" y="215" fill="#8b949e" text-anchor="middle" font-size="10">25</text>
+  <!-- Oct-tree: linear -->
+  <polyline points="160,180 280,160 400,140 520,120 640,100" fill="none" stroke="#3fb950" stroke-width="2.5"/>
+  <circle cx="160" cy="180" r="4" fill="#3fb950"/><circle cx="280" cy="160" r="4" fill="#3fb950"/>
+  <circle cx="400" cy="140" r="4" fill="#3fb950"/><circle cx="520" cy="120" r="4" fill="#3fb950"/>
+  <circle cx="640" cy="100" r="4" fill="#3fb950"/>
+  <text x="660" y="95" fill="#3fb950" font-size="11" font-weight="600">Oct-tree (linear)</text>
+  <!-- Block-structured: super-linear -->
+  <polyline points="160,175 280,148 400,112 520,72 640,50" fill="none" stroke="#58a6ff" stroke-width="2.5" stroke-dasharray="6,3"/>
+  <circle cx="160" cy="175" r="4" fill="#58a6ff"/><circle cx="280" cy="148" r="4" fill="#58a6ff"/>
+  <circle cx="400" cy="112" r="4" fill="#58a6ff"/><circle cx="520" cy="72" r="4" fill="#58a6ff"/>
+  <circle cx="640" cy="50" r="4" fill="#58a6ff"/>
+  <text x="660" y="45" fill="#58a6ff" font-size="11" font-weight="600">Block-structured</text>
+  <!-- Annotation -->
+  <line x1="540" y1="72" x2="540" y2="120" stroke="#d29922" stroke-width="1" stroke-dasharray="2,2"/>
+  <text x="555" y="100" fill="#d29922" font-size="9">bounding-box</text>
+  <text x="555" y="112" fill="#d29922" font-size="9">waste gap</text>
 </svg>
+<p class="caption">Oct-tree memory grows linearly: each BH is an independent tree branch. Block-structured grows super-linearly due to rectangular bounding-box overhead that increases as BHs cluster and merge.</p>
 </div>
 
-<h3>Head-to-head: AMReX vs Hand-Rolled Oct-tree</h3>
+<h3>GPU efficiency</h3>
+
+<p>Oct-tree blocks are all the same size (16&sup3; = 4096 cells). This is a huge advantage for GPU dispatch:</p>
 
 <table>
-<tr><th>Dimension</th><th>AMReX (Library)</th><th>Hand-Rolled Oct-tree</th></tr>
-<tr><td><strong>Dev time to first binary</strong></td><td class="pro">Months faster &mdash; AMR plumbing is done</td><td class="con">Must build tree, ghost fill, subcycling, prolongation/restriction from scratch</td></tr>
-<tr><td><strong>N-body efficiency</strong></td><td class="con">Bounding-box waste. Berger-Rigoutsos helps but doesn't eliminate it</td><td class="pro">Each oct-tree leaf refines independently. Zero waste for scattered punctures</td></tr>
-<tr><td><strong>GPU scaling</strong></td><td class="neutral">67-77% weak scaling at 4096 nodes (CarpetX on Frontier)</td><td class="pro">80% at 65,536 GPUs (AthenaK on Frontier). 16&sup3; blocks map to GPU warps</td></tr>
-<tr><td><strong>Language</strong></td><td class="con">C++17 required. Our C physics needs wrappers</td><td class="pro">Pure C17. No wrappers, no dependencies</td></tr>
-<tr><td><strong>GPU backends</strong></td><td class="pro">CUDA + HIP + SYCL (3 vendors)</td><td class="neutral">OpenMP target (NVIDIA + AMD via GCC 15+)</td></tr>
-<tr><td><strong>MPI / multi-node</strong></td><td class="pro">Built-in MPI domain decomposition and load balancing</td><td class="con">Must implement MPI layer ourselves (later)</td></tr>
-<tr><td><strong>Maturity for NR</strong></td><td class="neutral">CarpetX production, but GRTeclyn (CCZ4) not production. BBH waveform accuracy unproven for AMReX-based codes.</td><td class="neutral">AthenaK proven for BBH (Z4c). No N&gt;2 demonstration yet.</td></tr>
-<tr><td><strong>Control</strong></td><td class="con">Locked into AMReX's data layout (FArrayBox per patch) and AMR paradigm</td><td class="pro">Full control over memory layout, refinement logic, GPU dispatch</td></tr>
-<tr><td><strong>Dependency weight</strong></td><td class="con">~500k lines C++, CMake, potential Fortran. Monthly release cadence to track</td><td class="pro">Zero external dependencies. Self-contained</td></tr>
+<tr><th>Property</th><th>Oct-tree (16&sup3; blocks)</th><th>Block-structured (variable boxes)</th></tr>
+<tr><td><strong>Block size</strong></td><td class="pro">Fixed 16&sup3;. Every block identical.</td><td class="con">Variable (16&sup3; to 128&sup3;+). Each box different.</td></tr>
+<tr><td><strong>Kernel dispatch</strong></td><td class="pro">Batch hundreds of identical blocks into one kernel launch.</td><td class="neutral">One kernel per box, or complex batching of variable sizes.</td></tr>
+<tr><td><strong>Load balancing</strong></td><td class="pro">Equal-sized blocks trivially distribute across GPUs.</td><td class="con">Variable-sized boxes &rarr; one GPU may get a 128&sup3; box while another gets a 16&sup3; box.</td></tr>
+<tr><td><strong>Warp/wavefront mapping</strong></td><td class="pro">16&sup3; = 128 warps (NVIDIA) or 64 wavefronts (AMD). Fills GPU.</td><td class="neutral">Large boxes overfill, small boxes underfill. Variable occupancy.</td></tr>
+<tr><td><strong>Scaling demonstrated</strong></td><td class="pro">80% weak scaling at 65,536 GPUs (AthenaK)</td><td class="neutral">67-77% at 4,096 nodes (CarpetX/AMReX)</td></tr>
 </table>
 
+<h3>Why it matters for N-body specifically</h3>
+
 <div class="hl">
-<strong>Bottom line:</strong> AMReX is the right choice if you want N=2 binary fast and don't mind C++. Hand-rolled oct-tree is the right choice if you're building for N=10+ scattered BHs and want full control in pure C. Since our goal is chaotic N-body, we choose hand-rolled oct-tree.
+<p>For N=2, the difference between oct-tree and block-structured is modest &mdash; ~15-20% memory savings. Both work fine.</p>
+<p>For <strong>N=10+</strong>, the advantages compound:</p>
+<ul>
+  <li><strong>Memory:</strong> 10 BHs scattered in 3D create ~10 separate tree branches (oct-tree) vs ~10 rectangular boxes with corner waste that grows when boxes overlap (block-structured). The waste gap widens with N.</li>
+  <li><strong>Regridding:</strong> Oct-tree checks each leaf independently (~1-3% of runtime). Block-structured runs Berger-Rigoutsos clustering on all tagged cells (5-15% of runtime, grows with N).</li>
+  <li><strong>Load balance:</strong> 10 BHs moving chaotically means the workload shifts constantly. Equal-sized oct-tree blocks rebalance trivially. Variable-sized boxes are harder to redistribute evenly.</li>
+  <li><strong>GPU batching:</strong> More BHs = more blocks = better GPU occupancy. Oct-tree's uniform blocks batch perfectly. Block-structured's variable boxes require complex scheduling.</li>
+</ul>
 </div>
 
 <!-- ============================================================ -->
@@ -1084,16 +972,9 @@
 <tr><td>Techniques</td><td><strong>CAKO + CAHD + SSL</strong></td><td>2-5 orders of magnitude less AMR boundary noise.</td></tr>
 </table>
 
-<h3 style="color: var(--orange); margin-top: 1.5rem;">Why not AMReX?</h3>
-<p>AMReX would save us months of AMR plumbing (ghost zones, subcycling, load balancing, MPI). But it forces three trade-offs:</p>
-<ul>
-  <li><strong>C++17 dependency</strong> &mdash; our pure-C17 codebase would need C++ wrappers or partial rewrite. GRTeclyn (the GRChombo&rarr;AMReX port) has been underway for years and is still not production-ready.</li>
-  <li><strong>Block-structured only</strong> &mdash; AMReX provides Berger-Oliger, not oct-tree. For N=10+ scattered BHs, the bounding-box waste is the exact problem we're trying to avoid.</li>
-  <li><strong>No OpenMP target</strong> &mdash; AMReX uses CUDA/HIP/SYCL. We'd abandon our OpenMP target GPU strategy.</li>
-</ul>
-<p>If our goal were N=2 binary only, AMReX (via CarpetX) would be the pragmatic choice. For N=10+ chaotic N-body, oct-tree is the better fit.</p>
+<p style="margin-top: 1rem;"><strong>Why not AMReX?</strong> It saves months of plumbing but requires C++17, provides only block-structured AMR (not oct-tree), and uses CUDA/HIP/SYCL instead of our OpenMP target GPU strategy. For N=2 binary, AMReX (via CarpetX) is pragmatic. For N=10+ chaotic N-body, oct-tree is the better fit.</p>
 
-<p style="margin-top: 1rem;">This gives us the best path from head-on binary through N=10+ chaotic BHs, using our existing CCZ4 + moving puncture + OpenMP target architecture. The oct-tree maps naturally to GPU dispatch (one kernel per block), and the &nabla;&chi; criterion makes the system completely agnostic to the number of BHs.</p>
+<p>This gives us the best path from head-on binary through N=10+ chaotic BHs, using our existing CCZ4 + moving puncture + OpenMP target architecture. The oct-tree maps naturally to GPU dispatch (one kernel per block), and the &nabla;&chi; criterion makes the system completely agnostic to the number of BHs.</p>
 </div>
 
 <!-- ============================================================ -->
