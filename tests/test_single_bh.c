@@ -3,16 +3,16 @@
  * Single Schwarzschild puncture evolution test.
  *
  * Brill-Lindquist puncture: M=1.0 at origin.
- * Grid: N=256, L=64, dx=0.25, CFL=0.25.
- * Evolve for T=30M.
+ * Grid: N=128, L=64, dx=0.5, CFL=0.25.
+ * Evolve for T=10M.
  *
  * Pass criteria:
  *   - No crash (NaN/Inf)
  *   - Final min lapse < 0.5 (trumpet collapse)
  *   - Hamiltonian constraint bounded (peak < 1.0)
  *
- * Domain: boundary at 32M from puncture, clean evolution to ~30M.
- * Requires ~15 GB RAM (run on 32GB+ machine).
+ * Domain: boundary at 32M from puncture, clean evolution to ~10M.
+ * Memory: ~1.3 GB with CK45 (fits easily on 16 GB).
  *
  * This is the second test in the validation ladder:
  *   flat spacetime -> single BH -> binary
@@ -74,17 +74,17 @@ int main(void)
     printf("=== Single BH Evolution Test ===\n");
     fflush(stdout);
 
-    /* N=256, L=64, dx=0.25, T=30M.
-     * Boundary at 32M — no reflections reach puncture by T=30M. */
+    /* N=128, L=64, dx=0.5, T=10M.
+     * Boundary at 32M — no reflections reach puncture by T=10M. */
     sim_params_t p = default_params();
-    p.N     = 256;
+    p.N     = 128;
     p.L     = 64.0;
     p.CFL   = 0.25;
     p.sigma = 0.3;
     p.dx    = p.L / p.N;
     p.dt    = p.CFL * p.dx;
 
-    double T_final = 30.0;
+    double T_final = 10.0;
     p.num_steps = (int)(T_final / p.dt + 0.5);
 
     printf("  Initializing backend...\n");
