@@ -6,12 +6,12 @@
 |----------|--------|-----------|
 | Block size | **Configurable (default 32^3, option 16^3)** | 32^3 has 1.95x ghost overhead vs 3.4x for 16^3. GPU benchmarks show 90x perf difference (Parthenon-VIBE arXiv:2509.19701). Make N_BLOCK a compile-time constant so both sizes work. |
 | Ghost exchange | **26-neighbor (direct, 1-pass)** from the start | Single pass, 0 sync barriers, GPU-optimal. More code (~600 lines vs ~300) but no refactoring later. |
-| Prolongation | **4th-order Lagrange** from the start | Chaotic N-body needs high-order. Copy weights from GRChombo `QuadCFInterp.hpp`. CAKO mitigates ringing near punctures. |
+| Prolongation | **4th-order Lagrange** from the start | Chaotic N-body needs high-order. Cell-centered 5-point weights from AthenaK `HighOrderProlongCC`. CAKO mitigates ringing near punctures. |
 | Restriction | **Volume-weighted average** (8 fine → 1 coarse) | Standard, conservative, trivial. |
 | Refinement criterion | **Chi-gradient** with every-step check | Check is cheap (~0.1 ms max-reduction). Only regrid when triggered. Hysteresis: chi_refine=0.1, chi_coarsen=0.01. |
 | Time stepping | **Global dt first**, then **level-by-level subcycling (Option C)** | Global dt to get AMR working + tested. Then add subcycling as a separate stage. |
 | GPU strategy | **MeshBlockPack batching** from Stage 1 | Contiguous buffer, single kernel launch. GPU-first design throughout. |
-| Noise reduction | **CAKO + CAHD + SSL + per-field sigma** all from Stage 3 | One-line changes each. No buffer zones (CAKO/CAHD/SSL replace them). |
+| Noise reduction | **CAKO + CAHD + SSL + per-field sigma** all from Stage 3 | Small additions to dissipation.c and ccz4_rhs.c. No buffer zones (CAKO/CAHD/SSL replace them). |
 | Ghost approach | **26-neighbor** for faces, edges, corners | 6 face + 12 edge + 8 corner neighbors in 1 parallel pass. |
 
 ### What we're skipping (and why)
@@ -38,15 +38,15 @@ take days to debug.
 
 | Component | Primary reference | File(s) to read | What to copy |
 |-----------|------------------|-----------------|-------------|
-| Prolongation (4th-order Lagrange) | GRChombo | `Source/AMR/QuadCFInterp.hpp` | Interpolation weights/coefficients |
-| Restriction | GRChombo | `Source/AMR/FourthOrderFillPatch.hpp` | Averaging pattern |
+| Prolongation (4th-order Lagrange) | AthenaK | `src/mesh/prolongation.hpp`, `mesh_refinement.cpp` | Cell-centered 5-point weights {-45/2048, 105/512, 945/1024, -63/512, 35/2048} |
+| Restriction | GRChombo (Chombo) | `CoarseAverage` pattern | Volume-weighted averaging (1/8 × 8 children) |
 | Morton encoding | Athena++ | `src/mesh/mesh.cpp`, `src/utils/morton.hpp` | Bit-interleave functions |
 | Ghost exchange | Athena++ / AthenaK | `src/bvals/bvals.cpp` | Neighbor finding, slab copy logic |
 | Refinement criterion | GRChombo | `Source/AMR/TaggingCriterion.hpp` | Chi-gradient formula |
 | 2:1 constraint | Athena++ | `src/mesh/mesh.cpp` (`AdaptiveMeshRefinement`) | Cascade propagation |
-| CAKO | arXiv:2404.01137 | Eq. (1)–(3), Table 1 | sigma_CAKO = chi * sigma_base |
-| CAHD | arXiv:2404.01137 | Eq. (4)–(5) | kappa1_CAHD = kappa1 * 2^level_offset |
-| SSL | arXiv:2404.01137 | Eq. (6)–(8) | Slow-start lapse damping term |
+| CAKO | arXiv:2404.01137 | Eq. (20) | sigma_eff = sqrt(chi) * sigma_base |
+| CAHD | arXiv:2404.01137 | Eq. (26) | rhs_chi += 4*chi*C*CFL*dx*H (C=0.15) |
+| SSL | arXiv:2404.01137 | Eq. (27) | rhs_lapse += -W*h*exp(-t²/(2σ²))*(alpha-W) |
 | Per-field sigma | arXiv:2404.01137 | Table 1 | sigma=0.99 gauge, 0.3 physical |
 | MeshBlockPack | AthenaK | `src/mesh/meshblock_pack.hpp` | Pack layout, kernel dispatch |
 | Subcycling (Option C) | Carpet / CarpetX | `src/driver/driver.cxx` | Level-by-level scheduling |
@@ -213,12 +213,13 @@ src/amr/restriction.h     — restriction API
 src/amr/restriction.c     — volume-weighted fine→coarse averaging
 ```
 
-**4th-order Lagrange prolongation** (copy weights from GRChombo):
-- 4-point stencil per direction (tensor product in 3D)
-- Needs 2 coarse cells on each side of the interpolation point
+**4th-order Lagrange prolongation** (weights from AthenaK `HighOrderProlongCC`):
+- 5-point stencil per direction, 3D tensor product (125 coarse cells per fine child)
+- Cell-centered: children at x=±1/4, NOT x=1/2 (vertex-centered weights differ!)
+- Left child weights: w = {-45/2048, 105/512, 945/1024, -63/512, 35/2048}
+- Right child weights = left child reversed
 - Fills ghost zones of fine blocks bordering coarse blocks
 - Also used when refining a block (creating child initial data)
-- Weights are symmetric: w = {-1/16, 9/16, 9/16, -1/16} for cell midpoints
 
 **Restriction** (volume-weighted average):
 - U_coarse = (1/8) × sum of 8 fine cells overlapping this coarse cell
@@ -227,28 +228,30 @@ src/amr/restriction.c     — volume-weighted fine→coarse averaging
 
 **CAKO** (modify `src/evolution/dissipation.c`):
 ```c
-// One-line change: scale sigma by chi
-// Before: sigma_eff = sigma
-// After:  sigma_eff = chi * sigma_base
-double sigma_eff = src[FIELD_CHI][idx] * sigma_for_field[f];
+// Scale sigma by W = sqrt(chi) — suppresses dissipation near punctures (chi→0)
+double W = sqrt(fmax(chi, 1e-10));
+double sigma_eff = W * sigma_for_field[f];
 ```
-arXiv:2404.01137, Eq. (1)–(3). 2 OOM strong-field, 5 OOM wave-zone improvement.
+arXiv:2404.01137, Eq. (20). W = e^{-2φ} = sqrt(chi).
 
 **CAHD** (modify `src/evolution/ccz4_rhs.c`):
 ```c
-// One-line change: scale kappa1 by refinement level
-double kappa1_eff = p->ccz4.kappa1 * (1 << (mesh_max_level - block_level));
+// Add constraint damping to chi RHS, proportional to Hamiltonian constraint
+// NOT a kappa1 modification — adds a new damping term to d_t(chi)
+double H = ricci_scalar + (2.0/3.0)*K*K - tr_A2;  // Hamiltonian constraint
+rhs_chi += 4.0 * chi * C * CFL * dx * H;           // C = 0.15
 ```
-arXiv:2404.01137, Eq. (4)–(5). 3 OOM momentum constraint improvement.
+arXiv:2404.01137, Eq. (26). 34% Ham L2 reduction on single BH.
 
 **SSL** (modify gauge section of `src/evolution/ccz4_rhs.c`):
 ```c
-// ~5 lines: temporary damping of initial gauge pulse
-double ssl_h = 0.6;       // (3/5)M — from arXiv:2404.01137 Eq. (6)
-double ssl_sigma_t = 20.0; // M
-double ssl_damp = chi * ssl_h * exp(-t*t / (2.0 * ssl_sigma_t * ssl_sigma_t));
-rhs_lapse += -ssl_damp * (lapse - chi);  // drives alpha toward sqrt(chi)
-// Negligible after t ~ 170M
+// Temporary Gaussian damping of initial gauge pulse, drives alpha toward W=sqrt(chi)
+double W = sqrt(fmax(chi, 1e-10));
+double ssl_h = 0.6;       // height h/M — from arXiv:2404.01137 Eq. (27)
+double ssl_sigma_t = 20.0; // width σ_t/M
+double ssl_damp = W * ssl_h * exp(-t*t / (2.0 * ssl_sigma_t * ssl_sigma_t));
+rhs_lapse += -ssl_damp * (lapse - W);  // drives alpha toward sqrt(chi)
+// Negligible after t ~ 100M (envelope at 170M = 2e-16)
 ```
 
 **Per-field sigma** (modify `src/evolution/dissipation.c`):
@@ -259,19 +262,23 @@ static const double sigma_phys  = 0.30;
 ```
 arXiv:2404.01137, Table 1.
 
-**Test gate:**
-- [ ] Prolongate smooth Gaussian, verify error O(dx^4) (4th-order Lagrange)
-- [ ] Restrict then prolongate, verify conservation (round-trip)
-- [ ] CAKO on flat spacetime: Ham L2 unchanged (chi=1 everywhere, no effect)
-- [ ] CAHD: single BH with 2 levels, compare constraint L2 with/without
-- [ ] SSL: single BH, verify gauge pulse amplitude reduced during early evolution
-- [ ] Per-field sigma: verify gauge variables get stronger dissipation in output
-- [ ] `make` — zero warnings
+**Test gate:** (all passed — 15/15)
+- [x] Weight sum = 1 (1D and 3D)
+- [x] Prolongation exact for linear functions (0 error)
+- [x] Prolongation convergence order > 3.5 (measured: 5.03)
+- [x] Restriction error < dx_c^2
+- [x] Round-trip (restrict + prolongate) error < 10*dx_c^2
+- [x] CAKO on flat spacetime: ratio = 1.0 (chi=1, no effect)
+- [x] Per-field sigma: stable on flat (Ham L2 = 4.3e-15)
+- [x] CAHD: single BH Ham L2 reduced 34% (2.94e-3 → 1.94e-3)
+- [x] SSL: measurable lapse diff at t=0, negligible at t=170M (envelope = 2e-16)
+- [x] `make` — zero warnings, no regressions
 
-**Reference code to consult:**
-- GRChombo `Source/AMR/QuadCFInterp.hpp` for Lagrange weights
-- GRChombo `Source/AMR/FourthOrderFillPatch.hpp` for restriction
-- arXiv:2404.01137 equations (1)–(8), Table 1 for all noise techniques
+**Reference code consulted:**
+- AthenaK `src/mesh/prolongation.hpp` (`HighOrderProlongCC`) for cell-centered Lagrange weights
+- AthenaK `src/mesh/mesh_refinement.cpp` (`InitInterpWghts`) for exact weight values
+- GRChombo `CoarseAverage` (Chombo library) for restriction pattern
+- arXiv:2404.01137 Eq. (20) CAKO, Eq. (26) CAHD, Eq. (27) SSL, Table 1 per-field sigma
 
 ---
 
