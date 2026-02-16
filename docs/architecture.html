@@ -449,11 +449,12 @@ Grid indexing:  IDX(g, i, j, k) = k * Ntotal^2 + j * Ntotal + i
 <tr><td><code>enforce_algebraic(g)</code></td><td>det(h)=1, tr(A)=0, chi>0, lapse>0. OpenMP collapse(2).</td></tr>
 <tr><td><code>ck45_update(...)</code></td><td>Fused dU/U update kernel. OpenMP parallel for.</td></tr>
 <tr><td><code>copy_fields, axpy_fields, accum_add, apply_accum, zero_fields</code></td><td>Helper array operations (all OpenMP parallelized)</td></tr>
+<tr><td><code>rk4_step_mesh(m, p, rhs_func, dt)</code></td><td>Multi-block mesh stepping: ghost exchange before each RK stage, per-block RHS + Sommerfeld (AMR Stage 2)</td></tr>
 </table>
 
 <p><strong>CK45 coefficients:</strong> Carpenter &amp; Kennedy, NASA TM-109112 (1994), Solution 3.</p>
 
-<p><strong>Depends on:</strong> grid.h, params.h, fields.h, tensor_utils.h, backend.h<br>
+<p><strong>Depends on:</strong> grid.h, params.h, fields.h, tensor_utils.h, backend.h, mesh.h, ghost_exchange.h, sommerfeld.h<br>
 <strong>Depended on by:</strong> main.c, all tests</p>
 </div>
 </details>
@@ -548,6 +549,7 @@ Grid indexing:  IDX(g, i, j, k) = k * Ntotal^2 + j * Ntotal + i
 <tr><th>Function</th><th>Description</th></tr>
 <tr><td><code>set_flat_spacetime(g)</code></td><td>chi=1, h=I, lapse=1, all else 0</td></tr>
 <tr><td><code>set_brill_lindquist(g, n_bh, masses, centers)</code></td><td>psi = 1 + sum(M_n / 2r_n), chi = psi^{-4}, supports up to 16 punctures</td></tr>
+<tr><td><code>set_brill_lindquist_global(g, origin, n_bh, masses, centers)</code></td><td>Block-aware BL: uses explicit origin for global physical coordinates (AMR Stage 2)</td></tr>
 </table>
 
 <p><strong>Ref:</strong> gr-qc/9703066 (Brandt-Brugmann puncture method)</p>
@@ -590,15 +592,16 @@ Grid indexing:  IDX(g, i, j, k) = k * Ntotal^2 + j * Ntotal + i
 
 <table class="file-table">
 <tr><th>Function</th><th>Description</th></tr>
-<tr><td><code>apply_sommerfeld(rhs, src, g)</code></td><td>Overwrites RHS in all ghost zone points</td></tr>
+<tr><td><code>apply_sommerfeld(rhs, src, g)</code></td><td>Overwrites RHS in all ghost zone points (single-grid)</td></tr>
+<tr><td><code>apply_sommerfeld_block(rhs, src, b)</code></td><td>Block-aware: only applies to domain-boundary ghost points, uses BLOCK_COORD for global coords (AMR Stage 2)</td></tr>
 <tr><td><code>asymptotic_value(field)</code></td><td>Returns far-field value for each field (static)</td></tr>
 <tr><td><code>boundary_d1(f, idx, stride, lo, hi, dx)</code></td><td>One-sided 2nd-order derivative at boundary (static)</td></tr>
 </table>
 
 <p><strong>Ref:</strong> GRChombo BoundaryConditions.cpp:593-661</p>
 
-<p><strong>Depends on:</strong> grid.h, fields.h<br>
-<strong>Depended on by:</strong> rk4.c (via function pointer), main.c, all tests</p>
+<p><strong>Depends on:</strong> grid.h, fields.h, block.h<br>
+<strong>Depended on by:</strong> rk4.c (via function pointer + direct call), main.c, all tests</p>
 </div>
 </details>
 
