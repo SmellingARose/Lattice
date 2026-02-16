@@ -400,3 +400,129 @@ agree closely (5.43 vs 5.47), confirming we are in the asymptotic regime.
 - CCZ4 RHS equations produce convergent evolution
 - Christoffel symbols, Ricci tensor, gauge conditions all implemented correctly
 - KO dissipation is not degrading convergence order
+
+## 2026-02-16: AMR Stage 1 — Data Structures Foundation
+
+### What was built
+
+Implemented the AMR data structure layer: `block_t`, `mesh_t`, `meshblock_pack_t`,
+and Morton encoding. These wrap the existing `grid_t` without modifying any physics
+code. The architecture follows proven patterns from Athena++ (Stone et al. 2020)
+and AthenaK (Grete et al. 2024), adapted to our C17/SoA codebase.
+
+### Reference code consulted
+
+Heavily referenced Athena++ and AthenaK before writing:
+- `LogicalLocation` struct: `(lx1, lx2, lx3, level)` tree addressing from
+  Athena++ `athena.hpp`. Child coordinates = `parent*2 + {0,1}`.
+- `nblevel[3][3][3]`: per-block neighbor level table from Athena++
+  `bvals_base.cpp`. Indexed `[oz+1][oy+1][ox+1]`, self at `[1][1][1]`.
+- `SearchAndSetNeighbors`: Athena++ `bvals_base.cpp` — 26-neighbor finding
+  via coordinate offset + bounds check (simplified for uniform level-0).
+- `MeshBlockPack`: AthenaK `meshblock_pack.hpp` — contiguous GPU buffer
+  with block as a batch dimension. Our layout: `data[f * n_blocks * npts + b * npts + idx]`.
+- `MeshBlockTree`: Athena++ `meshblock_tree.cpp` — oct-tree with child
+  indexing `n = ox1 + (ox2<<1) + (ox3<<2)`.
+- GRChombo `ChiTaggingCriterion.hpp` — chi-gradient formula for Stage 4.
+
+### Files created
+
+- `src/amr/morton.h` — header-only Morton Z-order encoding (bit-interleave)
+- `src/amr/block.h/c` — block_t with LogicalLocation, nblevel, 26 neighbors
+- `src/amr/mesh.h/c` — mesh_t creation, Morton-sorted blocks, neighbor finding
+- `src/amr/meshblock_pack.h/c` — GPU pack with page-aligned contiguous buffers
+- `tests/test_amr_mesh.c` — 33 tests
+
+### Files modified
+
+- `src/core/params.h` — added `amr_params_t` to `sim_params_t`
+- `Makefile` — added `AMR_SRC`, `test-amr-mesh` target
+- `docs/architecture.html` — updated AMR module from "Planned" to "Stage 1 Complete"
+- `plan1.md` — updated progress tracking
+
+### Test results
+
+33/33 AMR tests pass:
+- Morton: encode/decode round-trip, Z-ordering, child/parent operations
+- Topology: 2x2x2 mesh with correct neighbors (7 for corner, 19 boundaries),
+  nblevel tables, boundary flags
+- Evolution: 1-block mesh flat spacetime Ham L2 = 1.04e-14 (threshold 1e-10)
+- MeshBlockPack: exact round-trip (0 error) for 1-block and 8-block packs
+
+Existing tests (flat spacetime, convergence) pass with no regressions.
+
+### What's next
+
+Stage 2: multi-block uniform mesh with 26-neighbor ghost exchange. Decompose
+domain into N_root^3 blocks, fill ghost zones by direct copy from neighbors,
+and verify multi-block results match single-grid to roundoff.
+
+## 2026-02-16: AMR Stage 1 — block_t + mesh_t + MeshBlockPack Foundation
+
+### Goal
+
+Define AMR data structures. A single-block mesh through the mesh API must
+produce identical output to the current grid_t. MeshBlockPack contiguous
+GPU-ready buffers from Stage 1.
+
+### Reference code consulted
+
+Before writing any code, studied the production AMR implementations:
+
+- **Athena++** `src/mesh/meshblock.hpp`, `meshblock_tree.cpp`, `bvals_base.cpp`
+  — LogicalLocation addressing, nblevel[3][3][3] neighbor level table,
+  SearchAndSetNeighbors algorithm, Z-order tree traversal for GID assignment
+- **AthenaK** `src/mesh/meshblock_pack.hpp`, `mesh.hpp`, `nghbr_index.hpp`
+  — MeshBlockPack GPU batching layout, 56-neighbor table for refined blocks
+- **GRChombo** `Source/TaggingCriteria/ChiTaggingCriterion.hpp`,
+  `Source/GRChomboCore/GRAMRLevel.hpp` — chi-gradient formula, level lifecycle
+
+Key patterns adopted from Athena++:
+1. `logical_location_t (lx1, lx2, lx3, level)` — universal block address
+2. `nblevel[3][3][3]` — neighbor level lookup (indexed `[oz+1][oy+1][ox+1]`)
+3. Child octant indexing: `n = ox1 + (ox2<<1) + (ox3<<2)`
+4. Morton Z-order sorting of blocks for cache-friendly traversal
+5. 26-neighbor offset table (faces, edges, corners)
+
+### Implementation
+
+**New files (7):**
+- `src/amr/morton.h` — header-only bit-interleave encoding, child/parent ops
+- `src/amr/block.h/c` — block_t wrapping grid_t* with LogicalLocation,
+  nblevel[3][3][3], 26 neighbor_ids, tree links, boundary flags, BLOCK_COORD macro
+- `src/amr/mesh.h/c` — mesh_t creation: N_root^3 uniform blocks, Morton-sorted
+  IDs, coordinate-based neighbor finding, nblevel + boundary flag computation
+- `src/amr/meshblock_pack.h/c` — page-aligned contiguous buffers
+  (data/rhs/scratch), PACK_IDX macro, load/store between blocks and pack
+
+**Modified files (2):**
+- `src/core/params.h` — added `amr_params_t` struct with 7 parameters
+  (enabled, max_level, N_block, N_root, chi_refine, chi_coarsen, regrid_every)
+- `Makefile` — added AMR_SRC, test-amr-mesh target
+
+### Test results (33/33 passed)
+
+```
+test_amr_mesh:
+  Morton encode/decode round-trip              PASS
+  Morton Z-ordering correct                    PASS
+  Morton child encoding (octant 7)             PASS
+  Morton parent recovery                       PASS
+  8 blocks created (2x2x2)                     PASS
+  All blocks are leaves, all level 0           PASS
+  Corner (0,0,0): 7 neighbors, 19 boundaries  PASS
+  nblevel table correct                        PASS
+  1-block mesh flat spacetime Ham L2 = 1e-14   PASS (< 1e-10)
+  MeshBlockPack load: 0 error                  PASS
+  MeshBlockPack store: correct                 PASS
+  8-block pack load: 0 error                   PASS
+  ... (33 total)
+```
+
+Existing tests (test_flat, test_convergence) pass with no regressions.
+
+### What's next
+
+Stage 2: multi-block uniform mesh + 26-neighbor ghost exchange. Decompose
+domain into N_root^3 blocks, fill ghost zones by direct copy from neighbors,
+run physics unchanged. Test gate: multi-block = single-grid to roundoff.

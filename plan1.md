@@ -539,9 +539,9 @@ later stages must not break earlier tests.
 
 ## Progress Tracking
 
-### Status: NOT STARTED
+### Status: STAGE 1 COMPLETE
 
-- [ ] **Stage 1:** block_t + mesh_t + MeshBlockPack foundation
+- [x] **Stage 1:** block_t + mesh_t + MeshBlockPack foundation
 - [ ] **Stage 2:** Multi-block uniform mesh + 26-neighbor ghost exchange
 - [ ] **Stage 3:** Prolongation + Restriction + CAKO/CAHD/SSL/per-field sigma
 - [ ] **Stage 4:** Oct-tree refinement + multi-level ghost exchange
@@ -552,7 +552,16 @@ later stages must not break earlier tests.
 - None currently
 
 ### Completed milestones
-- (none yet)
+- **Stage 1** (2026-02-16): 33/33 tests pass. All data structures implemented.
+  - `src/amr/block.h/c` — block_t with LogicalLocation, nblevel[3][3][3] (Athena++ pattern)
+  - `src/amr/mesh.h/c` — mesh_t with Morton-sorted blocks, 26-neighbor finding
+  - `src/amr/meshblock_pack.h/c` — MeshBlockPack with page-aligned contiguous buffers
+  - `src/amr/morton.h` — header-only Morton encoding/decoding
+  - `src/core/params.h` — amr_params_t added to sim_params_t
+  - `tests/test_amr_mesh.c` — Morton, topology, evolution, pack round-trip tests
+  - 1-block mesh Ham L2 = 5.3e-14 (identical to grid_t path)
+  - 8-block pack load/store: zero error
+  - Existing tests (flat, convergence) pass with no regressions
 
 ---
 

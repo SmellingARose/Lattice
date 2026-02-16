@@ -162,7 +162,7 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
     <li><a href="#mod-diagnostics"><span class="status-dot dot-green"></span>diagnostics/</a></li>
     <li><a href="#mod-boundary"><span class="status-dot dot-green"></span>boundary/</a></li>
     <li><a href="#mod-io"><span class="status-dot dot-green"></span>io/</a></li>
-    <li><a href="#mod-amr"><span class="status-dot dot-gray"></span>amr/ (planned)</a></li>
+    <li><a href="#mod-amr"><span class="status-dot dot-yellow"></span>amr/ (Stage 1)</a></li>
 
     <li><a class="section-header">Tests &amp; Build</a></li>
     <li><a href="#tests">Test Infrastructure</a></li>
@@ -621,30 +621,41 @@ Grid indexing:  IDX(g, i, j, k) = k * Ntotal^2 + j * Ntotal + i
 </details>
 
 <!-- ========================================== -->
-<h2 id="mod-amr">Module: amr/ (Planned) <span class="badge badge-gray">Not Yet Implemented</span></h2>
+<h2 id="mod-amr">Module: amr/ <span class="badge badge-yellow">Stage 1 Complete (6 stages total)</span></h2>
 
-<p>Oct-tree block AMR is planned in 6 stages (see <code>plan.md</code>). The architecture wraps each <code>grid_t</code> in a <code>block_t</code> with tree metadata, managed by a <code>mesh_t</code>. The physics code (<code>ccz4_rhs_point</code>) runs unchanged on each block.</p>
+<p>Oct-tree block AMR implemented in 6 stages (see <code>plan1.md</code>). The architecture wraps each <code>grid_t</code> in a <code>block_t</code> with tree metadata, managed by a <code>mesh_t</code>. A <code>meshblock_pack_t</code> packs block data into contiguous GPU-friendly buffers. The physics code (<code>ccz4_rhs_point</code>) runs unchanged on each block.</p>
 
-<h4>Planned Files (14 new):</h4>
+<p>Key patterns copied from <strong>Athena++</strong> (Stone et al. 2020) and <strong>AthenaK</strong> (Grete et al. 2024): <code>LogicalLocation</code> tree addressing, <code>nblevel[3][3][3]</code> neighbor level tables, child octant indexing <code>n = ox1 + (ox2&lt;&lt;1) + (ox3&lt;&lt;2)</code>, Morton Z-order block sorting, MeshBlockPack GPU batching.</p>
+
+<h4>Implemented Files (Stage 1):</h4>
 <table class="file-table">
-<tr><th>File</th><th>Stage</th><th>Purpose</th></tr>
-<tr><td><code>src/amr/block.h / block.c</code></td><td>1</td><td>block_t struct: grid_t + level, morton index, tree links</td></tr>
-<tr><td><code>src/amr/mesh.h / mesh.c</code></td><td>1</td><td>mesh_t: oct-tree management, block lifecycle</td></tr>
-<tr><td><code>src/amr/ghost_exchange.h / .c</code></td><td>2</td><td>Same-level and cross-level ghost zone fill</td></tr>
-<tr><td><code>src/amr/morton.h</code></td><td>2</td><td>Morton/Z-order encoding, neighbor finding</td></tr>
-<tr><td><code>src/amr/interp.h</code></td><td>3</td><td>Shared prolongation/restriction declarations</td></tr>
-<tr><td><code>src/amr/prolongation.c</code></td><td>3</td><td>Coarse-to-fine interpolation (minmod limiter)</td></tr>
-<tr><td><code>src/amr/restriction.c</code></td><td>3</td><td>Fine-to-coarse volume-weighted averaging</td></tr>
-<tr><td><code>src/amr/refine.c</code></td><td>4</td><td>Block refinement/coarsening operations</td></tr>
-<tr><td><code>src/amr/criterion.c</code></td><td>4</td><td>Chi-gradient refinement criterion</td></tr>
-<tr><td><code>src/amr/meshblock_pack.h / .c</code></td><td>6</td><td>GPU batch packing (AthenaK pattern)</td></tr>
+<tr><th>File</th><th>Purpose</th><th>Status</th></tr>
+<tr><td><code>src/amr/morton.h</code></td><td>Header-only Morton Z-order encoding/decoding (bit-interleave, child/parent ops)</td><td><span class="badge badge-green">Done</span></td></tr>
+<tr><td><code>src/amr/block.h</code></td><td>block_t: grid_t* + LogicalLocation + nblevel[3][3][3] + 26 neighbors + tree links</td><td><span class="badge badge-green">Done</span></td></tr>
+<tr><td><code>src/amr/block.c</code></td><td>Block allocation (wraps grid_alloc), 26-neighbor offset table</td><td><span class="badge badge-green">Done</span></td></tr>
+<tr><td><code>src/amr/mesh.h</code></td><td>mesh_t struct, mesh_create/free API</td><td><span class="badge badge-green">Done</span></td></tr>
+<tr><td><code>src/amr/mesh.c</code></td><td>Uniform root grid creation, Morton sort, neighbor finding, nblevel + boundary flags</td><td><span class="badge badge-green">Done</span></td></tr>
+<tr><td><code>src/amr/meshblock_pack.h</code></td><td>meshblock_pack_t: contiguous GPU buffer, PACK_IDX macro, load/store API</td><td><span class="badge badge-green">Done</span></td></tr>
+<tr><td><code>src/amr/meshblock_pack.c</code></td><td>Page-aligned allocation, field data copy to/from blocks</td><td><span class="badge badge-green">Done</span></td></tr>
 </table>
 
-<h4>Planned Noise Reduction Techniques (from arXiv:2404.01137):</h4>
+<h4>Remaining Files (Stages 2&ndash;6):</h4>
+<table class="file-table">
+<tr><th>File</th><th>Stage</th><th>Purpose</th></tr>
+<tr><td><code>src/amr/ghost_exchange.h / .c</code></td><td>2</td><td>26-neighbor ghost zone fill (faces + edges + corners in 1 pass)</td></tr>
+<tr><td><code>src/amr/prolongation.h / .c</code></td><td>3</td><td>4th-order Lagrange coarse-to-fine interpolation</td></tr>
+<tr><td><code>src/amr/restriction.h / .c</code></td><td>3</td><td>Volume-weighted fine-to-coarse averaging</td></tr>
+<tr><td><code>src/amr/refine.h / .c</code></td><td>4</td><td>Oct-tree split/merge + 2:1 constraint enforcement</td></tr>
+<tr><td><code>src/amr/criterion.h / .c</code></td><td>4</td><td>Chi-gradient refinement criterion with hysteresis</td></tr>
+<tr><td><code>src/amr/subcycling.h / .c</code></td><td>5</td><td>Level-by-level time advance with restriction</td></tr>
+</table>
+
+<h4>Planned Noise Reduction Techniques (Stage 3, from arXiv:2404.01137):</h4>
 <ul>
   <li><strong>CAKO</strong> &mdash; Curvature-adjusted KO dissipation: <code>sigma_eff = chi * sigma</code>. One-line change to dissipation.c.</li>
   <li><strong>CAHD</strong> &mdash; Coarse-grid-adjusted Hamiltonian damping: <code>kappa1_eff = kappa1 * 2^(max_level - level)</code>.</li>
   <li><strong>SSL</strong> &mdash; Slow-start lapse: temporary damping of gauge pulse during early evolution.</li>
+  <li><strong>Per-field sigma</strong> &mdash; sigma=0.99 for gauge fields, 0.3 for physical fields.</li>
 </ul>
 
 <!-- ========================================== -->
@@ -684,6 +695,12 @@ Grid indexing:  IDX(g, i, j, k) = k * Ntotal^2 + j * Ntotal + i
   <td>No crash, Ham &lt; 1.0, Mom &lt; 1.0, merger detected</td>
   <td><span class="badge badge-yellow">Implemented</span></td>
 </tr>
+<tr>
+  <td><code>tests/test_amr_mesh.c</code></td>
+  <td>AMR Stage 1: Morton encoding, mesh topology (8 blocks), 1-block evolution, MeshBlockPack round-trip</td>
+  <td>33 sub-tests pass, Ham L2 &lt; 1e-10, pack error = 0</td>
+  <td><span class="badge badge-green">Passing</span></td>
+</tr>
 </table>
 
 <h3>How to Run Tests</h3>
@@ -691,7 +708,8 @@ Grid indexing:  IDX(g, i, j, k) = k * Ntotal^2 + j * Ntotal + i
 make test-single-bh      # single BH (~40 min on M4 at N=128)
 make test-convergence    # 3-resolution convergence (~15 min)
 make test-constraints    # Hamiltonian + momentum constraint tests
-make test-head-on        # head-on binary collision (~6 hrs at N=128)</code></pre>
+make test-head-on        # head-on binary collision (~6 hrs at N=128)
+make test-amr-mesh       # AMR Stage 1 infrastructure (33 tests, ~30 sec)</code></pre>
 
 <!-- ========================================== -->
 <h2 id="build">Build System</h2>
@@ -714,6 +732,7 @@ make clean                    # rm -rf build/</code></pre>
 <tr><td><code>DIAG_SRC</code></td><td>src/diagnostics/constraints.c</td></tr>
 <tr><td><code>BOUNDARY_SRC</code></td><td>src/boundary/sommerfeld.c</td></tr>
 <tr><td><code>IO_SRC</code></td><td>src/io/output.c</td></tr>
+<tr><td><code>AMR_SRC</code></td><td>src/amr/block.c src/amr/mesh.c src/amr/meshblock_pack.c</td></tr>
 <tr><td><code>BACKEND_SRC</code></td><td>src/backend/backend_cpu.c <em>or</em> backend_gpu.c (selected by BACKEND flag)</td></tr>
 <tr><td><code>MAIN_SRC</code></td><td>src/main.c</td></tr>
 </table>

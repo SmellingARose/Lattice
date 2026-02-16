@@ -29,6 +29,7 @@ INITIAL_SRC   = src/initial_data/puncture.c
 DIAG_SRC      = src/diagnostics/constraints.c
 BOUNDARY_SRC  = src/boundary/sommerfeld.c
 IO_SRC        = src/io/output.c
+AMR_SRC       = src/amr/block.c src/amr/mesh.c src/amr/meshblock_pack.c
 MAIN_SRC      = src/main.c
 
 # Backend selection
@@ -59,7 +60,7 @@ else
 endif
 
 ALL_SRC = $(CORE_SRC) $(EVOLUTION_SRC) $(NUMERICS_SRC) $(INITIAL_SRC) \
-          $(DIAG_SRC) $(BOUNDARY_SRC) $(IO_SRC) $(BACKEND_SRC)
+          $(DIAG_SRC) $(BOUNDARY_SRC) $(IO_SRC) $(AMR_SRC) $(BACKEND_SRC)
 
 # Compiler flags
 INCLUDES = -I src
@@ -73,7 +74,7 @@ LDFLAGS = $(BACKEND_LIBS) -lm
 BUILD = build
 
 # Targets
-.PHONY: all debug test test-single-bh test-convergence test-constraints test-head-on clean
+.PHONY: all debug test test-single-bh test-convergence test-constraints test-head-on test-amr-mesh clean
 
 all: $(BUILD)/lattice
 
@@ -130,6 +131,14 @@ $(BUILD)/test_head_on: tests/test_head_on.c $(ALL_SRC)
 test-head-on: $(BUILD)/test_head_on
 	@echo "=== Running head-on binary test ==="
 	$(BUILD)/test_head_on
+
+$(BUILD)/test_amr_mesh: tests/test_amr_mesh.c $(ALL_SRC)
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS_OPT) -o $@ tests/test_amr_mesh.c $(ALL_SRC) $(LDFLAGS)
+
+test-amr-mesh: $(BUILD)/test_amr_mesh
+	@echo "=== Running AMR mesh test ==="
+	$(BUILD)/test_amr_mesh
 
 clean:
 	rm -rf $(BUILD)
