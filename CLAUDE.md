@@ -255,6 +255,8 @@ equations, changing memory layout, altering Makefile targets, anything in
 1. `make` must succeed with zero warnings (`-Wall -Wextra -Werror`)
 2. `make test` must pass
 3. If touching `evolution/` or `numerics/`: `make test-convergence` must confirm 4th-order
+4. If adding/removing/renaming files or functions, or changing the call graph:
+   update `docs/architecture.html` to reflect the new structure
 
 **When writing new code:** Start from the equation, cite both the paper and the
 GRChombo reference line. Write the test first when possible. One function = one

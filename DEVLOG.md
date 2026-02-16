@@ -1,5 +1,8 @@
 # Lattice Development Log
 
+> **Note:** When adding/removing/renaming files or functions, also update
+> `docs/architecture.html` — the living map of the codebase structure.
+
 ## 2026-02-10: Fresh Start — Phase 1, Milestones 1+2
 
 ### Decision: Start from scratch with GRChombo reference approach

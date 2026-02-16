@@ -1,0 +1,1092 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lattice — AMR Decision Guide</title>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --border: #30363d;
+    --text: #e6edf3; --text-dim: #8b949e; --accent: #58a6ff;
+    --green: #3fb950; --red: #f85149; --orange: #d29922; --purple: #bc8cff;
+    --cyan: #39d353;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; background: var(--bg); color: var(--text); line-height: 1.7; padding: 2rem; max-width: 1200px; margin: 0 auto; }
+  h1 { font-size: 2.2rem; margin-bottom: 0.3rem; color: var(--accent); }
+  h2 { font-size: 1.6rem; margin: 2.5rem 0 1rem; color: var(--accent); border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; }
+  h3 { font-size: 1.15rem; margin: 1.5rem 0 0.5rem; color: var(--purple); }
+  h4 { font-size: 1rem; margin: 0.75rem 0 0.25rem; color: var(--text); }
+  p { margin-bottom: 1rem; }
+  .subtitle { color: var(--text-dim); font-size: 1.05rem; margin-bottom: 2rem; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  ul { margin: 0.5rem 0 0.75rem 1.25rem; }
+  ul li { margin-bottom: 0.25rem; }
+  code { font-family: 'SF Mono', 'Fira Code', Menlo, Consolas, monospace; font-size: 0.88em; background: #1a2332; padding: 1px 5px; border-radius: 3px; }
+  pre { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 1rem 1.25rem; margin: 1rem 0; overflow-x: auto; font-family: 'SF Mono', 'Fira Code', Menlo, Consolas, monospace; font-size: 0.85rem; line-height: 1.5; color: var(--text-dim); }
+  pre code { background: none; padding: 0; }
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.95rem; }
+  th, td { padding: 0.5rem 0.75rem; text-align: left; border: 1px solid var(--border); }
+  th { background: var(--surface); color: var(--accent); }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+
+  /* TOC */
+  .toc { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.25rem 1.5rem; margin: 1.5rem 0; }
+  .toc ol { padding-left: 1.5rem; }
+  .toc li { margin: 0.25rem 0; }
+
+  /* Tags */
+  .tag { display: inline-block; padding: 0.1rem 0.5rem; border-radius: 4px; font-size: 0.78rem; font-weight: 600; }
+  .tag-essential { background: #1a3a1a; color: var(--green); }
+  .tag-high { background: #1a2a3a; color: var(--accent); }
+  .tag-nice { background: #2a2a1a; color: var(--orange); }
+  .tag-skip { background: #3a1a1a; color: var(--red); }
+  .tag-easy { background: #1a3a1a; color: var(--green); }
+  .tag-medium { background: #2a2a1a; color: var(--orange); }
+  .tag-hard { background: #3a1a1a; color: var(--red); }
+
+  /* Tier headers */
+  .tier { margin: 2rem 0 1rem; padding: 0.75rem 1.25rem; border-radius: 8px; font-size: 1.3rem; font-weight: 700; }
+  .tier-1 { background: #0a2a0a; border: 1px solid #1a4a1a; color: var(--green); }
+  .tier-2 { background: #0a1a2a; border: 1px solid #1a3a5a; color: var(--accent); }
+  .tier-3 { background: #1a1a0a; border: 1px solid #3a3a1a; color: var(--orange); }
+  .tier-4 { background: #1a0a0a; border: 1px solid #3a1a1a; color: var(--red); }
+  .tier small { font-weight: 400; font-size: 0.85rem; display: block; margin-top: 0.2rem; }
+
+  /* Cards */
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.25rem 1.5rem; margin: 1rem 0; }
+  .card-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.75rem; }
+  .card-header h3 { margin: 0; font-size: 1.1rem; }
+  .card-tags { display: flex; gap: 0.4rem; }
+  .card-section { margin: 0.75rem 0; }
+  .card-section h4 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-dim); margin-bottom: 0.25rem; }
+  .card-section p { margin-bottom: 0.25rem; font-size: 0.95rem; }
+
+  .verdict { background: #0a1a2a; border-left: 3px solid var(--accent); padding: 0.75rem 1rem; margin-top: 0.75rem; border-radius: 0 4px 4px 0; font-weight: 600; font-size: 0.95rem; }
+  .verdict.go { border-left-color: var(--green); }
+  .verdict.maybe { border-left-color: var(--orange); }
+  .verdict.no { border-left-color: var(--red); }
+
+  .pro { color: var(--green); }
+  .con { color: var(--red); }
+  .neutral { color: var(--orange); }
+
+  /* Highlight box */
+  .hl { background: #1a2332; border-left: 3px solid var(--accent); padding: 1rem 1.25rem; margin: 1.5rem 0; border-radius: 0 6px 6px 0; }
+
+  /* Summary table */
+  .summary-table td:nth-child(2) { font-weight: 600; }
+  .summary-table .essential { color: var(--green); }
+  .summary-table .high { color: var(--accent); }
+  .summary-table .nice { color: var(--orange); }
+  .summary-table .skip { color: var(--red); }
+
+  /* Ref */
+  .ref { font-size: 0.85rem; color: var(--text-dim); }
+
+  /* Dep diagram */
+  .diagram { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; margin: 1.5rem 0; overflow-x: auto; }
+  .diagram pre { border: none; margin: 0; padding: 0; background: none; }
+
+  /* Stage map */
+  .stage-map { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 0.75rem; margin: 1rem 0; }
+  .stage-box { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 0.75rem; text-align: center; font-size: 0.85rem; }
+  .stage-box strong { display: block; color: var(--accent); margin-bottom: 0.25rem; }
+
+  .caption { color: var(--text-dim); font-size: 0.9rem; margin-top: 0.75rem; font-style: italic; }
+</style>
+</head>
+<body>
+
+<h1>AMR Decision Guide</h1>
+<p class="subtitle">Honest assessment of every AMR component &mdash; what to build, what to skip, and why</p>
+
+<div class="toc">
+<strong>Contents</strong>
+<ol>
+  <li><a href="#overview">How to read this guide</a></li>
+  <li><a href="#summary">Summary table</a></li>
+  <li><a href="#deps">Dependency map</a></li>
+  <li><a href="#tier1">Tier 1 &mdash; Essential (must build)</a></li>
+  <li><a href="#tier2">Tier 2 &mdash; High Value (build when ready)</a></li>
+  <li><a href="#tier3">Tier 3 &mdash; Nice to Have (build if needed)</a></li>
+  <li><a href="#tier4">Tier 4 &mdash; Probably Skip (not worth it)</a></li>
+  <li><a href="#stages">Stage &rarr; component mapping</a></li>
+  <li><a href="#refs">References</a></li>
+</ol>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="overview">1. How to Read This Guide</h2>
+
+<p>Each AMR component gets a <strong>card</strong> with six fields:</p>
+
+<table>
+<tr><th>Field</th><th>Meaning</th></tr>
+<tr><td><strong>What</strong></td><td>One-paragraph description of the component</td></tr>
+<tr><td><strong>Why</strong></td><td>What problem it solves, why you'd want it</td></tr>
+<tr><td><strong>Difficulty</strong></td><td><span class="tag tag-easy">Easy</span> = 1&ndash;2 hours, <span class="tag tag-medium">Medium</span> = 1&ndash;3 days, <span class="tag tag-hard">Hard</span> = 1+ weeks</td></tr>
+<tr><td><strong>If skipped</strong></td><td>What breaks, degrades, or becomes impossible</td></tr>
+<tr><td><strong>Evidence</strong></td><td>Papers, codes, or tests that justify the assessment</td></tr>
+<tr><td><strong>Verdict</strong></td><td><span class="pro">Build</span>, <span class="neutral">Defer</span>, or <span class="con">Skip</span> &mdash; with rationale</td></tr>
+</table>
+
+<p>Components are sorted into four tiers based on necessity and effort-to-value ratio:</p>
+
+<table>
+<tr><th>Tier</th><th>Meaning</th><th># Components</th></tr>
+<tr><td><span class="tag tag-essential">Tier 1</span></td><td>Cannot run AMR without these. Build first.</td><td>7</td></tr>
+<tr><td><span class="tag tag-high">Tier 2</span></td><td>High value, significant quality-of-life or correctness improvement.</td><td>6</td></tr>
+<tr><td><span class="tag tag-nice">Tier 3</span></td><td>Measurable improvement but not blocking.</td><td>6</td></tr>
+<tr><td><span class="tag tag-skip">Tier 4</span></td><td>Marginal value, high effort, or superseded by our architecture.</td><td>7</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="summary">2. Summary Table</h2>
+
+<table class="summary-table">
+<tr><th>Component</th><th>Tier</th><th>Difficulty</th><th>Stage</th><th>Verdict</th></tr>
+<tr><td><code>block_t</code></td><td class="essential">Essential</td><td>Easy</td><td>1</td><td>Build</td></tr>
+<tr><td><code>mesh_t</code></td><td class="essential">Essential</td><td>Medium</td><td>1</td><td>Build</td></tr>
+<tr><td>Same-level ghost exchange</td><td class="essential">Essential</td><td>Medium</td><td>2</td><td>Build</td></tr>
+<tr><td>Cross-level ghost exchange</td><td class="essential">Essential</td><td>Hard</td><td>4</td><td>Build</td></tr>
+<tr><td>Prolongation (minmod)</td><td class="essential">Essential</td><td>Medium</td><td>3</td><td>Build</td></tr>
+<tr><td>Restriction</td><td class="essential">Essential</td><td>Easy</td><td>3</td><td>Build</td></tr>
+<tr><td>2:1 level constraint</td><td class="essential">Essential</td><td>Medium</td><td>4</td><td>Build</td></tr>
+<tr><td>Morton encoding</td><td class="high">High Value</td><td>Easy</td><td>2</td><td>Build</td></tr>
+<tr><td>Chi-gradient criterion</td><td class="high">High Value</td><td>Easy</td><td>4</td><td>Build</td></tr>
+<tr><td>CAKO</td><td class="high">High Value</td><td>Easy</td><td>3</td><td>Build</td></tr>
+<tr><td>Dynamic regridding</td><td class="high">High Value</td><td>Medium</td><td>4</td><td>Build</td></tr>
+<tr><td>Subcycling</td><td class="high">High Value</td><td>Hard</td><td>5</td><td>Defer</td></tr>
+<tr><td>MeshBlockPack GPU batching</td><td class="high">High Value</td><td>Hard</td><td>6</td><td>Defer</td></tr>
+<tr><td>4th-order Lagrange prolongation</td><td class="nice">Nice to Have</td><td>Medium</td><td>3+</td><td>Defer</td></tr>
+<tr><td>CAHD</td><td class="nice">Nice to Have</td><td>Easy</td><td>3</td><td>Build</td></tr>
+<tr><td>SSL</td><td class="nice">Nice to Have</td><td>Easy</td><td>3</td><td>Build</td></tr>
+<tr><td>Dense output (CarpetX trick)</td><td class="nice">Nice to Have</td><td>Hard</td><td>5+</td><td>Defer</td></tr>
+<tr><td>Per-field sigma</td><td class="nice">Nice to Have</td><td>Easy</td><td>3+</td><td>Defer</td></tr>
+<tr><td>Edge/corner ghost handling</td><td class="nice">Nice to Have</td><td>Medium</td><td>2+</td><td>Defer</td></tr>
+<tr><td>Truncation error criterion</td><td class="skip">Probably Skip</td><td>Hard</td><td>&mdash;</td><td>Skip</td></tr>
+<tr><td>Vertex-centered discretization</td><td class="skip">Probably Skip</td><td>Hard</td><td>&mdash;</td><td>Skip</td></tr>
+<tr><td>Flux correction / refluxing</td><td class="skip">Probably Skip</td><td>Hard</td><td>&mdash;</td><td>Skip</td></tr>
+<tr><td>Buffer zones</td><td class="skip">Probably Skip</td><td>Medium</td><td>&mdash;</td><td>Skip</td></tr>
+<tr><td>Box-in-box refinement</td><td class="skip">Probably Skip</td><td>Medium</td><td>&mdash;</td><td>Skip</td></tr>
+<tr><td>Per-block GPU kernels</td><td class="skip">Probably Skip</td><td>Medium</td><td>&mdash;</td><td>Skip</td></tr>
+<tr><td>Static refinement (manual)</td><td class="skip">Probably Skip</td><td>Easy</td><td>&mdash;</td><td>Skip</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="deps">3. Dependency Map</h2>
+
+<div class="diagram">
+<pre><code>                         block_t + mesh_t  (Stage 1)
+                               |
+                     +---------+---------+
+                     |                   |
+               Morton encoding    Same-level ghost
+               (Stage 2)          exchange (Stage 2)
+                     |                   |
+                     +-------+-----------+
+                             |
+                  +----------+----------+
+                  |          |          |
+            Prolongation  Restriction  CAKO/CAHD/SSL
+            (Stage 3)    (Stage 3)    (Stage 3)
+                  |          |          |
+                  +-----+----+----------+
+                        |
+              +---------+---------+
+              |                   |
+     Chi-gradient criterion    Cross-level ghost
+     + dynamic regridding      exchange (Stage 4)
+        (Stage 4)                   |
+              |                     |
+              +----------+----------+
+                         |
+              +----------+----------+
+              |                     |
+         Subcycling            MeshBlockPack
+         (Stage 5)             GPU batching
+                               (Stage 6)</code></pre>
+</div>
+<p class="caption">Arrows flow downward: lower components depend on upper ones. Stages 1&ndash;4 are sequential; 5 and 6 are independent of each other.</p>
+
+<!-- ============================================================ -->
+<h2 id="tier1">4. Tier 1 &mdash; Essential</h2>
+<div class="tier tier-1">Tier 1: Must Build <small>Cannot run multi-level AMR without these 7 components</small></div>
+
+<!-- block_t -->
+<div class="card" id="card-block">
+  <div class="card-header">
+    <h3><code>block_t</code> &mdash; Block Data Structure</h3>
+    <div class="card-tags"><span class="tag tag-essential">Essential</span> <span class="tag tag-easy">Easy</span></div>
+  </div>
+  <div class="card-section">
+    <h4>What</h4>
+    <p>A struct wrapping <code>grid_t</code> with AMR metadata: refinement level, Morton index, tree links (parent, 8 children, 6 face-neighbors), boundary flags, and physical origin. Each block is a 16&sup3; interior-cell cube with 4 ghost layers (24&sup3; total = 13,824 points).</p>
+  </div>
+  <div class="card-section">
+    <h4>Why</h4>
+    <p>AMR decomposes the domain into many small grids. <code>block_t</code> is the atom &mdash; every other component operates on blocks. Our existing <code>ccz4_rhs_point()</code> is already per-point, so it works unchanged inside a block's <code>grid_t</code>. This is the cleanest possible extension of the current architecture.</p>
+  </div>
+  <div class="card-section">
+    <h4>Difficulty</h4>
+    <p><span class="tag tag-easy">Easy</span> &mdash; Pure data structure. Header + allocation/deallocation. ~150 lines of C. No algorithmic complexity.</p>
+  </div>
+  <div class="card-section">
+    <h4>If Skipped</h4>
+    <p><strong class="con">Nothing works.</strong> There is no AMR without a block abstraction. The single-grid code cannot represent multiple resolution levels.</p>
+  </div>
+  <div class="card-section">
+    <h4>Evidence</h4>
+    <p>Every AMR code has an equivalent: Athena++ <code>MeshBlock</code>, GRChombo <code>FArrayBox</code>, CarpetX <code>GF_Data</code>. The pattern is universal. Our version is simpler because we use a fixed block size (no variable-dimension boxes).</p>
+    <p class="ref">Athena++: Stone et al. 2020 (ApJS 249, 4), &sect;3.1</p>
+  </div>
+  <div class="verdict go">Build in Stage 1. Foundation for everything else. ~2 hours.</div>
+</div>
+
+<!-- mesh_t -->
+<div class="card" id="card-mesh">
+  <div class="card-header">
+    <h3><code>mesh_t</code> &mdash; Mesh Manager</h3>
+    <div class="card-tags"><span class="tag tag-essential">Essential</span> <span class="tag tag-medium">Medium</span></div>
+  </div>
+  <div class="card-section">
+    <h4>What</h4>
+    <p>Top-level struct owning all blocks. Manages the oct-tree: creation of root-level blocks, refinement/coarsening operations, block lookup by ID, level iteration. Also holds domain parameters (L, dx_base, N_root) and simulation parameters. A single-block mesh must behave identically to the current <code>grid_t</code> path.</p>
+  </div>
+  <div class="card-section">
+    <h4>Why</h4>
+    <p>Something must own and organize the blocks. <code>mesh_t</code> is the control plane &mdash; it decides which blocks exist, maintains the tree structure, and provides iteration over leaf blocks (the active ones holding data). The RK4 stepper calls <code>mesh_t</code> instead of a single <code>grid_t</code>.</p>
+  </div>
+  <div class="card-section">
+    <h4>Difficulty</h4>
+    <p><span class="tag tag-medium">Medium</span> &mdash; Block lifecycle management, tree operations, backward compatibility. ~500 lines. The tricky part is ensuring the 1-block mesh path is exactly identical to the old code (for test compatibility).</p>
+  </div>
+  <div class="card-section">
+    <h4>If Skipped</h4>
+    <p><strong class="con">Nothing works.</strong> Without a mesh manager, blocks are disconnected. No iteration, no tree, no AMR.</p>
+  </div>
+  <div class="card-section">
+    <h4>Evidence</h4>
+    <p>Athena++ <code>Mesh</code> class is ~3000 lines of C++. Ours will be much smaller (no MPI, no load balancing, fixed block size). GR-Athena++ extends the base <code>Mesh</code> with NR-specific features (puncture tracking, constraint monitoring) &mdash; we can add those later.</p>
+    <p class="ref">Athena++: Stone et al. 2020 (ApJS 249, 4), &sect;3.2</p>
+  </div>
+  <div class="verdict go">Build in Stage 1. The orchestrator. ~1&ndash;2 days.</div>
+</div>
+
+<!-- Same-level ghost exchange -->
+<div class="card" id="card-ghost-same">
+  <div class="card-header">
+    <h3>Same-Level Ghost Exchange</h3>
+    <div class="card-tags"><span class="tag tag-essential">Essential</span> <span class="tag tag-medium">Medium</span></div>
+  </div>
+  <div class="card-section">
+    <h4>What</h4>
+    <p>For each pair of face-neighboring blocks at the same level, copy 4 layers of interior cells from one block's boundary into the other's ghost zone (and vice versa). 25 fields &times; 6 faces &times; all leaf blocks. This is a direct memory copy &mdash; no interpolation needed since both blocks share the same <code>dx</code>.</p>
+  </div>
+  <div class="card-section">
+    <h4>Why</h4>
+    <p>Finite difference stencils need data beyond each block's interior. Without ghost exchange, derivatives at block boundaries are wrong, producing O(1) errors that immediately blow up the simulation. Ghost exchange is what makes multi-block decomposition work at all.</p>
+  </div>
+  <div class="card-section">
+    <h4>Difficulty</h4>
+    <p><span class="tag tag-medium">Medium</span> &mdash; Index arithmetic for 6 face orientations, each with a slab copy. Must handle all 25 fields &times; 4 ghost layers. ~300 lines. The concept is simple (memcpy slabs) but index details are easy to get wrong. Test by comparing multi-block results to single-grid.</p>
+  </div>
+  <div class="card-section">
+    <h4>If Skipped</h4>
+    <p><strong class="con">Cannot decompose domain into blocks.</strong> Even a uniform-resolution multi-block mesh requires ghost exchange. FD stencils at block boundaries would read uninitialized memory.</p>
+  </div>
+  <div class="card-section">
+    <h4>Evidence</h4>
+    <p>Athena++ ghost exchange validation: 64-block uniform mesh must match single-grid to roundoff (~1e-14 relative error). Any deviation indicates an indexing bug. GR-Athena++ uses the same face-exchange pattern with GHOST_WIDTH=4 for 4th-order FD.</p>
+    <p class="ref">Athena++: Stone et al. 2020, &sect;4.2; GR-Athena++: Daszuta et al. 2021, &sect;2.3</p>
+  </div>
+  <div class="verdict go">Build in Stage 2. The validation gate: multi-block = single-grid to roundoff. ~2&ndash;3 days.</div>
+</div>
+
+<!-- Cross-level ghost exchange -->
+<div class="card" id="card-ghost-cross">
+  <div class="card-header">
+    <h3>Cross-Level Ghost Exchange</h3>
+    <div class="card-tags"><span class="tag tag-essential">Essential</span> <span class="tag tag-hard">Hard</span></div>
+  </div>
+  <div class="card-section">
+    <h4>What</h4>
+    <p>When a fine block (level L+1) borders a coarse block (level L), the fine block's ghost zone needs data that doesn't exist at matching resolution on the coarse side. Solution: <strong>prolongate</strong> coarse data into fine ghosts (interpolate to finer spacing). The reverse direction: <strong>restrict</strong> fine data into the overlapping region of the coarse block's ghost zone. Execution order: coarsest level first, then finer, so prolongation always has coarse data available.</p>
+  </div>
+  <div class="card-section">
+    <h4>Why</h4>
+    <p>Multi-level refinement is the whole point of AMR. Without cross-level ghost exchange, different-level blocks cannot communicate, and refinement boundaries become impenetrable walls where the solution is discontinuous.</p>
+  </div>
+  <div class="card-section">
+    <h4>Difficulty</h4>
+    <p><span class="tag tag-hard">Hard</span> &mdash; The hardest single component. Must correctly identify which coarse cells contribute to each fine ghost cell, apply prolongation with the right stencil, handle the coarse-fine interface geometry (fine block face might cover only half a coarse block face). ~500 lines. This is where most AMR bugs live.</p>
+  </div>
+  <div class="card-section">
+    <h4>If Skipped</h4>
+    <p><strong class="con">Cannot have multiple refinement levels.</strong> Limits you to uniform multi-block decomposition (Stage 2 only). No actual adaptive refinement.</p>
+  </div>
+  <div class="card-section">
+    <h4>Evidence</h4>
+    <p>GRChombo spends significant effort on their <code>FillPatch</code> operation, which is exactly this. Carpet's <code>dh.cc</code> schedules ghost exchanges level-by-level. GR-Athena++ uses the base Athena++ prolongation/restriction infrastructure, which is ~2000 lines of C++ (we need a subset since we only have one grid type).</p>
+    <p class="ref">Athena++: Stone et al. 2020, &sect;4.4; GRChombo: Andrade et al. 2021, &sect;4.2</p>
+  </div>
+  <div class="verdict go">Build in Stage 4. The core of actual AMR. Budget ~1 week. Test exhaustively against single-grid.</div>
+</div>
+
+<!-- Prolongation (minmod) -->
+<div class="card" id="card-prolongation">
+  <div class="card-header">
+    <h3>Prolongation (Coarse &rarr; Fine)</h3>
+    <div class="card-tags"><span class="tag tag-essential">Essential</span> <span class="tag tag-medium">Medium</span></div>
+  </div>
+  <div class="card-section">
+    <h4>What</h4>
+    <p>Interpolates coarse-grid field values onto a finer grid. Baseline: <strong>slope-limited linear interpolation with minmod limiter</strong>. For each fine cell, compute the value from the nearest coarse cell plus a limited gradient. The minmod limiter suppresses oscillations at sharp features (critical near punctures where chi has steep gradients).</p>
+  </div>
+  <div class="card-section">
+    <h4>Why</h4>
+    <p>Used in two places: (1) filling fine-block ghost zones from coarse neighbors (every timestep), (2) initializing child blocks when refining (occasional). Without prolongation, there's no way to create fine-grid data from coarse-grid data.</p>
+  </div>
+  <div class="card-section">
+    <h4>Difficulty</h4>
+    <p><span class="tag tag-medium">Medium</span> &mdash; Minmod in 3D with 2:1 ratio. ~200 lines. The interpolation math is straightforward, but getting the index mapping between coarse and fine cells correct (accounting for ghost offsets and physical coordinates) requires care.</p>
+  </div>
+  <div class="card-section">
+    <h4>If Skipped</h4>
+    <p><strong class="con">No cross-level ghost exchange, no refinement.</strong> This is half of the cross-level ghost exchange machinery.</p>
+  </div>
+  <div class="card-section">
+    <h4>Evidence</h4>
+    <p>Athena++ uses minmod for prolongation in MHD, citing stability advantages over higher-order schemes at discontinuities. GR-Athena++ inherits this. However: minmod is only 2nd-order accurate, which means refinement boundaries introduce O(dx&sup2;) error &mdash; a known limitation. BAM and GRChombo use higher-order prolongation for NR. See the Tier 3 card on 4th-order Lagrange for the upgrade path.</p>
+    <p class="ref">GR-Athena++: Daszuta et al. 2021, &sect;2.3; BAM: Brugmann et al. 2008</p>
+  </div>
+  <div class="verdict go">Build minmod in Stage 3. Works, proven, simple. Upgrade to 4th-order later if convergence order degrades at refinement boundaries.</div>
+</div>
+
+<!-- Restriction -->
+<div class="card" id="card-restriction">
+  <div class="card-header">
+    <h3>Restriction (Fine &rarr; Coarse)</h3>
+    <div class="card-tags"><span class="tag tag-essential">Essential</span> <span class="tag tag-easy">Easy</span></div>
+  </div>
+  <div class="card-section">
+    <h4>What</h4>
+    <p>Volume-weighted average: each coarse cell gets the mean of the 2&sup3; = 8 fine cells that overlap it. Conservative by construction (fine total = coarse total &times; 8). Used after fine-level time steps to update the coarse representation, ensuring the coarse grid reflects the higher-accuracy fine-grid solution.</p>
+  </div>
+  <div class="card-section">
+    <h4>Why</h4>
+    <p>Without restriction, the coarse grid diverges from the fine grid over time. When fine blocks are later used to fill coarse ghost zones (or when coarse data is visualized/extracted), it would show stale, inaccurate values. Restriction keeps the hierarchy consistent.</p>
+  </div>
+  <div class="card-section">
+    <h4>Difficulty</h4>
+    <p><span class="tag tag-easy">Easy</span> &mdash; Literally averaging 8 values. ~100 lines including the loop over all overlapping fine-coarse block pairs. The simplest AMR operation.</p>
+  </div>
+  <div class="card-section">
+    <h4>If Skipped</h4>
+    <p><strong class="con">Coarse grid becomes inconsistent.</strong> Ghost zones filled from coarse data would be wrong. Constraint violations accumulate on coarse levels. Multi-level evolution becomes unstable within ~100 steps.</p>
+  </div>
+  <div class="card-section">
+    <h4>Evidence</h4>
+    <p>Universal across all AMR codes. Simple volume-weighted averaging is the standard for cell-centered NR codes (Athena++, Carpet, BAM). Some codes use "injection" (just copy the coincident fine cell) &mdash; this is cheaper but not conservative. Volume averaging is safer for CCZ4.</p>
+    <p class="ref">Berger &amp; Oliger 1984 (original AMR paper), &sect;4</p>
+  </div>
+  <div class="verdict go">Build in Stage 3. Trivial implementation, critical for correctness. ~2 hours.</div>
+</div>
+
+<!-- 2:1 level constraint -->
+<div class="card" id="card-2to1">
+  <div class="card-header">
+    <h3>2:1 Level Constraint</h3>
+    <div class="card-tags"><span class="tag tag-essential">Essential</span> <span class="tag tag-medium">Medium</span></div>
+  </div>
+  <div class="card-section">
+    <h4>What</h4>
+    <p>Enforce that no block's refinement level differs by more than 1 from any of its face-neighbors. If refining a block would create a 2-level jump, the intermediate neighbor must also be refined. This is also called the "proper nesting" or "grading" constraint. Applied after every regrid operation.</p>
+  </div>
+  <div class="card-section">
+    <h4>Why</h4>
+    <p>Prolongation operators are designed for a 2:1 resolution ratio. A 4:1 jump (two levels) would require different interpolation stencils and produce much larger truncation error. The 2:1 constraint guarantees that every ghost exchange uses the same prolongation operator, simplifying the code and bounding the interpolation error.</p>
+  </div>
+  <div class="card-section">
+    <h4>Difficulty</h4>
+    <p><span class="tag tag-medium">Medium</span> &mdash; After flagging blocks for refinement, iterate: if any newly refined block has a coarse neighbor (level difference &gt; 1), flag that neighbor for refinement too. Repeat until converged. ~150 lines. Subtle: the cascade can propagate across the entire domain.</p>
+  </div>
+  <div class="card-section">
+    <h4>If Skipped</h4>
+    <p><strong class="con">Interpolation blows up at 4:1 boundaries.</strong> Without the constraint, blocks at level 3 could neighbor blocks at level 1. The 2:1 prolongation operator would produce garbage, and constraint violations would grow exponentially.</p>
+  </div>
+  <div class="card-section">
+    <h4>Evidence</h4>
+    <p>Athena++ enforces this in <code>Mesh::AdaptiveMeshRefinement()</code>. GRChombo enforces it via Chombo's <code>BRMeshRefine</code>. Every oct-tree AMR code enforces 2:1 grading. Codes that don't (like early Dendro-GR with wavelet-based adaptivity) use fundamentally different approaches to inter-level communication.</p>
+    <p class="ref">Athena++: Stone et al. 2020, &sect;3.4</p>
+  </div>
+  <div class="verdict go">Build in Stage 4 alongside dynamic regridding. Relatively simple algorithm, non-negotiable for correctness.</div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="tier2">5. Tier 2 &mdash; High Value</h2>
+<div class="tier tier-2">Tier 2: High Value <small>Significant quality or performance improvements, most worth building soon after Tier 1</small></div>
+
+<!-- Morton encoding -->
+<div class="card" id="card-morton">
+  <div class="card-header">
+    <h3>Morton (Z-Order) Encoding</h3>
+    <div class="card-tags"><span class="tag tag-high">High Value</span> <span class="tag tag-easy">Easy</span></div>
+  </div>
+  <div class="card-section">
+    <h4>What</h4>
+    <p>Bit-interleaving of (ix, iy, iz) block coordinates to produce a single <code>int64_t</code> Morton index. Provides a space-filling curve ordering of blocks with a key property: face-neighbors differ by exactly one bit-group, making neighbor lookup O(1) via bit manipulation instead of tree traversal.</p>
+  </div>
+  <div class="card-section">
+    <h4>Why</h4>
+    <p>Fast neighbor finding is critical for ghost exchange (called every RK substep). Without Morton encoding, finding a block's 6 face-neighbors requires tree traversal or hash table lookup. With Morton encoding, neighbors are computed arithmetically in ~10 nanoseconds. Also provides natural load-balancing order for GPU batching.</p>
+  </div>
+  <div class="card-section">
+    <h4>Difficulty</h4>
+    <p><span class="tag tag-easy">Easy</span> &mdash; ~80 lines. Bit-interleave function, decode function, 6 neighbor functions (increment/decrement each coordinate in Morton space). Well-documented algorithm with known bit tricks. Header-only.</p>
+  </div>
+  <div class="card-section">
+    <h4>If Skipped</h4>
+    <p><strong class="neutral">Slower neighbor lookup.</strong> Would need a hash table or flat array search to find neighbors. Works but adds overhead to every ghost exchange call. For 1000+ blocks (N_BH &ge; 5), the O(N) search becomes noticeable.</p>
+  </div>
+  <div class="card-section">
+    <h4>Evidence</h4>
+    <p>Morton encoding is fundamental to Athena++, AthenaK, and p4est (the standard oct-tree library). Used in Dendro-GR for spatial sorting. The bit-interleave pattern is well-established in computational geometry and database indexing.</p>
+    <p class="ref">Athena++: Stone et al. 2020, &sect;3.3; p4est: Burstedde et al. 2011</p>
+  </div>
+  <div class="verdict go">Build in Stage 2. Tiny investment, large payoff. Unlocks efficient neighbor finding for all future stages.</div>
+</div>
+
+<!-- Chi-gradient criterion -->
+<div class="card" id="card-chi-gradient">
+  <div class="card-header">
+    <h3>Chi-Gradient Refinement Criterion</h3>
+    <div class="card-tags"><span class="tag tag-high">High Value</span> <span class="tag tag-easy">Easy</span></div>
+  </div>
+  <div class="card-section">
+    <h4>What</h4>
+    <p>Compute |&nabla;&chi;| &times; dx at each interior point of each block. If the maximum exceeds a threshold <code>chi_refine</code> (e.g., 0.1), flag the block for refinement. If below <code>chi_coarsen</code> (e.g., 0.01) for all 8 siblings, flag for coarsening. Chi is the conformal factor that goes to zero at punctures, so its gradient naturally identifies where black holes are and how much resolution they need.</p>
+  </div>
+  <div class="card-section">
+    <h4>Why</h4>
+    <p>AMR needs to know <em>where</em> to refine. The chi-gradient criterion is the simplest approach that works for arbitrary numbers of BHs: it doesn't need puncture positions, spin parameters, or mass ratios as input. It just measures where the spacetime curvature is steep and refines there.</p>
+  </div>
+  <div class="card-section">
+    <h4>Difficulty</h4>
+    <p><span class="tag tag-easy">Easy</span> &mdash; ~80 lines. Loop over interior points, compute |&nabla;&chi;| using existing FD macros, take max, compare to threshold. The thresholds need tuning per simulation, but the code is straightforward.</p>
+  </div>
+  <div class="card-section">
+    <h4>If Skipped</h4>
+    <p><strong class="neutral">Must use static refinement.</strong> Without a criterion, someone must manually specify which regions to refine. This works for single-BH tests but fails for inspiraling binaries (the BHs move) and is impractical for N &ge; 3 bodies.</p>
+  </div>
+  <div class="card-section">
+    <h4>Evidence</h4>
+    <p>GRChombo uses chi-gradient as their primary criterion. GR-Athena++ uses a similar approach. The alternative &mdash; truncation error estimation (see Tier 4) &mdash; is mathematically optimal but 2&times; more expensive. For most BBH simulations, chi-gradient gives the same block distribution as truncation error at half the cost.</p>
+    <p class="ref">GRChombo: Andrade et al. 2021, &sect;5.1; arXiv:2312.05438 (refinement strategy comparison)</p>
+  </div>
+  <div class="verdict go">Build in Stage 4. Simple, proven, essential for dynamic AMR. The standard choice.</div>
+</div>
+
+<!-- CAKO -->
+<div class="card" id="card-cako">
+  <div class="card-header">
+    <h3>CAKO &mdash; Curvature-Adjusted KO Dissipation</h3>
+    <div class="card-tags"><span class="tag tag-high">High Value</span> <span class="tag tag-easy">Easy</span></div>
+  </div>
+  <div class="card-section">
+    <h4>What</h4>
+    <p>Scale Kreiss-Oliger dissipation by the conformal factor W = &chi;: <code>sigma_CAKO = chi * sigma_base</code>. Near punctures where &chi; &rarr; 0, dissipation vanishes (preserving physical gradients). In the wave zone where &chi; &asymp; 1, full dissipation is applied (suppressing interpolation noise from refinement boundaries).</p>
+  </div>
+  <div class="card-section">
+    <h4>Why</h4>
+    <p>Standard constant-sigma KO dissipation has a fatal tension in AMR: you need strong dissipation to suppress noise at refinement boundaries, but strong dissipation near punctures damps the physical solution. CAKO resolves this by making dissipation spatially adaptive to the curvature &mdash; strong where noise is bad, weak where physics is sharp.</p>
+  </div>
+  <div class="card-section">
+    <h4>Difficulty</h4>
+    <p><span class="tag tag-easy">Easy</span> &mdash; <strong>One line of code.</strong> Multiply <code>sigma</code> by <code>chi</code> in <code>dissipation.c</code>. No new files, no new data structures, no architectural changes. The hardest part is reading the paper to understand why it works.</p>
+  </div>
+  <div class="card-section">
+    <h4>If Skipped</h4>
+    <p><strong class="neutral">2&ndash;5 orders of magnitude more constraint noise at refinement boundaries.</strong> The simulation will still run, but Hamiltonian constraint violations in the wave zone will be 10,000&times; larger. This contaminates gravitational wave extraction (Psi4). For N &ge; 3 bodies, the accumulated noise may destabilize the evolution.</p>
+  </div>
+  <div class="card-section">
+    <h4>Evidence</h4>
+    <p>arXiv:2404.01137 (Etienne 2024): validated across 100+ BBH configurations (q=1&ndash;6, spin up to 0.5). Strong-field Hamiltonian violations reduced by 2 OOM, wave-zone violations by 5 OOM. Available in Einstein Toolkit's BaikalVacuum thorn but not yet adopted by GRChombo, GR-Athena++, or BAM. The paper uses 9th-order KO on an 11-point stencil with sigma_base = 0.99 for gauge, 0.3 for others; we can start with our existing 6th-order stencil.</p>
+    <p class="ref">arXiv:2404.01137 (Etienne 2024), &sect;II.A, Fig. 2</p>
+  </div>
+  <div class="verdict go">Build in Stage 3. Highest value-to-effort ratio of any component. One line = 5 OOM improvement. No reason not to.</div>
+</div>
+
+<!-- Dynamic regridding -->
+<div class="card" id="card-regrid">
+  <div class="card-header">
+    <h3>Dynamic Regridding</h3>
+    <div class="card-tags"><span class="tag tag-high">High Value</span> <span class="tag tag-medium">Medium</span></div>
+  </div>
+  <div class="card-section">
+    <h4>What</h4>
+    <p>Every N_regrid steps (e.g., 10), re-evaluate the refinement criterion on all blocks, flag blocks for refinement or coarsening, enforce the 2:1 constraint, then actually split/merge blocks. Includes the refine operation (1 block &rarr; 8 children: allocate, prolongate, update tree) and coarsen operation (8 children &rarr; 1 parent: restrict, deallocate, update tree).</p>
+  </div>
+  <div class="card-section">
+    <h4>Why</h4>
+    <p>BHs move. During inspiral, the BH trajectories sweep through the domain. Static refinement centered on the initial positions becomes useless once the BHs move more than ~2 blocks. Dynamic regridding tracks the BHs automatically, maintaining high resolution where it's needed at each moment.</p>
+  </div>
+  <div class="card-section">
+    <h4>Difficulty</h4>
+    <p><span class="tag tag-medium">Medium</span> &mdash; Refine/coarsen operations plus tree bookkeeping. ~400 lines. Main subtleties: ensuring the tree stays consistent during split/merge (no dangling pointers), and that regridding doesn't introduce transient noise (because newly created fine blocks have prolongated &mdash; not evolved &mdash; data).</p>
+  </div>
+  <div class="card-section">
+    <h4>If Skipped</h4>
+    <p><strong class="neutral">Static refinement only.</strong> Must know BH positions in advance and pre-refine. Works for single BH tests (BH doesn't move) and short head-on collisions. Unusable for inspirals (BHs orbit for 10+ cycles before merging) and N-body (trajectories are chaotic).</p>
+  </div>
+  <div class="card-section">
+    <h4>Evidence</h4>
+    <p>GRChombo regrids every ~10 steps. Athena++ regrids with a configurable interval. Carpet regrids every coarse time step. Too frequent regridding wastes time; too infrequent loses track of moving features. N_regrid = 10 is the standard starting point.</p>
+    <p class="ref">GRChombo: Andrade et al. 2021, &sect;5.2; Carpet: Schnetter et al. 2004</p>
+  </div>
+  <div class="verdict go">Build in Stage 4 alongside chi-gradient and 2:1 constraint. Required for binary inspiral (Milestone 5).</div>
+</div>
+
+<!-- Subcycling -->
+<div class="card" id="card-subcycling">
+  <div class="card-header">
+    <h3>Time Subcycling</h3>
+    <div class="card-tags"><span class="tag tag-high">High Value</span> <span class="tag tag-hard">Hard</span></div>
+  </div>
+  <div class="card-section">
+    <h4>What</h4>
+    <p>Each refinement level uses its own timestep: dt_L = CFL &times; dx_L. Level L+1 takes 2 steps for every 1 step at level L (since dx is halved). A 6-level hierarchy does 32 fine steps per 1 coarse step. Without subcycling, all levels use dt = CFL &times; dx_finest, meaning coarse blocks (with few cells) take tiny, wasteful steps.</p>
+  </div>
+  <div class="card-section">
+    <h4>Why</h4>
+    <p><strong>Performance only.</strong> With 6 levels, global dt is 32&times; smaller than the coarse level's CFL limit. The coarse level has relatively few blocks, so the wasted work is proportional to (# coarse cells) &times; 31 unnecessary steps. For a typical 2-BH run with ~200 blocks, the coarse level might have 50 blocks &mdash; so global dt wastes 50 &times; 31 = 1550 extra block-steps per coarse step. Whether this matters depends on the fine-level cost.</p>
+  </div>
+  <div class="card-section">
+    <h4>Difficulty</h4>
+    <p><span class="tag tag-hard">Hard</span> &mdash; Recursive scheduling: advance fine levels, restrict to coarse, fill coarse ghosts, advance coarse. Must synchronize data at level boundaries after each sub-step. Inter-level ghost exchange timing becomes critical. ~600 lines. The scheduling logic is conceptually clean but implementation details (when to restrict, when to fill ghosts, how to handle regridding mid-cycle) are tricky.</p>
+  </div>
+  <div class="card-section">
+    <h4>If Skipped</h4>
+    <p><strong class="neutral">Higher cost per wall-clock second.</strong> All blocks advance at the finest dt. For 4&ndash;6 levels this is a 8&ndash;32&times; overhead on coarse blocks. In practice, coarse blocks are a small fraction of total blocks (most blocks are at the finest level near BHs), so the actual overhead is typically 2&ndash;5&times; for typical BBH runs. Athena++ itself supports both modes.</p>
+  </div>
+  <div class="card-section">
+    <h4>Evidence</h4>
+    <p>GRChombo, Carpet, and BAM all subcycle. AthenaK uses global dt (GPU efficiency favors fewer, larger kernel launches). Dendro-GR uses global dt. The performance benefit depends on the ratio of coarse to fine blocks &mdash; for N &ge; 5 BHs with many fine regions, global dt becomes more competitive because most blocks are fine anyway.</p>
+    <p class="ref">Carpet: Schnetter et al. 2004; Athena++ (both modes): Stone et al. 2020, &sect;4.5</p>
+  </div>
+  <div class="verdict maybe">Defer to Stage 5. Start with global dt (simpler, proven by AthenaK). Add subcycling later only if profiling shows coarse-level waste is a bottleneck. For GPU targets, global dt may actually be preferred.</div>
+</div>
+
+<!-- MeshBlockPack GPU batching -->
+<div class="card" id="card-meshblockpack">
+  <div class="card-header">
+    <h3>MeshBlockPack GPU Batching</h3>
+    <div class="card-tags"><span class="tag tag-high">High Value</span> <span class="tag tag-hard">Hard</span></div>
+  </div>
+  <div class="card-section">
+    <h4>What</h4>
+    <p>Pack all leaf blocks at the same level into a single contiguous buffer: <code>pack[field][block_idx][k][j][i]</code>. Dispatch one GPU kernel over (N_blocks &times; N_points) threads instead of N_blocks separate kernel launches. Ghost exchange also executed on-device (pack boundary slabs into send/receive buffers without host round-trips).</p>
+  </div>
+  <div class="card-section">
+    <h4>Why</h4>
+    <p>GPU kernel launch overhead dominates at small block sizes (16&sup3; = 4096 points). Launching 500 separate kernels for 500 blocks wastes ~5 ms per RK substep in launch overhead alone. Batching into 1 kernel eliminates this, achieving full GPU occupancy. This is the AthenaK innovation that made oct-tree AMR competitive with block-structured on GPUs.</p>
+  </div>
+  <div class="card-section">
+    <h4>Difficulty</h4>
+    <p><span class="tag tag-hard">Hard</span> &mdash; New memory layout for packed buffers, modified kernel dispatch, on-device ghost exchange. ~800 lines. Must ensure the packed layout is compatible with existing FD macros (or provide a thin adapter). The pack/unpack operations add some overhead that must be amortized over the kernel execution.</p>
+  </div>
+  <div class="card-section">
+    <h4>If Skipped</h4>
+    <p><strong class="neutral">GPU backend works but is 5&ndash;10&times; slower.</strong> Per-block kernel launches kill throughput on GPUs. The CPU backend (OpenMP threads) is fine without batching since there's no launch overhead. If GPU performance isn't needed yet, this can wait.</p>
+  </div>
+  <div class="card-section">
+    <h4>Evidence</h4>
+    <p>AthenaK benchmarks: MeshBlockPack achieves 90% of theoretical peak on A100 for GRMHD (comparable physics complexity to CCZ4). Without packing, they measured 10&ndash;15% utilization due to launch overhead. Dendro-GR uses a similar "batch all blocks" approach for GPU execution.</p>
+    <p class="ref">AthenaK: Grete et al. 2024 (arXiv:2409.16053), &sect;4.2, Fig. 5</p>
+  </div>
+  <div class="verdict maybe">Defer to Stage 6. Get AMR working on CPU first. Add GPU batching only when ready for production GPU runs. The CPU backend has no launch overhead problem.</div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="tier3">6. Tier 3 &mdash; Nice to Have</h2>
+<div class="tier tier-3">Tier 3: Nice to Have <small>Measurable improvements but not blocking &mdash; add when the basic system works</small></div>
+
+<!-- 4th-order Lagrange prolongation -->
+<div class="card" id="card-lagrange-prolong">
+  <div class="card-header">
+    <h3>4th-Order Lagrange Prolongation</h3>
+    <div class="card-tags"><span class="tag tag-nice">Nice to Have</span> <span class="tag tag-medium">Medium</span></div>
+  </div>
+  <div class="card-section">
+    <h4>What</h4>
+    <p>Upgrade prolongation from minmod (2nd-order) to 4th-order Lagrange polynomial interpolation. Uses a 4-point stencil in each direction (vs minmod's 2-point) to achieve accuracy matching the 4th-order FD scheme. No limiter &mdash; relies on CAKO + CAHD to control oscillations near punctures instead.</p>
+  </div>
+  <div class="card-section">
+    <h4>Why</h4>
+    <p>Minmod prolongation is only 2nd-order, creating a bottleneck at refinement boundaries that can degrade global convergence order from 4 to ~2&ndash;3. With 4th-order prolongation, the interpolation error matches the FD truncation error, and refinement boundaries become nearly invisible in convergence tests. Every mature NR code that uses 4th-order FD also uses &ge; 3rd-order prolongation.</p>
+  </div>
+  <div class="card-section">
+    <h4>Difficulty</h4>
+    <p><span class="tag tag-medium">Medium</span> &mdash; ~250 lines. The Lagrange interpolation formula is standard, but implementing it in 3D with correct index offsets for the coarse-fine mapping requires care. Must handle boundaries of the coarse stencil (need 2 coarse cells on each side of the interpolation point). This increases the effective ghost width requirement from 1 to 2 coarse cells per prolongation layer.</p>
+  </div>
+  <div class="card-section">
+    <h4>If Skipped</h4>
+    <p><strong class="neutral">Local convergence order drops to ~2 at refinement boundaries.</strong> Global convergence typically stays 3&ndash;3.5 (the 4th-order interior dominates). For gravitational wave extraction far from boundaries, this is usually fine. For constraint monitoring near refinement boundaries, the degradation is visible.</p>
+  </div>
+  <div class="card-section">
+    <h4>Evidence</h4>
+    <p>BAM uses 5th-order Lagrange prolongation. GRChombo uses 4th-order. Carpet defaults to 3rd-order (quadratic). All experienced convergence degradation before upgrading. The key finding: with CAKO suppressing interpolation noise, higher-order prolongation doesn't cause oscillation problems that motivated minmod in the first place.</p>
+    <p class="ref">BAM: Brugmann et al. 2008, &sect;3.3; GRChombo: Andrade et al. 2021, &sect;4.3</p>
+  </div>
+  <div class="verdict maybe">Defer to after Stage 4. Start with minmod (proven, stable). Upgrade to 4th-order Lagrange after measuring convergence order at refinement boundaries. If global order stays &ge; 3.5, minmod is fine. If it drops below 3, upgrade.</div>
+</div>
+
+<!-- CAHD -->
+<div class="card" id="card-cahd">
+  <div class="card-header">
+    <h3>CAHD &mdash; Coarse-Grid-Adjusted Hamiltonian Damping</h3>
+    <div class="card-tags"><span class="tag tag-nice">Nice to Have</span> <span class="tag tag-easy">Easy</span></div>
+  </div>
+  <div class="card-section">
+    <h4>What</h4>
+    <p>Scale constraint damping by refinement level: <code>kappa1_CAHD = kappa1_base * 2^(level_max - level)</code>. Coarser grids get exponentially stronger damping. At 5 levels of refinement, the coarsest grid has 32&times; the base kappa1.</p>
+  </div>
+  <div class="card-section">
+    <h4>Why</h4>
+    <p>Constraint violations accumulate worst on coarser grids (bigger cells = larger truncation error, plus prolongation injects noise from above). Standard constant kappa1 doesn't account for this. CAHD targets the damping where the problem is worst. Synergistic with CAKO: CAKO reduces noise generation, CAHD accelerates noise absorption.</p>
+  </div>
+  <div class="card-section">
+    <h4>Difficulty</h4>
+    <p><span class="tag tag-easy">Easy</span> &mdash; <strong>One line of code.</strong> Multiply kappa1 by <code>1 &lt;&lt; (max_level - block_level)</code> in <code>ccz4_rhs.c</code>. The block's level must be accessible in the RHS function (pass via params or a per-block field). No new files, no architectural changes.</p>
+  </div>
+  <div class="card-section">
+    <h4>If Skipped</h4>
+    <p><strong class="neutral">Momentum constraint violations 3 OOM larger on coarse grids.</strong> The simulation still runs (CCZ4's constraint damping still works, just at the base rate). For short evolutions (&lt; 1000M) or few levels (&le; 3), the effect is small. For long evolutions with 6+ levels, the accumulated violation becomes significant.</p>
+  </div>
+  <div class="card-section">
+    <h4>Evidence</h4>
+    <p>arXiv:2404.01137 (Etienne 2024): 3 OOM reduction in momentum constraints. Tested across 100+ BBH configurations. Effect becomes more important with more refinement levels. Not used by GRChombo, GR-Athena++, or BAM (they pre-date this paper). Easy to A/B test: run the same simulation with and without CAHD, compare constraint norms.</p>
+    <p class="ref">arXiv:2404.01137 (Etienne 2024), &sect;II.B, Fig. 3</p>
+  </div>
+  <div class="verdict go">Build in Stage 3 alongside CAKO. One line of code, significant constraint improvement. The only reason it's Tier 3 instead of Tier 2 is that it's less impactful than CAKO (3 OOM vs 5 OOM) and only matters with AMR (CAKO also helps single-grid). Given the trivial implementation, just do it.</div>
+</div>
+
+<!-- SSL -->
+<div class="card" id="card-ssl">
+  <div class="card-header">
+    <h3>SSL &mdash; Slow-Start Lapse</h3>
+    <div class="card-tags"><span class="tag tag-nice">Nice to Have</span> <span class="tag tag-easy">Easy</span></div>
+  </div>
+  <div class="card-section">
+    <h4>What</h4>
+    <p>Temporary damping of the initial gauge pulse during early evolution. The 1+log gauge generates a sharp superluminal pulse at &radic;2&middot;c from each puncture. When this pulse crosses AMR refinement boundaries, it reflects and generates noise. SSL adds a time-dependent damping term:<br>
+    <code>dt(&alpha;) = [standard] - W &middot; h &middot; exp(-t&sup2;/(2&sigma;_t&sup2;)) &middot; (&alpha; - W)</code><br>
+    with h = 0.6M, &sigma;_t = 20M. The damping is exponentially negligible after t &asymp; 170M.</p>
+  </div>
+  <div class="card-section">
+    <h4>Why</h4>
+    <p>The initial gauge pulse is a non-physical transient that exists in every moving-puncture evolution. On uniform grids, it just propagates outward and exits through the boundary. With AMR, it reflects at every refinement boundary, contaminating the solution. SSL smooths the pulse so it doesn't have sharp features to reflect.</p>
+  </div>
+  <div class="card-section">
+    <h4>Difficulty</h4>
+    <p><span class="tag tag-easy">Easy</span> &mdash; ~5 lines in the gauge section of <code>ccz4_rhs.c</code>. Add the SSL term to <code>rhs_lapse</code>, with two parameters (h, sigma_t) that can be hardcoded or added to params. Completely transparent after t &gt; 170M.</p>
+  </div>
+  <div class="card-section">
+    <h4>If Skipped</h4>
+    <p><strong class="neutral">4.3&times; more noise in dominant GW mode during early evolution.</strong> The gauge pulse noise decays over time as the pulse exits the domain, but for the first ~200M of evolution, it contaminates Psi4 extraction. Higher-order GW modes (l &ge; 4) may be below the noise floor without SSL. For short evolutions where only the merger waveform matters, this is acceptable.</p>
+  </div>
+  <div class="card-section">
+    <h4>Evidence</h4>
+    <p>arXiv:2404.01137 (Etienne 2024): 4.3&times; noise reduction in dominant (l=2, m=2) GW mode. Higher modes show even more improvement (previously undetectable modes become visible). Effect is purely during the initial transient &mdash; no impact on the gauge dynamics at late times. Only relevant for AMR; on uniform grids, the pulse propagates cleanly.</p>
+    <p class="ref">arXiv:2404.01137 (Etienne 2024), &sect;II.C, Fig. 4</p>
+  </div>
+  <div class="verdict go">Build in Stage 3. Tiny code change, measurable improvement in GW accuracy. Easy to A/B test. Not blocking, but the cost is so low that deferring makes no sense.</div>
+</div>
+
+<!-- Dense output -->
+<div class="card" id="card-dense-output">
+  <div class="card-header">
+    <h3>Dense Output (CarpetX Trick)</h3>
+    <div class="card-tags"><span class="tag tag-nice">Nice to Have</span> <span class="tag tag-hard">Hard</span></div>
+  </div>
+  <div class="card-section">
+    <h4>What</h4>
+    <p>When subcycling, fine and coarse levels aren't time-synchronized: the coarse level is at time t while the fine level needs coarse data at t + dt_fine. "Dense output" uses the RK method's intermediate stages to construct a continuous time interpolation polynomial, providing coarse data at any intermediate time to 4th-order accuracy. CarpetX implements this for Berger-Oliger subcycling.</p>
+  </div>
+  <div class="card-section">
+    <h4>Why</h4>
+    <p>Without dense output, subcycling uses the coarse solution at time t (or linearly interpolates between t and t+dt_coarse) to fill fine ghost zones at intermediate times. This introduces O(dt&sup2;) temporal error at refinement boundaries, reducing global time integration accuracy from 4th to 3rd order. Dense output maintains 4th-order accuracy.</p>
+  </div>
+  <div class="card-section">
+    <h4>Difficulty</h4>
+    <p><span class="tag tag-hard">Hard</span> &mdash; Requires storing all RK stages for each block (not just the current solution and RHS), computing the dense output polynomial coefficients, and evaluating them at arbitrary intermediate times. ~400 lines. Conceptually straightforward for CK45 (which has known dense output coefficients) but significantly complicates the time stepper code.</p>
+  </div>
+  <div class="card-section">
+    <h4>If Skipped</h4>
+    <p><strong class="neutral">Temporal order at refinement boundaries drops from 4 to 3.</strong> Only relevant if subcycling is implemented (with global dt, all levels are synchronized). BAM operates at 3rd-order temporal accuracy at boundaries and produces science-grade waveforms. The 4th-to-3rd reduction is measurable but not catastrophic.</p>
+  </div>
+  <div class="card-section">
+    <h4>Evidence</h4>
+    <p>CarpetX (Schnetter 2022) implements dense output for their Berger-Oliger subcycling, achieving 4th-order accuracy across levels. BAM doesn't use it and operates at 3rd order at boundaries. GRChombo doesn't use it either. The consensus is that spatial interpolation error (prolongation) dominates over temporal interpolation error, so this is low priority.</p>
+    <p class="ref">CarpetX: github.com/eschnett/CarpetX (2022); BAM: Brugmann et al. 2008</p>
+  </div>
+  <div class="verdict maybe">Defer indefinitely. Only relevant with subcycling, and even then, 3rd-order temporal accuracy at boundaries is usually sufficient. Build only if convergence tests show temporal error dominating spatial error at refinement boundaries.</div>
+</div>
+
+<!-- Per-field sigma -->
+<div class="card" id="card-per-field-sigma">
+  <div class="card-header">
+    <h3>Per-Field Dissipation Strength</h3>
+    <div class="card-tags"><span class="tag tag-nice">Nice to Have</span> <span class="tag tag-easy">Easy</span></div>
+  </div>
+  <div class="card-section">
+    <h4>What</h4>
+    <p>Use different KO dissipation strengths for different field groups: higher sigma for gauge variables (lapse, shift, B^i) which evolve faster and generate more noise, lower sigma for constraint-propagating variables (Theta, Gamma^i) where excessive dissipation can suppress constraint damping. Etienne 2024 uses sigma = 0.99 for gauge, 0.3 for others.</p>
+  </div>
+  <div class="card-section">
+    <h4>Why</h4>
+    <p>Gauge variables are the noisiest (the 1+log and Gamma-driver conditions have characteristic speeds &gt; c) and benefit most from strong dissipation. But applying sigma = 0.99 to physical variables like h_ij and A_ij would over-damp them. Per-field sigma allows optimal dissipation for each variable type.</p>
+  </div>
+  <div class="card-section">
+    <h4>Difficulty</h4>
+    <p><span class="tag tag-easy">Easy</span> &mdash; Change sigma from a single scalar to a per-field array (25 entries). Modify the dissipation loop to look up sigma_field[f] instead of a constant. ~20 lines changed. The values themselves need tuning via constraint convergence tests.</p>
+  </div>
+  <div class="card-section">
+    <h4>If Skipped</h4>
+    <p><strong class="neutral">Sub-optimal dissipation trade-off.</strong> A single sigma that's good for gauge variables will over-damp physical variables (and vice versa). The current sigma = 0.3 works for both but isn't optimal for either. The effect is measurable in constraint norms but unlikely to cause instability.</p>
+  </div>
+  <div class="card-section">
+    <h4>Evidence</h4>
+    <p>arXiv:2404.01137 uses sigma = 0.99 for gauge, 0.3 for everything else. Einstein Toolkit's BaikalVacuum thorn implements this. GRChombo and GR-Athena++ use a single sigma for all fields. The per-field approach is newer and less widely adopted.</p>
+    <p class="ref">arXiv:2404.01137 (Etienne 2024), &sect;II.A, Table 1</p>
+  </div>
+  <div class="verdict maybe">Defer to after CAKO is working. Easy change, but requires tuning. Add it if CAKO alone doesn't sufficiently suppress gauge noise, or if constraint convergence tests show gauge variables dominating the error.</div>
+</div>
+
+<!-- Edge/corner ghost handling -->
+<div class="card" id="card-edge-corner">
+  <div class="card-header">
+    <h3>Direct Edge &amp; Corner Ghost Exchange</h3>
+    <div class="card-tags"><span class="tag tag-nice">Nice to Have</span> <span class="tag tag-medium">Medium</span></div>
+  </div>
+  <div class="card-section">
+    <h4>What</h4>
+    <p>Fill ghost zone edges (12 per block) and corners (8 per block) by direct copy from diagonally-adjacent blocks, rather than relying on sequential face exchanges to propagate data through edges/corners. Face exchange alone requires 3 passes (x, then y, then z) to fill edge and corner ghosts transitively.</p>
+  </div>
+  <div class="card-section">
+    <h4>Why</h4>
+    <p>The 3-pass face-exchange approach works but is serial (can't parallelize the 3 directions). Direct edge/corner exchange allows all 26 neighbors (6 face + 12 edge + 8 corner) to communicate in a single parallel pass. This matters for GPU execution where synchronization barriers between passes are expensive.</p>
+  </div>
+  <div class="card-section">
+    <h4>Difficulty</h4>
+    <p><span class="tag tag-medium">Medium</span> &mdash; ~300 lines. Must identify all 26 neighbors for each block (not just 6 face-neighbors). Edge and corner neighbors at different refinement levels require special handling. The index arithmetic is tedious but well-defined.</p>
+  </div>
+  <div class="card-section">
+    <h4>If Skipped</h4>
+    <p><strong class="neutral">3-pass face exchange works correctly.</strong> Slightly slower due to 3 serial passes instead of 1 parallel pass. On CPU, the difference is negligible. On GPU with many blocks, the 3 synchronization barriers add ~0.5 ms per exchange. For &lt; 500 blocks, this is under 1% of step time.</p>
+  </div>
+  <div class="card-section">
+    <h4>Evidence</h4>
+    <p>Athena++ uses the 3-pass approach (face only, 3 communication rounds). AthenaK adds direct edge/corner exchange for GPU efficiency. GRChombo handles edges/corners via Chombo's ghost fill machinery. For our initial CPU implementation, the 3-pass approach is fine.</p>
+    <p class="ref">AthenaK: Grete et al. 2024, &sect;4.1</p>
+  </div>
+  <div class="verdict maybe">Defer to Stage 6 (GPU optimization). The 3-pass face exchange is correct, simple, and fast enough for CPU. Add direct edge/corner exchange only if GPU profiling shows ghost exchange as a bottleneck.</div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="tier4">7. Tier 4 &mdash; Probably Skip</h2>
+<div class="tier tier-4">Tier 4: Probably Skip <small>High effort, marginal value, or superseded by our architecture choices</small></div>
+
+<!-- Truncation error criterion -->
+<div class="card" id="card-truncation-error">
+  <div class="card-header">
+    <h3>Truncation Error Refinement Criterion</h3>
+    <div class="card-tags"><span class="tag tag-skip">Probably Skip</span> <span class="tag tag-hard">Hard</span></div>
+  </div>
+  <div class="card-section">
+    <h4>What</h4>
+    <p>Estimate the local truncation error by computing the solution on the current grid and a coarsened copy (2&times; dx), then measuring the difference. Where the difference exceeds a threshold, refine. This is mathematically the optimal refinement criterion &mdash; it directly measures what AMR is trying to reduce.</p>
+  </div>
+  <div class="card-section">
+    <h4>Why</h4>
+    <p>Chi-gradient is a proxy for truncation error (regions of steep chi are also regions of large truncation error). Truncation error estimation is the "ground truth" &mdash; it doesn't require choosing which variable to monitor or what gradient threshold to use. It automatically adapts to any source of error, not just curvature.</p>
+  </div>
+  <div class="card-section">
+    <h4>Difficulty</h4>
+    <p><span class="tag tag-hard">Hard</span> &mdash; Must compute RHS on a coarsened copy of each block (restrict to half resolution, compute RHS, compare). This doubles the RHS cost at regridding time. ~400 lines plus a coarsened-grid RHS evaluation framework. The coarsening must respect ghost zones and boundary conditions.</p>
+  </div>
+  <div class="card-section">
+    <h4>If Skipped</h4>
+    <p><strong class="neutral">Use chi-gradient instead.</strong> For BBH, chi-gradient produces nearly identical refinement patterns to truncation error estimation (because the dominant error source is the BH curvature). For exotic physics where error comes from non-curvature sources (e.g., electromagnetic fields in Phase 2), truncation error might refine differently. But by then, we can add field-specific criteria.</p>
+  </div>
+  <div class="card-section">
+    <h4>Evidence</h4>
+    <p>arXiv:2312.05438 compared chi-gradient, truncation error, and box-in-box refinement for BBH. Result: chi-gradient and truncation error produce the same block distribution for BBH, but chi-gradient is 2&times; cheaper. Dendro-GR uses truncation error (it's natural for wavelet-based AMR). GRChombo and Carpet use truncation error as an option but recommend simpler criteria for production BBH runs.</p>
+    <p class="ref">arXiv:2312.05438 (2024), &sect;4, Fig. 8</p>
+  </div>
+  <div class="verdict no">Skip for Phase 1. Chi-gradient gives the same result at half the cost for BBH. Revisit only if Phase 2 physics (electromagnetic fields) introduces non-curvature error sources that chi-gradient can't detect.</div>
+</div>
+
+<!-- Vertex-centered discretization -->
+<div class="card" id="card-vertex-centered">
+  <div class="card-header">
+    <h3>Vertex-Centered Discretization</h3>
+    <div class="card-tags"><span class="tag tag-skip">Probably Skip</span> <span class="tag tag-hard">Hard</span></div>
+  </div>
+  <div class="card-section">
+    <h4>What</h4>
+    <p>Store field values at grid vertices (cell corners) instead of cell centers. At refinement boundaries, coarse and fine grids share coincident vertices, so no interpolation is needed at those points &mdash; the fine grid simply copies the coarse value exactly. GR-Athena++ uses this approach.</p>
+  </div>
+  <div class="card-section">
+    <h4>Why</h4>
+    <p>Reduces interpolation error at refinement boundaries by eliminating interpolation at shared vertices. The remaining interpolation (for non-coincident fine-grid points) is better conditioned because it has an exact anchor point.</p>
+  </div>
+  <div class="card-section">
+    <h4>Difficulty</h4>
+    <p><span class="tag tag-hard">Hard</span> &mdash; <strong>Architectural change.</strong> Our entire codebase (grid layout, FD stencils, initial data, diagnostics, output) assumes cell-centered storage. Switching to vertex-centered would require modifying every component. This is a design decision that should have been made at the start; retrofitting it is a rewrite.</p>
+  </div>
+  <div class="card-section">
+    <h4>If Skipped</h4>
+    <p><strong class="neutral">More interpolation error at refinement boundaries.</strong> Cell-centered is the standard for most NR codes (GRChombo, BAM, Carpet, Dendro-GR). CAKO + CAHD + SSL address the same noise problem through different means. GR-Athena++ chose vertex-centered partly because Athena++ was already vertex-centered for MHD reasons (divergence-free constraint).</p>
+  </div>
+  <div class="card-section">
+    <h4>Evidence</h4>
+    <p>GR-Athena++ uses vertex-centered and reports good boundary behavior. But they also note that their approach requires special treatment at block corners and edges. GRChombo, BAM, Einstein Toolkit, and Dendro-GR all use cell-centered and produce science-grade results. The choice is a trade-off, not a clear winner.</p>
+    <p class="ref">GR-Athena++: Daszuta et al. 2021, &sect;2.1; Athena++: Stone et al. 2020, &sect;2.2</p>
+  </div>
+  <div class="verdict no">Skip. Architectural change to an already-working codebase. CAKO + CAHD + SSL achieve similar noise reduction without touching the discretization. Not worth the rewrite.</div>
+</div>
+
+<!-- Flux correction / refluxing -->
+<div class="card" id="card-flux-correction">
+  <div class="card-header">
+    <h3>Flux Correction / Refluxing</h3>
+    <div class="card-tags"><span class="tag tag-skip">Probably Skip</span> <span class="tag tag-hard">Hard</span></div>
+  </div>
+  <div class="card-section">
+    <h4>What</h4>
+    <p>At refinement boundaries, replace the coarse-grid flux with the sum of fine-grid fluxes, ensuring conservation across the interface. Standard in hydro/MHD AMR (AMReX, Chombo, Athena++). For NR, this means matching the CCZ4 "fluxes" (advection terms) at coarse-fine interfaces.</p>
+  </div>
+  <div class="card-section">
+    <h4>Why</h4>
+    <p>Ensures conservation of evolved quantities across refinement boundaries. In hydro, this prevents mass/energy from "leaking" at interfaces. In NR, the analogous conservation is less clear &mdash; the CCZ4 system isn't written in conservative form, and the evolved quantities (h_ij, K, etc.) don't have a clear conservation interpretation.</p>
+  </div>
+  <div class="card-section">
+    <h4>Difficulty</h4>
+    <p><span class="tag tag-hard">Hard</span> &mdash; Must identify and store fluxes at coarse-fine interfaces, accumulate fine-grid flux contributions, and apply the correction. ~500 lines. Requires the CCZ4 system to be decomposable into flux + source form, which it isn't naturally (the non-principal part contains Christoffel terms that aren't fluxes).</p>
+  </div>
+  <div class="card-section">
+    <h4>If Skipped</h4>
+    <p><strong class="neutral">No conservation at refinement boundaries.</strong> For vacuum NR, this is fine &mdash; constraint damping (CCZ4's Theta and Z_i) serves a similar role by actively correcting violations. BAM's experience: flux correction helps at refinement boundaries but only for the principal part, and source terms remain unmatched. The benefit is marginal compared to CAKO/CAHD.</p>
+  </div>
+  <div class="card-section">
+    <h4>Evidence</h4>
+    <p>BAM implemented flux correction for BSSN and found partial improvement (principal terms only). GRChombo inherits refluxing from Chombo but notes it's "not essential for vacuum spacetimes." Einstein Toolkit (Carpet) doesn't use flux correction for NR. GR-Athena++ and Dendro-GR don't use it. The consensus: flux correction matters for matter (neutron star mergers) but not for vacuum BH spacetimes.</p>
+    <p class="ref">BAM: Brugmann et al. 2008, &sect;3.4; GRChombo: Andrade et al. 2021, &sect;4.4</p>
+  </div>
+  <div class="verdict no">Skip for Phase 1 (vacuum BH only). Revisit in Phase 2 only if adding matter coupling. CAKO + CAHD handle the boundary noise that flux correction would partially address.</div>
+</div>
+
+<!-- Buffer zones -->
+<div class="card" id="card-buffer-zones">
+  <div class="card-header">
+    <h3>Buffer Zones</h3>
+    <div class="card-tags"><span class="tag tag-skip">Probably Skip</span> <span class="tag tag-medium">Medium</span></div>
+  </div>
+  <div class="card-section">
+    <h4>What</h4>
+    <p>Add extra "buffer" blocks around refined regions &mdash; blocks that are refined not because they need high resolution, but to push the refinement boundary farther from the physics. GRChombo uses 3-block-wide buffers around each refined region. The idea is that interpolation error decays with distance from the boundary.</p>
+  </div>
+  <div class="card-section">
+    <h4>Why</h4>
+    <p>Refinement boundary noise is worst right at the boundary. By adding buffer blocks, the important physics (BH, GW extraction sphere) is farther from the noise source. This is the brute-force approach to the same problem that CAKO/CAHD/SSL solve elegantly.</p>
+  </div>
+  <div class="card-section">
+    <h4>Difficulty</h4>
+    <p><span class="tag tag-medium">Medium</span> &mdash; Modify the refinement criterion to expand flagged regions by N_buffer blocks in each direction. ~100 lines. The cost is in memory and compute: 3-block-wide buffers roughly double the number of blocks at each level.</p>
+  </div>
+  <div class="card-section">
+    <h4>If Skipped</h4>
+    <p><strong class="neutral">No wasted blocks.</strong> Without buffers, every refined block is there because the physics demands it. CAKO + CAHD + SSL reduce boundary noise directly, making buffers redundant. The only case for buffers is if CAKO alone is insufficient.</p>
+  </div>
+  <div class="card-section">
+    <h4>Evidence</h4>
+    <p>GRChombo uses 3-block buffers and still reports significant boundary noise. This suggests buffers alone aren't enough &mdash; you still need dissipation strategies. arXiv:2404.01137's CAKO achieves better noise reduction than GRChombo's buffers. Buffer zones are the "old" approach; CAKO/CAHD/SSL are the "new" approach.</p>
+    <p class="ref">GRChombo: Andrade et al. 2021, &sect;5.2; arXiv:2404.01137, &sect;I</p>
+  </div>
+  <div class="verdict no">Skip. Buffer zones trade memory for noise reduction that CAKO/CAHD/SSL achieve for free. If those techniques work as reported, buffers are pure waste.</div>
+</div>
+
+<!-- Box-in-box refinement -->
+<div class="card" id="card-box-in-box">
+  <div class="card-header">
+    <h3>Box-in-Box Refinement</h3>
+    <div class="card-tags"><span class="tag tag-skip">Probably Skip</span> <span class="tag tag-medium">Medium</span></div>
+  </div>
+  <div class="card-section">
+    <h4>What</h4>
+    <p>Pre-defined nested cubes of increasing resolution centered on each BH. Each level is a single large box (not decomposed into oct-tree blocks). The classic "Carpet-style" approach: level 0 covers the whole domain, level 1 is a box around both BHs, level 2 has two boxes (one per BH), etc. No adaptivity &mdash; the box positions/sizes are specified in the parameter file.</p>
+  </div>
+  <div class="card-section">
+    <h4>Why</h4>
+    <p>Simpler than adaptive oct-tree AMR: no refinement criterion, no regridding, no 2:1 constraint enforcement. Each level is a contiguous array (no block decomposition overhead). Good for well-understood configurations where BH trajectories are roughly known.</p>
+  </div>
+  <div class="card-section">
+    <h4>Difficulty</h4>
+    <p><span class="tag tag-medium">Medium</span> &mdash; Different architecture from oct-tree. Would need a separate refinement path or a hybrid system. Implementing box-in-box alongside oct-tree adds complexity without sharing much code.</p>
+  </div>
+  <div class="card-section">
+    <h4>If Skipped</h4>
+    <p><strong class="neutral">Use oct-tree with static refinement for the same effect.</strong> An oct-tree mesh can approximate box-in-box by statically refining blocks in a cube pattern. The result is identical physics with slightly more memory overhead (block boundaries within each "box"). The overhead is ~20% at 16&sup3; block size.</p>
+  </div>
+  <div class="card-section">
+    <h4>Evidence</h4>
+    <p>arXiv:2312.05438 compared box-in-box, sphere-in-sphere, and adaptive refinement for BBH. Box-in-box uses 2.5&times; more cells than sphere-in-sphere for the same accuracy. For N &ge; 3 BHs, box-in-box becomes impractical (overlapping boxes, wasted cells in empty space between BHs). The oct-tree approach subsumes box-in-box as a special case.</p>
+    <p class="ref">arXiv:2312.05438 (2024), &sect;3, Table 2</p>
+  </div>
+  <div class="verdict no">Skip. Oct-tree with static refinement provides the same capability with the same code. Box-in-box is a dead-end architecture that doesn't scale to N &ge; 3.</div>
+</div>
+
+<!-- Per-block GPU kernels -->
+<div class="card" id="card-per-block-gpu">
+  <div class="card-header">
+    <h3>Per-Block GPU Kernels</h3>
+    <div class="card-tags"><span class="tag tag-skip">Probably Skip</span> <span class="tag tag-medium">Medium</span></div>
+  </div>
+  <div class="card-section">
+    <h4>What</h4>
+    <p>Launch a separate GPU kernel for each block's RHS evaluation, rather than batching all blocks into a single kernel (MeshBlockPack). Each block gets its own <code>#pragma omp target teams distribute</code> region.</p>
+  </div>
+  <div class="card-section">
+    <h4>Why</h4>
+    <p>Simpler to implement than MeshBlockPack &mdash; just wrap the existing single-block kernel dispatch in a loop over blocks. No pack/unpack, no new data layout. Could serve as an intermediate step before full batching.</p>
+  </div>
+  <div class="card-section">
+    <h4>Difficulty</h4>
+    <p><span class="tag tag-medium">Medium</span> &mdash; ~100 lines. Loop over blocks, dispatch each one. Must manage data transfers (upload each block's fields to GPU, download results). The data transfer overhead is the bottleneck.</p>
+  </div>
+  <div class="card-section">
+    <h4>If Skipped</h4>
+    <p><strong class="neutral">Go directly to MeshBlockPack.</strong> Per-block kernels are the wrong approach for GPUs &mdash; the launch overhead and data transfer latency dominate. AthenaK's benchmarks show 10&ndash;15% GPU utilization without batching. It's better to skip this and invest the time in MeshBlockPack directly.</p>
+  </div>
+  <div class="card-section">
+    <h4>Evidence</h4>
+    <p>AthenaK explicitly abandoned per-block kernels in favor of MeshBlockPack, citing unacceptable launch overhead. Dendro-GR uses a similar batch approach. No modern GPU AMR code uses per-block kernels in production.</p>
+    <p class="ref">AthenaK: Grete et al. 2024, &sect;4.2</p>
+  </div>
+  <div class="verdict no">Skip. Per-block GPU kernels are a known anti-pattern. If GPU execution is needed, build MeshBlockPack (Tier 2) directly.</div>
+</div>
+
+<!-- Static refinement (manual) -->
+<div class="card" id="card-static-refinement">
+  <div class="card-header">
+    <h3>Static Refinement (Manual Specification)</h3>
+    <div class="card-tags"><span class="tag tag-skip">Probably Skip</span> <span class="tag tag-easy">Easy</span></div>
+  </div>
+  <div class="card-section">
+    <h4>What</h4>
+    <p>Allow the user to manually specify which regions to refine (e.g., "refine all blocks within radius R of point P to level L"). Refinement is fixed at initialization and never changes during evolution. No criterion evaluation, no regridding.</p>
+  </div>
+  <div class="card-section">
+    <h4>Why</h4>
+    <p>Useful for debugging and testing: test 2-level ghost exchange without needing the full regridding machinery. Also useful for single-BH tests where the BH doesn't move.</p>
+  </div>
+  <div class="card-section">
+    <h4>Difficulty</h4>
+    <p><span class="tag tag-easy">Easy</span> &mdash; ~50 lines. Parse a region specification, refine matching blocks at initialization. No ongoing maintenance.</p>
+  </div>
+  <div class="card-section">
+    <h4>If Skipped</h4>
+    <p><strong class="neutral">Use chi-gradient from the start.</strong> The chi-gradient criterion at initialization produces the same refinement pattern as "refine around the puncture" &mdash; it just determines the pattern automatically. Static refinement is a convenience, not a necessity. For testing, we can use chi-gradient with regridding disabled (flag once, never re-evaluate).</p>
+  </div>
+  <div class="card-section">
+    <h4>Evidence</h4>
+    <p>Carpet supports static refinement via parameter files. GRChombo supports it as "fixed boxes." Both primarily use it for testing and simple configurations. For any production run, adaptive refinement is preferred.</p>
+    <p class="ref">Carpet: Schnetter et al. 2004, &sect;3.1</p>
+  </div>
+  <div class="verdict no">Skip as a dedicated feature. Use chi-gradient with regrid_every=0 (evaluate once at t=0, never update) for the same effect. Saves implementing a separate code path.</div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="stages">8. Stage &rarr; Component Mapping</h2>
+
+<p>How the components map onto the 6-stage implementation plan from <code>plan.md</code>:</p>
+
+<div class="stage-map">
+  <div class="stage-box"><strong>Stage 1</strong>block_t<br>mesh_t</div>
+  <div class="stage-box"><strong>Stage 2</strong>Same-level ghost<br>Morton encoding</div>
+  <div class="stage-box"><strong>Stage 3</strong>Prolongation<br>Restriction<br>CAKO + CAHD + SSL</div>
+  <div class="stage-box"><strong>Stage 4</strong>Cross-level ghost<br>Chi-gradient<br>Dynamic regrid<br>2:1 constraint</div>
+  <div class="stage-box"><strong>Stage 5</strong>Subcycling<br><span style="color:var(--text-dim)">(defer: start with global dt)</span></div>
+  <div class="stage-box"><strong>Stage 6</strong>MeshBlockPack<br>Edge/corner ghost<br><span style="color:var(--text-dim)">(defer: GPU optimization)</span></div>
+</div>
+
+<h3>Stage dependencies (strict ordering)</h3>
+<table>
+<tr><th>Stage</th><th>Depends on</th><th>Test gate</th></tr>
+<tr><td>1</td><td>&mdash;</td><td>1-block mesh = old grid_t to roundoff</td></tr>
+<tr><td>2</td><td>Stage 1</td><td>64-block uniform mesh = single-grid to roundoff</td></tr>
+<tr><td>3</td><td>Stage 2</td><td>Prolongation O(dx&sup2;), CAKO doesn't change flat spacetime</td></tr>
+<tr><td>4</td><td>Stage 3</td><td>Single BH with 2 levels: constraints bounded &amp; convergent</td></tr>
+<tr><td>5</td><td>Stage 4</td><td>Global dt = subcycled to time integration error</td></tr>
+<tr><td>6</td><td>Stage 4</td><td>GPU batch = CPU sequential to roundoff</td></tr>
+</table>
+
+<div class="hl">
+<strong>Minimum viable AMR = Stages 1&ndash;4.</strong> This gives you multi-level adaptive refinement with noise reduction, sufficient for binary inspiral (Milestone 5). Stages 5&ndash;6 are performance optimizations that can wait until CPU performance is a bottleneck.
+</div>
+
+<h3>Estimated effort</h3>
+<table>
+<tr><th>Stage</th><th>New code (lines)</th><th>Estimated time</th><th>Cumulative</th></tr>
+<tr><td>1</td><td>~650</td><td>2&ndash;3 days</td><td>2&ndash;3 days</td></tr>
+<tr><td>2</td><td>~500</td><td>3&ndash;4 days</td><td>5&ndash;7 days</td></tr>
+<tr><td>3</td><td>~400</td><td>2&ndash;3 days</td><td>7&ndash;10 days</td></tr>
+<tr><td>4</td><td>~800</td><td>5&ndash;7 days</td><td>12&ndash;17 days</td></tr>
+<tr><td>5</td><td>~600</td><td>4&ndash;5 days</td><td>16&ndash;22 days</td></tr>
+<tr><td>6</td><td>~800</td><td>5&ndash;7 days</td><td>21&ndash;29 days</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="refs">9. References</h2>
+
+<h3>AMR Architecture</h3>
+<ul>
+  <li><strong>Athena++:</strong> Stone et al. 2020, ApJS 249, 4 &mdash; oct-tree AMR design, MeshBlock, ghost exchange</li>
+  <li><strong>GR-Athena++:</strong> Daszuta et al. 2021, ApJS 257, 25 &mdash; BBH with oct-tree AMR, vertex-centered</li>
+  <li><strong>AthenaK:</strong> Grete et al. 2024, arXiv:2409.16053 &mdash; GPU batching, MeshBlockPack</li>
+  <li><strong>GRChombo:</strong> Andrade et al. 2021, JOSS 6(68), 3703 &mdash; block-structured AMR with CCZ4</li>
+  <li><strong>Carpet:</strong> Schnetter et al. 2004, CQG 21, 1465 &mdash; Berger-Oliger for Einstein Toolkit</li>
+  <li><strong>Berger &amp; Oliger:</strong> 1984, J. Comput. Phys. 53, 484 &mdash; original AMR paper</li>
+  <li><strong>p4est:</strong> Burstedde et al. 2011, SIAM J. Sci. Comput. 33, 1103 &mdash; scalable oct-tree library</li>
+</ul>
+
+<h3>Refinement Boundary Noise Reduction</h3>
+<ul>
+  <li><strong>arXiv:2404.01137</strong> (Etienne 2024) &mdash; CAKO + CAHD + SSL, 2&ndash;5 OOM improvement, 100+ BBH configs</li>
+  <li><strong>arXiv:2112.10567</strong> &mdash; lessons for AMR in numerical relativity</li>
+  <li><strong>arXiv:1504.01266</strong> &mdash; conservative mesh refinement for NS mergers</li>
+  <li><strong>arXiv:1003.0859</strong> (Muller &amp; Brugmann) &mdash; position-dependent eta</li>
+</ul>
+
+<h3>Refinement Strategy Comparison</h3>
+<ul>
+  <li><strong>arXiv:2312.05438</strong> (2024) &mdash; box-in-box vs sphere-in-sphere vs truncation error, fill efficiency analysis</li>
+</ul>
+
+<h3>NR Codes</h3>
+<ul>
+  <li><strong>BAM:</strong> Brugmann et al. 2008 &mdash; block-structured, flux correction, 5th-order prolongation</li>
+  <li><strong>Dendro-GR:</strong> wavelet-based oct-tree AMR</li>
+  <li><strong>NRPy+/BlackHoles@Home:</strong> multi-patch, home of CAKO/CAHD/SSL development</li>
+  <li><strong>CarpetX:</strong> AMReX-based Carpet replacement with dense output</li>
+  <li><strong>SpECTRE:</strong> task-based parallelism, DG-FD hybrid (fundamentally different approach)</li>
+</ul>
+
+<hr>
+<p class="ref">Last updated: 2026-02-16. Companion to <a href="amr_options.html">amr_options.html</a> (architecture rationale) and <code>plan.md</code> (implementation stages).</p>
+
+</body>
+</html>

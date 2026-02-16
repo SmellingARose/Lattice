@@ -1,0 +1,866 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lattice Architecture Reference</title>
+<style>
+/* ===== Reset & Base ===== */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { font-size: 15px; scroll-behavior: smooth; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  color: #2d333b; background: #f6f8fa; line-height: 1.6;
+  display: flex; min-height: 100vh;
+}
+
+/* ===== Sidebar ===== */
+nav.sidebar {
+  position: fixed; top: 0; left: 0; bottom: 0; width: 260px;
+  background: #1c2128; color: #adbac7; overflow-y: auto;
+  padding: 20px 0; z-index: 100; font-size: 0.87rem;
+}
+nav.sidebar::-webkit-scrollbar { width: 6px; }
+nav.sidebar::-webkit-scrollbar-thumb { background: #444c56; border-radius: 3px; }
+nav.sidebar .logo { padding: 0 20px 18px; border-bottom: 1px solid #373e47; margin-bottom: 12px; }
+nav.sidebar .logo h1 { font-size: 1.25rem; color: #e6edf3; font-weight: 700; letter-spacing: 0.5px; }
+nav.sidebar .logo p { font-size: 0.75rem; color: #768390; margin-top: 2px; }
+nav.sidebar ul { list-style: none; }
+nav.sidebar ul li a {
+  display: block; padding: 6px 20px; color: #adbac7; text-decoration: none;
+  transition: background 0.15s, color 0.15s;
+}
+nav.sidebar ul li a:hover { background: #262c36; color: #e6edf3; }
+nav.sidebar ul li a.section-header {
+  font-size: 0.7rem; text-transform: uppercase; letter-spacing: 1.2px;
+  color: #636e7b; margin-top: 14px; pointer-events: none; font-weight: 600;
+}
+nav.sidebar ul li a .status-dot {
+  display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle;
+}
+.dot-green { background: #3fb950; }
+.dot-yellow { background: #d29922; }
+.dot-gray { background: #636e7b; }
+
+/* ===== Main content ===== */
+main {
+  margin-left: 260px; flex: 1; padding: 32px 48px 80px;
+  max-width: 1100px;
+}
+main h2 {
+  font-size: 1.5rem; color: #1c2128; margin-top: 44px; margin-bottom: 12px;
+  padding-bottom: 8px; border-bottom: 2px solid #d0d7de;
+}
+main h2:first-of-type { margin-top: 0; }
+main h3 { font-size: 1.15rem; color: #2d333b; margin-top: 28px; margin-bottom: 8px; }
+main h4 { font-size: 1rem; color: #444c56; margin-top: 18px; margin-bottom: 6px; }
+main p { margin-bottom: 10px; }
+main ul, main ol { margin-left: 22px; margin-bottom: 10px; }
+main li { margin-bottom: 4px; }
+main code {
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', Menlo, Consolas, monospace;
+  font-size: 0.88em; background: #eef1f5; padding: 1px 5px; border-radius: 3px;
+}
+main pre {
+  background: #1c2128; color: #adbac7; padding: 16px 20px; border-radius: 6px;
+  overflow-x: auto; font-size: 0.82rem; line-height: 1.55; margin: 12px 0 16px;
+  font-family: 'SF Mono', 'Fira Code', Menlo, Consolas, monospace;
+}
+main pre code { background: none; padding: 0; color: inherit; font-size: inherit; }
+a { color: #2f81f7; text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ===== Banner ===== */
+.banner {
+  background: #ddf4ff; border: 1px solid #54aeff44; border-radius: 6px;
+  padding: 14px 18px; margin-bottom: 24px; font-size: 0.88rem; color: #1a4b77;
+}
+.banner strong { color: #0550ae; }
+
+/* ===== Status badges ===== */
+.badge {
+  display: inline-block; font-size: 0.72rem; font-weight: 600; padding: 2px 8px;
+  border-radius: 10px; vertical-align: middle; letter-spacing: 0.3px;
+}
+.badge-green { background: #2ea04333; color: #1a7f37; }
+.badge-yellow { background: #d299221a; color: #9a6700; }
+.badge-gray { background: #636e7b22; color: #57606a; }
+
+/* ===== File table ===== */
+table.file-table {
+  width: 100%; border-collapse: collapse; margin: 12px 0 20px; font-size: 0.88rem;
+}
+table.file-table th {
+  text-align: left; padding: 8px 10px; background: #eef1f5;
+  border-bottom: 2px solid #d0d7de; font-weight: 600; color: #1c2128;
+}
+table.file-table td {
+  padding: 7px 10px; border-bottom: 1px solid #d8dee4; vertical-align: top;
+}
+table.file-table tr:hover td { background: #f3f6fa; }
+table.file-table td:first-child { font-family: 'SF Mono', Menlo, monospace; font-size: 0.84em; white-space: nowrap; }
+
+/* ===== Collapsible sections ===== */
+details { margin: 10px 0; }
+details > summary {
+  cursor: pointer; font-weight: 600; color: #1c2128; padding: 10px 14px;
+  background: #f3f6fa; border: 1px solid #d8dee4; border-radius: 6px;
+  list-style: none; user-select: none; transition: background 0.15s;
+}
+details > summary::-webkit-details-marker { display: none; }
+details > summary::before {
+  content: '\25B6'; display: inline-block; margin-right: 8px; font-size: 0.7em;
+  transition: transform 0.2s; color: #636e7b;
+}
+details[open] > summary::before { transform: rotate(90deg); }
+details > summary:hover { background: #eaeff4; }
+details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-top: none; border-radius: 0 0 6px 6px; }
+
+/* ===== Diagram ===== */
+.diagram {
+  background: #1c2128; color: #7ee787; padding: 20px 24px; border-radius: 6px;
+  font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 0.78rem;
+  line-height: 1.5; overflow-x: auto; margin: 14px 0 18px; white-space: pre;
+}
+.diagram .comment { color: #636e7b; }
+.diagram .highlight { color: #f0883e; }
+.diagram .type { color: #79c0ff; }
+.diagram .fn { color: #d2a8ff; }
+
+/* ===== Dep graph ===== */
+.dep-arrow { color: #768390; }
+.dep-file { color: #79c0ff; font-weight: 500; }
+
+/* ===== Responsive ===== */
+@media (max-width: 900px) {
+  nav.sidebar { position: static; width: 100%; }
+  main { margin-left: 0; padding: 20px; }
+}
+</style>
+</head>
+<body>
+
+<!-- ===== SIDEBAR ===== -->
+<nav class="sidebar">
+  <div class="logo">
+    <h1>Lattice</h1>
+    <p>Architecture Reference</p>
+  </div>
+  <ul>
+    <li><a class="section-header">Overview</a></li>
+    <li><a href="#entry-point">Entry Point &amp; Call Graph</a></li>
+    <li><a href="#data-flow">Data Flow (Timestep)</a></li>
+    <li><a href="#design-patterns">Key Design Patterns</a></li>
+
+    <li><a class="section-header">Modules</a></li>
+    <li><a href="#mod-core"><span class="status-dot dot-green"></span>core/</a></li>
+    <li><a href="#mod-evolution"><span class="status-dot dot-green"></span>evolution/</a></li>
+    <li><a href="#mod-numerics"><span class="status-dot dot-green"></span>numerics/</a></li>
+    <li><a href="#mod-geometry"><span class="status-dot dot-green"></span>geometry/</a></li>
+    <li><a href="#mod-backend"><span class="status-dot dot-yellow"></span>backend/</a></li>
+    <li><a href="#mod-initial-data"><span class="status-dot dot-green"></span>initial_data/</a></li>
+    <li><a href="#mod-diagnostics"><span class="status-dot dot-green"></span>diagnostics/</a></li>
+    <li><a href="#mod-boundary"><span class="status-dot dot-green"></span>boundary/</a></li>
+    <li><a href="#mod-io"><span class="status-dot dot-green"></span>io/</a></li>
+    <li><a href="#mod-amr"><span class="status-dot dot-gray"></span>amr/ (planned)</a></li>
+
+    <li><a class="section-header">Tests &amp; Build</a></li>
+    <li><a href="#tests">Test Infrastructure</a></li>
+    <li><a href="#build">Build System</a></li>
+
+    <li><a class="section-header">Roadmap</a></li>
+    <li><a href="#status">What Exists vs Planned</a></li>
+    <li><a href="#fields">Evolved Variables (25)</a></li>
+  </ul>
+</nav>
+
+<!-- ===== MAIN ===== -->
+<main>
+
+<div class="banner">
+  <strong>Living document.</strong> This file should be updated whenever the codebase structure changes &mdash; see CLAUDE.md.<br>
+  <strong>Last updated:</strong> 2026-02-16
+</div>
+
+<!-- ========================================== -->
+<h2 id="entry-point">Entry Point &amp; Call Graph</h2>
+
+<p><code>src/main.c</code> contains the <code>main()</code> function. The high-level flow is:</p>
+
+<div class="diagram"><span class="fn">main</span>(argc, argv)
+  |
+  +--&gt; <span class="fn">default_params</span>()                  <span class="comment">// params.h &mdash; set defaults</span>
+  +--&gt; parse CLI args (--N, --L, --steps, --puncture, --rk, ...)
+  +--&gt; <span class="fn">backend_init</span>()                     <span class="comment">// backend.h &mdash; no-op for CPU</span>
+  +--&gt; <span class="fn">grid_alloc</span>(N, L, rk_method)        <span class="comment">// grid.c &mdash; page-aligned SoA arrays</span>
+  |
+  +--&gt; <span class="highlight">Initial Data:</span>
+  |     if punctures: <span class="fn">set_brill_lindquist</span>(g, n_bh, masses, centers)
+  |     else:         <span class="fn">set_flat_spacetime</span>(g)
+  |
+  +--&gt; <span class="fn">compute_constraint_l2</span>(g)           <span class="comment">// initial Hamiltonian check</span>
+  |
+  +--&gt; <span class="highlight">Time Evolution Loop</span> (step = 1 .. num_steps):
+  |     |
+  |     +--&gt; <span class="fn">rk4_step</span>(g, &amp;p, ccz4_rhs_point, apply_sommerfeld, dt)
+  |     |       |
+  |     |       +--&gt; [CK45 or Classic RK4 dispatch]
+  |     |       |     for each RK stage:
+  |     |       |       +--&gt; <span class="fn">backend_compute_rhs</span>(rhs, fields, g, p, ccz4_rhs_point)
+  |     |       |       |       |
+  |     |       |       |       +--&gt; OpenMP parallel z,y,x loop:
+  |     |       |       |             <span class="fn">ccz4_rhs_point</span>(rhs, src, g, p, i, j, k)
+  |     |       |       |               +--&gt; load fields into locals
+  |     |       |       |               +--&gt; <span class="fn">fd_d1</span>, <span class="fn">fd_d2</span>, <span class="fn">fd_d2_mixed</span>, <span class="fn">fd_adv</span>  <span class="comment">// derivatives</span>
+  |     |       |       |               +--&gt; <span class="fn">compute_inverse_sym</span>       <span class="comment">// h^{ij}</span>
+  |     |       |       |               +--&gt; <span class="fn">compute_christoffel</span>       <span class="comment">// Gamma^i_{jk}</span>
+  |     |       |       |               +--&gt; Ricci tensor with Z terms
+  |     |       |       |               +--&gt; CCZ4 RHS (chi, h, K, A, Theta, Gamma)
+  |     |       |       |               +--&gt; Moving puncture gauge (lapse, shift, B)
+  |     |       |       |               +--&gt; <span class="fn">add_ko_dissipation</span>        <span class="comment">// 6th-order KO</span>
+  |     |       |       |
+  |     |       |       +--&gt; <span class="fn">apply_sommerfeld</span>(rhs, fields, g)  <span class="comment">// boundary conditions</span>
+  |     |       |       +--&gt; <span class="fn">ck45_update</span> / axpy_fields       <span class="comment">// field update</span>
+  |     |       |
+  |     |       +--&gt; <span class="fn">enforce_algebraic</span>(g)
+  |     |             +--&gt; det(gambar) = 1 rescaling
+  |     |             +--&gt; tr(Abar) = 0 projection
+  |     |             +--&gt; chi &gt; 0, lapse &gt; 0 floor
+  |     |
+  |     +--&gt; periodic: <span class="fn">compute_constraint_l2</span>(g) + print
+  |     +--&gt; optional: <span class="fn">output_1d_slice</span>(g, step, time)
+  |
+  +--&gt; <span class="fn">grid_free</span>(g)
+  +--&gt; <span class="fn">backend_cleanup</span>()</div>
+
+<!-- ========================================== -->
+<h2 id="data-flow">Data Flow Through a Single Timestep</h2>
+
+<p>Field data lives in Struct-of-Arrays layout: 25 contiguous <code>double*</code> arrays, one per evolved variable. A single CK45 timestep proceeds as follows:</p>
+
+<div class="diagram"><span class="highlight">CK45 Step</span> (5 stages, 3 memory blocks: U=fields, F=rhs, dU=scratch)
+
+ dU = 0  <span class="comment">(zero scratch arrays)</span>
+
+ for s = 0..4:
+   <span class="comment">// 1. Compute RHS from current state</span>
+   <span class="type">[grid memory]</span>  U[f][idx]  ----&gt;  <span class="fn">backend_compute_rhs</span>  ----&gt;  F[f][idx]
+                                    |
+              OpenMP collapse(2) on z,y loops
+              for each interior point (i,j,k):
+                <span class="fn">ccz4_rhs_point</span> reads U via FD stencils (neighbors +-3)
+                writes F at (i,j,k)
+
+   <span class="comment">// 2. Apply boundary conditions to RHS</span>
+   <span class="type">[ghost zones]</span>  <span class="fn">apply_sommerfeld</span> overwrites F in ghost cells
+                 Sommerfeld: df/dt = -(x^i/r) d_i f + (f_asym - f)/r
+
+   <span class="comment">// 3. Fused CK45 update (OpenMP parallel for)</span>
+   for each f, each point i:
+     dU[f][i] = A[s] * dU[f][i] + dt * F[f][i]
+     U[f][i] += B[s] * dU[f][i]
+
+ <span class="comment">// 4. Algebraic enforcement (OpenMP collapse(2) on k,j)</span>
+ for each point:
+   rescale h_ij so det(h) = 1
+   project A_ij to be trace-free
+   floor chi &gt; 1e-12, lapse &gt; 1e-12</div>
+
+<h3>Memory Layout Detail</h3>
+<p>Each "block" (fields, rhs, scratch, optionally accum) is a single contiguous allocation of <code>NUM_FIELDS * npoints</code> doubles. Per-field pointers index into these blocks at offsets of <code>f * npoints</code>. This design enables efficient GPU mapping with a single <code>omp target enter data</code> per block.</p>
+
+<pre><code>fields_block:  [ field_0: Ntotal^3 doubles | field_1: Ntotal^3 doubles | ... | field_24 ]
+                ^                             ^
+                g->fields[0]                  g->fields[1]
+
+Grid indexing:  IDX(g, i, j, k) = k * Ntotal^2 + j * Ntotal + i
+                x is innermost (unit stride), z is outermost
+                Ghost width = 4 on each side
+                N padded to next multiple of 16 for cache alignment</code></pre>
+
+<!-- ========================================== -->
+<h2 id="design-patterns">Key Design Patterns</h2>
+
+<h3>1. Struct-of-Arrays (SoA) Layout</h3>
+<p>Every field is a contiguous <code>double*</code> array of <code>Ntotal^3</code> elements. The RHS function loads needed values into local variables at each grid point, computes, then stores back. This is cache-friendly for the triple-loop backend and maps directly to GPU kernels.</p>
+
+<h3>2. Field Enum (Append-Only)</h3>
+<p>All 25 evolved fields are indexed by an <code>enum</code> in <code>fields.h</code>: <code>FIELD_CHI</code>, <code>FIELD_H11</code>, ..., <code>FIELD_B3</code>, <code>NUM_FIELDS</code>. The enum ordering is append-only (Critical Invariant #5). Symmetric tensors use a <code>sym_table[3][3]</code> mapping to flat indices 0..5.</p>
+
+<h3>3. Backend Abstraction</h3>
+<p><code>backend_compute_rhs()</code> owns the loop structure. The CPU backend uses <code>#pragma omp parallel for collapse(2)</code> and calls <code>ccz4_rhs_point</code> via function pointer. The GPU backend calls it directly (no function pointers on GPU). Physics kernels never include platform headers.</p>
+
+<h3>4. Per-Point RHS Function</h3>
+<p><code>ccz4_rhs_point(rhs, src, g, p, i, j, k)</code> is self-contained: it reads from <code>src</code> arrays using FD macros, computes the full CCZ4 RHS including gauge and dissipation, and writes to <code>rhs</code> arrays. This matches GRChombo's <code>rhs_equation()</code> pattern.</p>
+
+<h3>5. FD Macro Discipline</h3>
+<p>All finite differences go through <code>fd_d1()</code>, <code>fd_d2()</code>, <code>fd_d2_mixed()</code>, <code>fd_adv()</code>, and <code>fd_ko()</code> in <code>finite_diff.h</code>. No hand-coded stencils anywhere (Critical Invariant #3). Each takes <code>(field_ptr, idx, stride, dx)</code> &mdash; direction-independent via stride parameter.</p>
+
+<h3>6. Algebraic Enforcement</h3>
+<p>After every full RK step: <code>det(gambar) = 1</code> enforced by rescaling <code>h_ij</code>, and <code>tr(Abar) = 0</code> enforced by projection. Also floors <code>chi &gt; 1e-12</code> and <code>lapse &gt; 1e-12</code>.</p>
+
+<h3>7. Physics Naming Conventions</h3>
+<p>Suffix <code>_dd</code> = covariant, <code>_uu</code> = contravariant, <code>d1_</code> = first derivative, <code>d2_</code> = second derivative. Symmetric 3x3 tensors stored as <code>double[3][3]</code>. Loop macros: <code>FOR1(i)</code>, <code>FOR2(i,j)</code>, <code>FOR3(i,j,k)</code>.</p>
+
+<!-- ========================================== -->
+<h2 id="mod-core">Module: core/ <span class="badge badge-green">Implemented &amp; Tested</span></h2>
+
+<p>Foundational data structures: grid memory, field definitions, and simulation parameters.</p>
+
+<details>
+<summary>core/fields.h &mdash; Field enum and loop macros</summary>
+<div class="detail-body">
+<p>Defines the 25 evolved field indices for vacuum CCZ4. Also provides the symmetric tensor index mapping, loop macros (<code>FOR1</code>...<code>FOR4</code>), Kronecker delta, and <code>GR_SPACEDIM = 3</code>.</p>
+
+<table class="file-table">
+<tr><th>Item</th><th>Description</th></tr>
+<tr><td><code>enum FIELD_*</code></td><td>25 field indices: CHI, H11..H33 (6), K, A11..A33 (6), THETA, GAMMA1..3, LAPSE, SHIFT1..3, B1..3</td></tr>
+<tr><td><code>NUM_FIELDS</code></td><td>= 25, sentinel value</td></tr>
+<tr><td><code>sym_table[3][3]</code></td><td>Maps (i,j) to flat symmetric index 0..5</td></tr>
+<tr><td><code>SYM_INDEX(i,j)</code></td><td>Macro wrapping sym_table lookup</td></tr>
+<tr><td><code>FOR1..FOR4</code></td><td>Spatial index loop macros (GRChombo convention)</td></tr>
+<tr><td><code>DELTA(i,j)</code></td><td>Kronecker delta macro</td></tr>
+</table>
+
+<p><strong>Depends on:</strong> nothing<br>
+<strong>Depended on by:</strong> nearly every file in the project</p>
+</div>
+</details>
+
+<details>
+<summary>core/params.h &mdash; Simulation parameters</summary>
+<div class="detail-body">
+<p>Parameter structs for CCZ4 evolution, gauge conditions, and simulation control. Provides <code>default_params()</code> inline function with sensible defaults.</p>
+
+<table class="file-table">
+<tr><th>Item</th><th>Description</th></tr>
+<tr><td><code>rk_method_t</code></td><td>Enum: RK_CLASSIC (4 stages, 4 blocks) or RK_CK45 (5 stages, 3 blocks)</td></tr>
+<tr><td><code>ccz4_params_t</code></td><td>kappa1=0.1, kappa2=0.0, kappa3=1.0, covariant_Z4=true</td></tr>
+<tr><td><code>gauge_params_t</code></td><td>lapse_coeff=2.0, lapse_power=1.0, shift_Gamma_coeff=0.75, eta=1.0</td></tr>
+<tr><td><code>sim_params_t</code></td><td>N, L, dx, dt, CFL, sigma, num_steps, output_every, rk_method, ccz4, gauge</td></tr>
+<tr><td><code>default_params()</code></td><td>Returns sim_params_t with all defaults (N=32, L=10, CFL=0.25, CK45)</td></tr>
+</table>
+
+<p><strong>Depends on:</strong> <code>&lt;stdbool.h&gt;</code><br>
+<strong>Depended on by:</strong> grid.h, backend.h, rk4.h, ccz4_rhs.h, main.c, all tests</p>
+</div>
+</details>
+
+<details>
+<summary>core/grid.h / grid.c &mdash; Grid allocation and indexing</summary>
+<div class="detail-body">
+<p>Defines the <code>grid_t</code> struct (SoA layout) and all indexing/coordinate macros. <code>grid.c</code> implements page-aligned contiguous block allocation. N is padded to the next multiple of 16. CK45 mode skips the 4th memory block (accum).</p>
+
+<table class="file-table">
+<tr><th>Item</th><th>Description</th></tr>
+<tr><td><code>grid_t</code></td><td>N, ghost, Ntotal, dx, L, npoints, fields[25], rhs[25], scratch[25], accum[25], *_block pointers</td></tr>
+<tr><td><code>GHOST_WIDTH</code></td><td>= 4</td></tr>
+<tr><td><code>IDX(g,i,j,k)</code></td><td>Flat 3D index: k*Ntotal^2 + j*Ntotal + i</td></tr>
+<tr><td><code>STRIDE_X/Y/Z</code></td><td>1, Ntotal, Ntotal^2</td></tr>
+<tr><td><code>COORD(g,i)</code></td><td>Physical coordinate of grid point i (cell-centered)</td></tr>
+<tr><td><code>grid_alloc(N,L,method)</code></td><td>Allocates grid with page-aligned blocks (4096-byte aligned)</td></tr>
+<tr><td><code>grid_free(g)</code></td><td>Frees all backing blocks and the grid struct</td></tr>
+</table>
+
+<p><strong>Memory per block</strong> (N=128): 25 fields x (128+8)^3 x 8 bytes = ~3.4 GB. CK45 uses 3 blocks (~10.3 GB), classic RK4 uses 4 (~13.7 GB).</p>
+
+<p><strong>Depends on:</strong> fields.h, params.h<br>
+<strong>Depended on by:</strong> backend.h, ccz4_rhs.h, rk4.h, puncture.h, constraints.h, sommerfeld.h, output.c, main.c, all tests</p>
+</div>
+</details>
+
+<!-- ========================================== -->
+<h2 id="mod-evolution">Module: evolution/ <span class="badge badge-green">Implemented &amp; Tested</span></h2>
+
+<p>The CCZ4 right-hand-side equations and Kreiss-Oliger dissipation. This is the physics core of the code.</p>
+
+<details>
+<summary>evolution/ccz4_rhs.h / ccz4_rhs.c &mdash; Full CCZ4 RHS at a single point</summary>
+<div class="detail-body">
+<p>Computes the complete CCZ4 right-hand-side for all 25 fields at one grid point (i,j,k). Steps: load fields, compute 1st/2nd/advection derivatives, inverse metric, Christoffel symbols, Z vector, Ricci tensor with Z terms, covariant lapse derivatives, CCZ4 evolution equations, moving puncture gauge, store RHS, add KO dissipation.</p>
+
+<p><strong>~430 lines.</strong> The single most complex function in the codebase. Approximately 4 KB of stack locals (derivative tensors, Christoffel symbols, Ricci tensor components).</p>
+
+<table class="file-table">
+<tr><th>Function</th><th>Description</th></tr>
+<tr><td><code>ccz4_rhs_point(rhs, src, g, p, i, j, k)</code></td><td>Full CCZ4 RHS including gauge and dissipation. GPU-annotated with <code>#pragma omp declare target</code>.</td></tr>
+</table>
+
+<p><strong>References:</strong> arXiv:1106.2254 (CCZ4 equations), GRChombo CCZ4RHS.impl.hpp:60-227, CCZ4Geometry.hpp (Ricci), MovingPunctureGauge.hpp (gauge)</p>
+
+<p><strong>Depends on:</strong> fields.h, grid.h, params.h, finite_diff.h, tensor_utils.h, dissipation.c (via extern)<br>
+<strong>Depended on by:</strong> backend_cpu.c, backend_gpu.c, main.c, all tests</p>
+</div>
+</details>
+
+<details>
+<summary>evolution/dissipation.c &mdash; Kreiss-Oliger dissipation</summary>
+<div class="detail-body">
+<p>Adds 6th-order Kreiss-Oliger dissipation to each field's RHS: <code>rhs[f] += sigma * sum_dir(fd_ko)</code>. Uses a 7-point stencil per direction. Called at the end of <code>ccz4_rhs_point</code>.</p>
+
+<table class="file-table">
+<tr><th>Function</th><th>Description</th></tr>
+<tr><td><code>add_ko_dissipation(rhs, src, g, sigma, i, j, k)</code></td><td>Adds KO dissipation for all 25 fields. GPU-annotated.</td></tr>
+</table>
+
+<p><strong>Planned change (AMR):</strong> CAKO modification will multiply sigma by chi (conformal factor) to suppress dissipation near punctures.</p>
+
+<p><strong>Depends on:</strong> fields.h, grid.h, finite_diff.h<br>
+<strong>Depended on by:</strong> ccz4_rhs.c (via extern forward declaration)</p>
+</div>
+</details>
+
+<!-- ========================================== -->
+<h2 id="mod-numerics">Module: numerics/ <span class="badge badge-green">Implemented &amp; Tested</span></h2>
+
+<p>Finite difference stencils and time integration.</p>
+
+<details>
+<summary>numerics/finite_diff.h &mdash; 4th-order FD stencils</summary>
+<div class="detail-body">
+<p>All-inline header providing the five finite difference operators used throughout the code. Direction-independent via stride parameter. GPU-annotated.</p>
+
+<table class="file-table">
+<tr><th>Function</th><th>Stencil</th><th>Points</th></tr>
+<tr><td><code>fd_d1(f, idx, s, dx)</code></td><td>4th-order centered 1st derivative</td><td>+-2 (5 points)</td></tr>
+<tr><td><code>fd_d2(f, idx, s, dx)</code></td><td>4th-order centered 2nd derivative</td><td>+-2 (5 points)</td></tr>
+<tr><td><code>fd_d2_mixed(f, idx, s1, s2, dx)</code></td><td>4th-order mixed 2nd derivative</td><td>5x5 cross-stencil (16 points)</td></tr>
+<tr><td><code>fd_adv(f, idx, s, vel, dx)</code></td><td>4th-order upwind advection</td><td>+-3 (5 points, direction depends on vel sign)</td></tr>
+<tr><td><code>fd_ko(f, idx, s, dx)</code></td><td>6th-order Kreiss-Oliger dissipation</td><td>+-3 (7 points)</td></tr>
+</table>
+
+<p><strong>Ref:</strong> GRChombo FourthOrderDerivatives.hpp</p>
+
+<p><strong>Depends on:</strong> <code>&lt;math.h&gt;</code><br>
+<strong>Depended on by:</strong> ccz4_rhs.c, dissipation.c, constraints.c</p>
+</div>
+</details>
+
+<details>
+<summary>numerics/rk4.h / rk4.c &mdash; Time integration</summary>
+<div class="detail-body">
+<p>Two 4th-order time integrators selected at runtime. CK45 (default) uses 3 memory blocks and 5 RHS evaluations; classic RK4 uses 4 blocks and 4 evaluations. Both call the backend for RHS computation and boundary conditions at each stage, then enforce algebraic constraints.</p>
+
+<table class="file-table">
+<tr><th>Function</th><th>Description</th></tr>
+<tr><td><code>rk4_step(g, p, rhs_func, bc_func, dt)</code></td><td>Public interface: dispatches to CK45 or classic based on p->rk_method</td></tr>
+<tr><td><code>ck45_step(...)</code></td><td>Carpenter-Kennedy 2N low-storage: dU = A[s]*dU + dt*F; U += B[s]*dU</td></tr>
+<tr><td><code>classic_rk4_step(...)</code></td><td>Standard 4-stage: scratch + accumulator pattern</td></tr>
+<tr><td><code>enforce_algebraic(g)</code></td><td>det(h)=1, tr(A)=0, chi>0, lapse>0. OpenMP collapse(2).</td></tr>
+<tr><td><code>ck45_update(...)</code></td><td>Fused dU/U update kernel. OpenMP parallel for.</td></tr>
+<tr><td><code>copy_fields, axpy_fields, accum_add, apply_accum, zero_fields</code></td><td>Helper array operations (all OpenMP parallelized)</td></tr>
+</table>
+
+<p><strong>CK45 coefficients:</strong> Carpenter &amp; Kennedy, NASA TM-109112 (1994), Solution 3.</p>
+
+<p><strong>Depends on:</strong> grid.h, params.h, fields.h, tensor_utils.h, backend.h<br>
+<strong>Depended on by:</strong> main.c, all tests</p>
+</div>
+</details>
+
+<!-- ========================================== -->
+<h2 id="mod-geometry">Module: geometry/ <span class="badge badge-green">Implemented &amp; Tested</span></h2>
+
+<details>
+<summary>geometry/tensor_utils.h &mdash; Inline tensor algebra</summary>
+<div class="detail-body">
+<p>All-inline header with tensor operations for 3D symmetric tensors and vectors. GPU-annotated. Defines <code>chris_t</code> and <code>ricci_t</code> structs.</p>
+
+<table class="file-table">
+<tr><th>Function</th><th>Description</th></tr>
+<tr><td><code>compute_det_sym(h)</code></td><td>Determinant of symmetric 3x3 matrix</td></tr>
+<tr><td><code>compute_inverse_sym(h, h_UU)</code></td><td>Inverse of symmetric 3x3 matrix</td></tr>
+<tr><td><code>compute_trace(A, h_UU)</code></td><td>Trace: h^{ij} A_{ij}</td></tr>
+<tr><td><code>compute_trace_diag(A)</code></td><td>Diagonal sum (mixed tensor trace)</td></tr>
+<tr><td><code>compute_dot_product(v, w)</code></td><td>Flat dot product: v^i w_i</td></tr>
+<tr><td><code>compute_dot_product_metric(v, w, h_UU)</code></td><td>Metric dot product: h^{ij} v_i w_j</td></tr>
+<tr><td><code>compute_christoffel(d1_h, h_UU, chris)</code></td><td>Christoffel symbols: Gamma_{ijk}, Gamma^i_{jk}, Gamma^i</td></tr>
+<tr><td><code>raise_all_2(A_dd, h_UU, A_uu)</code></td><td>Raise both indices: A^{ij} = h^{ik} h^{jl} A_{kl}</td></tr>
+<tr><td><code>make_trace_free(A, h, h_UU)</code></td><td>Project to trace-free: A_{ij} -= (1/3) h_{ij} tr(A)</td></tr>
+</table>
+
+<p><strong>Types defined:</strong></p>
+<ul>
+  <li><code>chris_t</code> &mdash; ULL[3][3][3], LLL[3][3][3], contracted[3]</li>
+  <li><code>ricci_t</code> &mdash; LL[3][3], scalar</li>
+</ul>
+
+<p><strong>Ref:</strong> GRChombo TensorAlgebra.hpp</p>
+
+<p><strong>Depends on:</strong> fields.h<br>
+<strong>Depended on by:</strong> ccz4_rhs.c, constraints.c, rk4.c (for enforce_algebraic)</p>
+</div>
+</details>
+
+<!-- ========================================== -->
+<h2 id="mod-backend">Module: backend/ <span class="badge badge-yellow">CPU working, GPU needs GCC 15</span></h2>
+
+<p>Abstraction layer that owns the parallel loop structure. Physics code calls <code>backend_compute_rhs()</code> which dispatches to the selected backend.</p>
+
+<details>
+<summary>backend/backend.h &mdash; Backend interface</summary>
+<div class="detail-body">
+<p>Defines <code>rhs_point_func_t</code> function pointer type and the three backend lifecycle functions.</p>
+
+<table class="file-table">
+<tr><th>Function</th><th>Description</th></tr>
+<tr><td><code>backend_compute_rhs(rhs, src, g, p, func)</code></td><td>Compute RHS over entire interior grid via selected backend</td></tr>
+<tr><td><code>backend_init()</code></td><td>Initialize backend (no-op for CPU)</td></tr>
+<tr><td><code>backend_cleanup()</code></td><td>Cleanup backend (no-op for CPU)</td></tr>
+</table>
+
+<p><strong>Depends on:</strong> grid.h, params.h<br>
+<strong>Depended on by:</strong> rk4.c, main.c, all tests</p>
+</div>
+</details>
+
+<details>
+<summary>backend/backend_cpu.c &mdash; CPU backend (OpenMP threads)</summary>
+<div class="detail-body">
+<p>Triple loop with <code>#pragma omp parallel for collapse(2) schedule(static)</code> over z and y. Calls <code>func(rhs, src, g, p, i, j, k)</code> at each interior point via function pointer.</p>
+
+<p><strong>Depends on:</strong> backend.h<br>
+<strong>Depended on by:</strong> linked at build time when <code>BACKEND=cpu</code></p>
+</div>
+</details>
+
+<details>
+<summary>backend/backend_gpu.c &mdash; GPU backend (OpenMP target offloading)</summary>
+<div class="detail-body">
+<p>Same triple loop but with <code>#pragma omp target teams distribute parallel for collapse(3)</code>. Calls <code>ccz4_rhs_point</code> directly (no function pointers on GPU). Requires GCC 15+ with <code>GOMP_NVPTX_NATIVE_GPU_THREAD_STACK_SIZE=16384</code> environment variable to handle the ~4 KB stack per thread.</p>
+
+<p><strong>Status:</strong> Code is written and compiles. Tested on GCC 13 + Tesla P40 but hit stack overflow (see DEVLOG). Awaiting GCC 15 for runtime stack control.</p>
+
+<p><strong>Depends on:</strong> backend.h, ccz4_rhs.h<br>
+<strong>Depended on by:</strong> linked at build time when <code>BACKEND=gpu</code></p>
+</div>
+</details>
+
+<!-- ========================================== -->
+<h2 id="mod-initial-data">Module: initial_data/ <span class="badge badge-green">Implemented &amp; Tested</span></h2>
+
+<details>
+<summary>initial_data/puncture.h / puncture.c &mdash; Puncture initial data</summary>
+<div class="detail-body">
+<p>Sets initial conditions on the grid. Flat spacetime (Minkowski) and Brill-Lindquist multi-puncture (at rest, time-symmetric). Pre-collapsed lapse: <code>alpha = sqrt(chi) = psi^{-2}</code>.</p>
+
+<table class="file-table">
+<tr><th>Function</th><th>Description</th></tr>
+<tr><td><code>set_flat_spacetime(g)</code></td><td>chi=1, h=I, lapse=1, all else 0</td></tr>
+<tr><td><code>set_brill_lindquist(g, n_bh, masses, centers)</code></td><td>psi = 1 + sum(M_n / 2r_n), chi = psi^{-4}, supports up to 16 punctures</td></tr>
+</table>
+
+<p><strong>Ref:</strong> gr-qc/9703066 (Brandt-Brugmann puncture method)</p>
+
+<p><strong>Depends on:</strong> grid.h, fields.h<br>
+<strong>Depended on by:</strong> main.c, all tests</p>
+</div>
+</details>
+
+<!-- ========================================== -->
+<h2 id="mod-diagnostics">Module: diagnostics/ <span class="badge badge-green">Implemented &amp; Tested</span></h2>
+
+<details>
+<summary>diagnostics/constraints.h / constraints.c &mdash; Hamiltonian &amp; momentum constraints</summary>
+<div class="detail-body">
+<p>Computes constraint violations as diagnostics. The Hamiltonian constraint uses Ricci with Z=0 (pure geometric constraint, not the CCZ4 Ricci). The momentum constraint computes covariant derivatives of A_{ij}.</p>
+
+<table class="file-table">
+<tr><th>Function</th><th>Description</th></tr>
+<tr><td><code>compute_hamiltonian_at(fields, g, i, j, k)</code></td><td>H = R + (2/3)K^2 - A^{ij}A_{ij} at one point</td></tr>
+<tr><td><code>compute_momentum_at(fields, g, i, j, k, mom[3])</code></td><td>M_i = -(2/3)d_iK + h^{jk} covd_k A_{ji} - (3/2chi) h^{jk} A_{ij} d_k chi</td></tr>
+<tr><td><code>compute_constraint_l2(g)</code></td><td>L2 norm of Hamiltonian over interior</td></tr>
+<tr><td><code>compute_momentum_l2(g)</code></td><td>RMS of |M_i| over interior</td></tr>
+</table>
+
+<p><strong>Ref:</strong> GRChombo NewConstraints.impl.hpp:55-100</p>
+
+<p><strong>Depends on:</strong> grid.h, fields.h, finite_diff.h, tensor_utils.h<br>
+<strong>Depended on by:</strong> main.c, output.c, all tests</p>
+</div>
+</details>
+
+<!-- ========================================== -->
+<h2 id="mod-boundary">Module: boundary/ <span class="badge badge-green">Implemented &amp; Tested</span></h2>
+
+<details>
+<summary>boundary/sommerfeld.h / sommerfeld.c &mdash; Radiative boundary conditions</summary>
+<div class="detail-body">
+<p>Sets RHS in ghost zones to enforce Sommerfeld radiative outflow: <code>df/dt = -(x^i/r) d_i f + (f_asym - f)/r</code>. Uses 2nd-order one-sided stencils near boundaries. Asymptotic values: chi=1, h_{ii}=1, lapse=1, everything else 0.</p>
+
+<table class="file-table">
+<tr><th>Function</th><th>Description</th></tr>
+<tr><td><code>apply_sommerfeld(rhs, src, g)</code></td><td>Overwrites RHS in all ghost zone points</td></tr>
+<tr><td><code>asymptotic_value(field)</code></td><td>Returns far-field value for each field (static)</td></tr>
+<tr><td><code>boundary_d1(f, idx, stride, lo, hi, dx)</code></td><td>One-sided 2nd-order derivative at boundary (static)</td></tr>
+</table>
+
+<p><strong>Ref:</strong> GRChombo BoundaryConditions.cpp:593-661</p>
+
+<p><strong>Depends on:</strong> grid.h, fields.h<br>
+<strong>Depended on by:</strong> rk4.c (via function pointer), main.c, all tests</p>
+</div>
+</details>
+
+<!-- ========================================== -->
+<h2 id="mod-io">Module: io/ <span class="badge badge-green">Implemented</span></h2>
+
+<details>
+<summary>io/output.c &mdash; 1D CSV output</summary>
+<div class="detail-body">
+<p>Writes a 1D slice along the x-axis through the domain center to a CSV file. Outputs x, chi, lapse, K, and Hamiltonian constraint for each interior point.</p>
+
+<table class="file-table">
+<tr><th>Function</th><th>Description</th></tr>
+<tr><td><code>output_1d_slice(g, step, time)</code></td><td>Writes build/slice_NNNNNN.csv</td></tr>
+</table>
+
+<p><strong>Depends on:</strong> grid.h, fields.h, constraints.h<br>
+<strong>Depended on by:</strong> main.c (via extern declaration)</p>
+</div>
+</details>
+
+<!-- ========================================== -->
+<h2 id="mod-amr">Module: amr/ (Planned) <span class="badge badge-gray">Not Yet Implemented</span></h2>
+
+<p>Oct-tree block AMR is planned in 6 stages (see <code>plan.md</code>). The architecture wraps each <code>grid_t</code> in a <code>block_t</code> with tree metadata, managed by a <code>mesh_t</code>. The physics code (<code>ccz4_rhs_point</code>) runs unchanged on each block.</p>
+
+<h4>Planned Files (14 new):</h4>
+<table class="file-table">
+<tr><th>File</th><th>Stage</th><th>Purpose</th></tr>
+<tr><td><code>src/amr/block.h / block.c</code></td><td>1</td><td>block_t struct: grid_t + level, morton index, tree links</td></tr>
+<tr><td><code>src/amr/mesh.h / mesh.c</code></td><td>1</td><td>mesh_t: oct-tree management, block lifecycle</td></tr>
+<tr><td><code>src/amr/ghost_exchange.h / .c</code></td><td>2</td><td>Same-level and cross-level ghost zone fill</td></tr>
+<tr><td><code>src/amr/morton.h</code></td><td>2</td><td>Morton/Z-order encoding, neighbor finding</td></tr>
+<tr><td><code>src/amr/interp.h</code></td><td>3</td><td>Shared prolongation/restriction declarations</td></tr>
+<tr><td><code>src/amr/prolongation.c</code></td><td>3</td><td>Coarse-to-fine interpolation (minmod limiter)</td></tr>
+<tr><td><code>src/amr/restriction.c</code></td><td>3</td><td>Fine-to-coarse volume-weighted averaging</td></tr>
+<tr><td><code>src/amr/refine.c</code></td><td>4</td><td>Block refinement/coarsening operations</td></tr>
+<tr><td><code>src/amr/criterion.c</code></td><td>4</td><td>Chi-gradient refinement criterion</td></tr>
+<tr><td><code>src/amr/meshblock_pack.h / .c</code></td><td>6</td><td>GPU batch packing (AthenaK pattern)</td></tr>
+</table>
+
+<h4>Planned Noise Reduction Techniques (from arXiv:2404.01137):</h4>
+<ul>
+  <li><strong>CAKO</strong> &mdash; Curvature-adjusted KO dissipation: <code>sigma_eff = chi * sigma</code>. One-line change to dissipation.c.</li>
+  <li><strong>CAHD</strong> &mdash; Coarse-grid-adjusted Hamiltonian damping: <code>kappa1_eff = kappa1 * 2^(max_level - level)</code>.</li>
+  <li><strong>SSL</strong> &mdash; Slow-start lapse: temporary damping of gauge pulse during early evolution.</li>
+</ul>
+
+<!-- ========================================== -->
+<h2 id="tests">Test Infrastructure</h2>
+
+<p>Tests form a validation ladder: flat spacetime &rarr; single BH &rarr; convergence &rarr; constraints &rarr; binary. Each test is a standalone <code>main()</code> that returns 0 on pass, 1 on fail.</p>
+
+<table class="file-table">
+<tr><th>Test File</th><th>What It Validates</th><th>Pass Criterion</th><th>Status</th></tr>
+<tr>
+  <td><code>tests/test_flat.c</code></td>
+  <td>Flat spacetime stability (N=32, 1000 steps CK45)</td>
+  <td>Ham L2 &lt; 1e-10</td>
+  <td><span class="badge badge-green">Passing</span></td>
+</tr>
+<tr>
+  <td><code>tests/test_convergence.c</code></td>
+  <td>4th-order convergence: single BH at N=32/64/128, T=2M, annular L2</td>
+  <td>Convergence order &gt; 3.5 (measured: 5.4)</td>
+  <td><span class="badge badge-green">Passing</span></td>
+</tr>
+<tr>
+  <td><code>tests/test_single_bh.c</code></td>
+  <td>Single Schwarzschild puncture (N=128, T=10M): trumpet collapse</td>
+  <td>min_lapse &lt; 0.5, no NaN, Ham peak &lt; 1.0</td>
+  <td><span class="badge badge-green">Passing</span></td>
+</tr>
+<tr>
+  <td><code>tests/test_constraints.c</code></td>
+  <td>Hamiltonian + momentum constraints: flat zero, evolved bounded, momentum convergence</td>
+  <td>Three sub-tests, momentum order &gt; 3.0</td>
+  <td><span class="badge badge-green">Passing</span></td>
+</tr>
+<tr>
+  <td><code>tests/test_head_on.c</code></td>
+  <td>Head-on binary collision: 2 BHs on z-axis (m=0.5 each, d=10M), T=50M</td>
+  <td>No crash, Ham &lt; 1.0, Mom &lt; 1.0, merger detected</td>
+  <td><span class="badge badge-yellow">Implemented</span></td>
+</tr>
+</table>
+
+<h3>How to Run Tests</h3>
+<pre><code>make test                # runs test_flat + test_convergence (quick automated tests)
+make test-single-bh      # single BH (~40 min on M4 at N=128)
+make test-convergence    # 3-resolution convergence (~15 min)
+make test-constraints    # Hamiltonian + momentum constraint tests
+make test-head-on        # head-on binary collision (~6 hrs at N=128)</code></pre>
+
+<!-- ========================================== -->
+<h2 id="build">Build System</h2>
+
+<p>Single Makefile, no external dependencies beyond standard C and libomp. Platform-detected: clang on macOS, gcc on Linux.</p>
+
+<pre><code>make                          # optimized CPU build (-O3 -ffast-math -march=native)
+make BACKEND=gpu              # GPU build (OpenMP target, requires GCC 15+)
+make BACKEND=gpu GPU_ARCH=amdgcn-amdhsa   # AMD GPU target
+make debug                    # -O0 -g -fsanitize=address,undefined -DDEBUG
+make clean                    # rm -rf build/</code></pre>
+
+<h3>Source File Groups in Makefile</h3>
+<table class="file-table">
+<tr><th>Variable</th><th>Files</th></tr>
+<tr><td><code>CORE_SRC</code></td><td>src/core/grid.c</td></tr>
+<tr><td><code>EVOLUTION_SRC</code></td><td>src/evolution/ccz4_rhs.c src/evolution/dissipation.c</td></tr>
+<tr><td><code>NUMERICS_SRC</code></td><td>src/numerics/rk4.c</td></tr>
+<tr><td><code>INITIAL_SRC</code></td><td>src/initial_data/puncture.c</td></tr>
+<tr><td><code>DIAG_SRC</code></td><td>src/diagnostics/constraints.c</td></tr>
+<tr><td><code>BOUNDARY_SRC</code></td><td>src/boundary/sommerfeld.c</td></tr>
+<tr><td><code>IO_SRC</code></td><td>src/io/output.c</td></tr>
+<tr><td><code>BACKEND_SRC</code></td><td>src/backend/backend_cpu.c <em>or</em> backend_gpu.c (selected by BACKEND flag)</td></tr>
+<tr><td><code>MAIN_SRC</code></td><td>src/main.c</td></tr>
+</table>
+
+<h3>Compiler Flags</h3>
+<ul>
+  <li><strong>Base:</strong> <code>-std=c17 -Wall -Wextra -Werror -D_GNU_SOURCE -Wno-unused-but-set-variable</code></li>
+  <li><strong>Optimized:</strong> <code>-O3 -ffast-math -march=native</code></li>
+  <li><strong>Debug:</strong> <code>-O0 -g -fsanitize=address,undefined -DDEBUG</code></li>
+  <li><strong>GPU:</strong> <code>-fopenmp -foffload=nvptx-none -fcf-protection=none -fno-stack-protector -DLATTICE_GPU</code></li>
+</ul>
+
+<!-- ========================================== -->
+<h2 id="status">What Exists vs What's Planned</h2>
+
+<h3>Phase 1: Vacuum CCZ4 (Current)</h3>
+<table class="file-table">
+<tr><th>Milestone</th><th>Description</th><th>Status</th></tr>
+<tr>
+  <td>1. Infrastructure</td>
+  <td>Grid, fields, memory layout, CPU + GPU backends compiling</td>
+  <td><span class="badge badge-green">Done</span></td>
+</tr>
+<tr>
+  <td>2. Flat spacetime</td>
+  <td>Constraint violation &lt; 1e-10 after 1000 steps</td>
+  <td><span class="badge badge-green">Done</span> Ham L2 = 5.3e-14</td>
+</tr>
+<tr>
+  <td>3. Single BH stable 50M</td>
+  <td>Trumpet lapse ~0.3, 4th-order convergence</td>
+  <td><span class="badge badge-green">Done</span> lapse=0.369, order=5.4</td>
+</tr>
+<tr>
+  <td>4. Head-on binary</td>
+  <td>Merger visible in lapse, constraints bounded</td>
+  <td><span class="badge badge-yellow">Test written</span></td>
+</tr>
+<tr>
+  <td>5. Binary inspiral</td>
+  <td>Orbital dynamics, psi4 waveform extraction</td>
+  <td><span class="badge badge-gray">Planned</span> (needs AMR)</td>
+</tr>
+</table>
+
+<h3>Phase 1 features implemented:</h3>
+<ul>
+  <li><span class="badge badge-green">Done</span> CCZ4 RHS (chi, h_ij, K, A_ij, Theta, Gamma^i)</li>
+  <li><span class="badge badge-green">Done</span> Moving puncture gauge (Bona-Masso lapse, Gamma-driver shift with B^i)</li>
+  <li><span class="badge badge-green">Done</span> Christoffel symbols, Ricci tensor with Z terms</li>
+  <li><span class="badge badge-green">Done</span> Hamiltonian + momentum constraints</li>
+  <li><span class="badge badge-green">Done</span> 4th-order finite differences</li>
+  <li><span class="badge badge-green">Done</span> RK4 time integration (classic + CK45 low-storage)</li>
+  <li><span class="badge badge-green">Done</span> 6th-order Kreiss-Oliger dissipation</li>
+  <li><span class="badge badge-green">Done</span> Sommerfeld radiative boundary conditions</li>
+  <li><span class="badge badge-green">Done</span> Puncture initial data (Brill-Lindquist, up to 16 BHs)</li>
+  <li><span class="badge badge-green">Done</span> Algebraic enforcement: det(gambar)=1, tr(Abar)=0</li>
+  <li><span class="badge badge-gray">Planned</span> Psi4 / Weyl4 extraction</li>
+</ul>
+
+<h3>Phase 2: Novel Extensions (Future)</h3>
+<table class="file-table">
+<tr><th>Feature</th><th>Status</th><th>Notes</th></tr>
+<tr><td>N-body initial data (multigrid solver)</td><td><span class="badge badge-gray">Future</span></td><td>Extending Brandt-Brugmann beyond 2-body</td></tr>
+<tr><td>Einstein-Maxwell (charge)</td><td><span class="badge badge-gray">Future</span></td><td>+6 fields (E_i, B_i)</td></tr>
+<tr><td>Spin (Bowen-York)</td><td><span class="badge badge-gray">Future</span></td><td>Spinning puncture initial data</td></tr>
+<tr><td>Apparent horizon finder</td><td><span class="badge badge-gray">Future</span></td><td>Remnant properties</td></tr>
+<tr><td>AMR (oct-tree)</td><td><span class="badge badge-yellow">Planned</span></td><td>Detailed 6-stage plan in plan.md, 14 new files</td></tr>
+</table>
+
+<h3>Phase 3: Production (Future)</h3>
+<ul>
+  <li><span class="badge badge-gray">Future</span> N=10+ simultaneous black holes</li>
+  <li><span class="badge badge-gray">Future</span> Position-dependent eta: eta(x) = eta_0 / W(x)</li>
+  <li><span class="badge badge-gray">Future</span> Spatially varying KO dissipation</li>
+  <li><span class="badge badge-gray">Future</span> Full waveform catalog capability</li>
+</ul>
+
+<!-- ========================================== -->
+<h2 id="fields">Evolved Variables (25 Fields)</h2>
+
+<table class="file-table">
+<tr><th>Enum</th><th>Count</th><th>Math</th><th>Description</th></tr>
+<tr><td><code>FIELD_CHI</code></td><td>1</td><td>chi</td><td>Conformal factor</td></tr>
+<tr><td><code>FIELD_H11..H33</code></td><td>6</td><td>h_ij</td><td>Conformal metric (symmetric 3x3)</td></tr>
+<tr><td><code>FIELD_K</code></td><td>1</td><td>K</td><td>Trace of extrinsic curvature</td></tr>
+<tr><td><code>FIELD_A11..A33</code></td><td>6</td><td>A_ij</td><td>Traceless conformal extrinsic curvature (symmetric)</td></tr>
+<tr><td><code>FIELD_THETA</code></td><td>1</td><td>Theta</td><td>CCZ4 constraint damping scalar</td></tr>
+<tr><td><code>FIELD_GAMMA1..3</code></td><td>3</td><td>Gamma^i</td><td>Conformal connection functions</td></tr>
+<tr><td><code>FIELD_LAPSE</code></td><td>1</td><td>alpha</td><td>Lapse function</td></tr>
+<tr><td><code>FIELD_SHIFT1..3</code></td><td>3</td><td>beta^i</td><td>Shift vector</td></tr>
+<tr><td><code>FIELD_B1..3</code></td><td>3</td><td>B^i</td><td>Gamma-driver auxiliary variable</td></tr>
+</table>
+
+<p><strong>Total: 25</strong> (NUM_FIELDS). Phase 2 adds E_i, B_i (6 more for Einstein-Maxwell).</p>
+
+<!-- ========================================== -->
+<h2>Complete File Dependency Map</h2>
+
+<p>Every <code>.c</code> and <code>.h</code> file in the <code>src/</code> directory with their include relationships:</p>
+
+<div class="diagram"><span class="comment">  Header-only (no .c)          Compiled sources</span>
+
+  <span class="type">fields.h</span> ───────────┐
+                      ├──&gt; <span class="type">grid.h</span> ──────┬──&gt; <span class="fn">grid.c</span>
+  <span class="type">params.h</span> ───────────┘                │
+                                       ├──&gt; <span class="type">backend.h</span> ──┬──&gt; <span class="fn">backend_cpu.c</span>
+                                       │               └──&gt; <span class="fn">backend_gpu.c</span> ──&gt; ccz4_rhs.h
+                                       │
+  <span class="type">finite_diff.h</span> ──────────────────────┤
+                                       │
+  <span class="type">tensor_utils.h</span> ─── fields.h ────────┤
+                                       │
+  <span class="type">ccz4_rhs.h</span> ─── grid.h, params.h ───┼──&gt; <span class="fn">ccz4_rhs.c</span> ─── fields.h, finite_diff.h, tensor_utils.h
+                                       │                       └──&gt; <span class="fn">dissipation.c</span> ─── fields.h, grid.h, finite_diff.h
+                                       │
+  <span class="type">rk4.h</span> ─── grid.h, params.h, ────────┼──&gt; <span class="fn">rk4.c</span> ─── fields.h, tensor_utils.h, backend.h
+            backend.h                  │
+                                       │
+  <span class="type">puncture.h</span> ─── grid.h ──────────────┼──&gt; <span class="fn">puncture.c</span> ─── fields.h
+                                       │
+  <span class="type">constraints.h</span> ─── grid.h ────────────┼──&gt; <span class="fn">constraints.c</span> ─── fields.h, finite_diff.h, tensor_utils.h
+                                       │
+  <span class="type">sommerfeld.h</span> ─── grid.h, params.h ──┼──&gt; <span class="fn">sommerfeld.c</span> ─── fields.h
+                                       │
+                                       └──&gt; <span class="fn">output.c</span> ─── grid.h, fields.h, constraints.h
+                                           <span class="fn">main.c</span> ─── grid.h, params.h, fields.h, puncture.h,
+                                                       ccz4_rhs.h, sommerfeld.h, rk4.h,
+                                                       constraints.h, backend.h</div>
+
+</main>
+
+<script>
+// Auto-open the first details in each section for usability
+document.addEventListener('DOMContentLoaded', function() {
+  // Smooth scroll for sidebar links
+  document.querySelectorAll('nav.sidebar a[href^="#"]').forEach(function(link) {
+    link.addEventListener('click', function(e) {
+      var target = document.querySelector(this.getAttribute('href'));
+      if (target) {
+        e.preventDefault();
+        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    });
+  });
+});
+</script>
+
+</body>
+</html>
