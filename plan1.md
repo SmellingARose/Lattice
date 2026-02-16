@@ -539,11 +539,11 @@ later stages must not break earlier tests.
 
 ## Progress Tracking
 
-### Status: STAGE 2 COMPLETE
+### Status: STAGE 3 COMPLETE
 
 - [x] **Stage 1:** block_t + mesh_t + MeshBlockPack foundation
 - [x] **Stage 2:** Multi-block uniform mesh + 26-neighbor ghost exchange
-- [ ] **Stage 3:** Prolongation + Restriction + CAKO/CAHD/SSL/per-field sigma
+- [x] **Stage 3:** Prolongation + Restriction + CAKO/CAHD/SSL/per-field sigma
 - [ ] **Stage 4:** Oct-tree refinement + multi-level ghost exchange
 - [ ] **Stage 5:** Level-by-level subcycling
 - [ ] **Stage 6:** GPU optimization + MeshBlockPack tuning
@@ -552,6 +552,16 @@ later stages must not break earlier tests.
 - None currently
 
 ### Completed milestones
+- **Stage 3** (2026-02-16): 15/15 tests pass. Prolongation, restriction, noise reduction.
+  - `src/amr/prolongation.h/c` — 4th-order cell-centered Lagrange (AthenaK weights)
+  - `src/amr/restriction.h/c` — volume-weighted averaging (1/8 × 8 children)
+  - `src/evolution/dissipation.c` — CAKO (sqrt(chi) scaling) + per-field sigma (0.99/0.3)
+  - `src/evolution/ccz4_rhs.c` — CAHD (H damping to chi) + SSL (Gaussian lapse damping)
+  - `src/core/params.h` — noise_params_t + time field
+  - Prolongation order 5.03 (4th-order confirmed), exact for linear (0 error)
+  - CAHD reduced single BH Ham L2 by 34% (2.94e-3 → 1.94e-3)
+  - SSL measurable at t=0, negligible at t=170M (envelope = 2e-16)
+
 - **Stage 2** (2026-02-16): 13/13 tests pass. Ghost exchange + multi-block evolution.
   - `src/amr/ghost_exchange.h/c` — 26-neighbor ghost exchange (unified index computation)
   - `src/boundary/sommerfeld.h/c` — added `apply_sommerfeld_block()` (domain boundaries only)

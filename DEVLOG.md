@@ -598,3 +598,93 @@ Existing tests (test_flat, test_convergence) pass with no regressions.
 Stage 2: multi-block uniform mesh + 26-neighbor ghost exchange. Decompose
 domain into N_root^3 blocks, fill ghost zones by direct copy from neighbors,
 run physics unchanged. Test gate: multi-block = single-grid to roundoff.
+
+---
+
+## 2026-02-16: AMR Stage 2 — Ghost Exchange
+
+(See architecture.html for full details.)
+
+---
+
+## 2026-02-16: AMR Stage 3 — Prolongation + Restriction + Noise Reduction
+
+### Reference code consulted
+
+- **AthenaK `src/mesh/prolongation.hpp`**: `HighOrderProlongCC` — 4th-order
+  cell-centered Lagrange prolongation with 5-point 1D stencil. Key insight:
+  cell-centered weights differ from vertex-centered. Right child weights =
+  left child reversed.
+- **AthenaK `src/mesh/mesh_refinement.cpp` `InitInterpWghts()`**: Exact weight
+  values: {-45/2048, 105/512, 945/1024, -63/512, 35/2048}.
+- **GRChombo `CoarseAverage`** (Chombo library): Simple volume-weighted
+  averaging for restriction. 2nd-order accurate, conservative.
+- **arXiv:2404.01137** (Etienne 2024): CAKO, CAHD, SSL, per-field sigma.
+
+### Key design decisions
+
+1. **Cell-centered prolongation weights differ from vertex-centered.** The
+   plan originally had {-1/16, 9/16, 9/16, -1/16} — those are for vertex-
+   centered grids where the interpolation target is at x=1/2. For cell-centered
+   grids, the two children are at x=±1/4, giving a 5-point asymmetric stencil.
+   Copied from AthenaK.
+
+2. **Simple restriction (not Lagrange).** AthenaK uses Lagrange restriction
+   (5-point stencil with edge corrections). GRChombo uses simple averaging.
+   For NR (not conservative form), simple averaging is sufficient and avoids
+   edge stencil complexity.
+
+3. **CAHD adds to chi evolution, NOT kappa1.** The plan incorrectly stated
+   `kappa1_eff = kappa1 * 2^(level_offset)`. The paper (Eq. 26) adds a
+   damping term to d_t(phi) proportional to the Hamiltonian constraint:
+   `d_t(chi) += 4*chi*C*CFL*dx*H` with C=0.15. On uniform grid the level
+   scaling factor = 1.
+
+4. **CAKO uses W=sqrt(chi), not chi.** The paper uses W=e^{-2φ}=sqrt(chi)
+   as the KO scaling factor. Using chi directly would be more aggressive
+   suppression near punctures.
+
+5. **All noise features disabled by default.** New `noise_params_t` struct
+   with boolean flags. Existing tests run with all features off → identical
+   behavior to pre-Stage-3 code.
+
+### New files
+
+- `src/amr/prolongation.h/c` — 4th-order Lagrange cell-centered prolongation
+  5-point 1D stencil, 3D tensor product (125 coarse cells per fine child)
+- `src/amr/restriction.h/c` — volume-weighted averaging (1/8 × 8 children)
+
+### Modified files
+
+- `src/core/params.h` — added `noise_params_t` (CAKO/CAHD/SSL/per-field sigma
+  parameters), `double time` for SSL
+- `src/evolution/dissipation.c` — CAKO (sigma_eff = sqrt(chi) * sigma_base)
+  and per-field sigma (0.99 gauge, 0.3 physical)
+- `src/evolution/ccz4_rhs.c` — CAHD (damping to chi via H constraint) and
+  SSL (Gaussian lapse damping toward trumpet solution)
+
+### Test results (15/15 passed)
+
+| Test | Result |
+|------|--------|
+| Weight sum = 1 | 1D: 1.0, 3D: 1.0 |
+| Prolongation linear | 0 error (exact) |
+| Prolongation convergence | order 5.03 (4th-order confirmed) |
+| Restriction error < dx_c^2 | 3.6e-3 < 3.9e-1 |
+| Round-trip error < 10*dx_c^2 | 3.6e-3 < 3.9 |
+| CAKO flat (chi=1) | ratio = 1.000000 (no effect) |
+| Per-field sigma flat | Ham L2 = 4.3e-15 (stable) |
+| CAHD single BH | Ham L2: 2.94e-3 → 1.94e-3 (34% reduction) |
+| SSL single BH | lapse diff = 1.6e-2, envelope(170M) = 2e-16 |
+
+### No regressions
+
+- test_flat: Ham L2 = 5.29e-14 (unchanged)
+- test_convergence: order 5.43/5.47 (unchanged)
+- test_amr_mesh: 33/33 (unchanged)
+
+### What's next
+
+Stage 4: Oct-tree refinement + multi-level ghost exchange. Refine and coarsen
+blocks based on chi-gradient. Support multiple refinement levels with cross-
+level ghost exchange using prolongation and restriction from Stage 3.

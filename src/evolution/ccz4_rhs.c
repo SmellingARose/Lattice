@@ -29,7 +29,7 @@
 
 /* Forward declaration */
 extern void add_ko_dissipation(double **rhs, const double *const *src,
-                               const grid_t *g, double sigma,
+                               const grid_t *g, const sim_params_t *p,
                                int i, int j, int k);
 
 void ccz4_rhs_point(double **rhs, const double *const *src,
@@ -288,6 +288,19 @@ void ccz4_rhs_point(double **rhs, const double *const *src,
     double rhs_chi = advec_chi
         + (2.0 / GR_SPACEDIM) * chi * (lapse * K - divshift);
 
+    /* CAHD: Coarse-grid-Adjusted Hamiltonian-constraint Damping.
+     * Adds damping to chi evolution proportional to the Hamiltonian constraint.
+     * dt(phi) += -C * CFL * dx * H_minus  →  dt(chi) += +4*chi*C*CFL*dx*H
+     * On a uniform grid the level scaling factor = 1; for AMR (Stage 4+),
+     * scale by dx_level / dx_finest.
+     * Ref: arXiv:2404.01137, Eq. (26) */
+    if (p->noise.use_cahd) {
+        double H = ricci.scalar
+                 + ((GR_SPACEDIM - 1.0) / (double)GR_SPACEDIM) * K * K
+                 - tr_A2;
+        rhs_chi += 4.0 * chi * p->noise.cahd_coeff * p->CFL * dx * H;
+    }
+
     /* --- h_ij --- */
     /* dt(h_ij) = advec - 2*alpha*A_ij - (2/3)*h_ij*divshift + h_{ki}*d_j(shift^k) + h_{kj}*d_i(shift^k)
      * Ref: GRChombo CCZ4RHS.impl.hpp:120-129 */
@@ -387,6 +400,20 @@ void ccz4_rhs_point(double **rhs, const double *const *src,
         - p->gauge.lapse_coeff * pow(lapse, p->gauge.lapse_power)
           * (K - 2.0 * Theta);
 
+    /* SSL: Slow-Start Lapse — temporary Gaussian damping of initial gauge pulse.
+     * Drives lapse toward trumpet solution (alpha → W = sqrt(chi)) during
+     * early evolution (t < ~100M), then decays to zero.
+     * Ref: arXiv:2404.01137, Eq. (27) */
+    if (p->noise.use_ssl) {
+        double W = sqrt(fmax(chi, 1.0e-10));
+        double M = p->noise.ssl_total_mass;
+        double h_ssl = p->noise.ssl_h * M;
+        double sigma_t = p->noise.ssl_sigma_t * M;
+        double t = p->time;
+        double ssl_damp = W * h_ssl * exp(-t * t / (2.0 * sigma_t * sigma_t));
+        rhs_lapse += -ssl_damp * (lapse - W);
+    }
+
     double rhs_shift[3], rhs_B[3];
     FOR1(ii) {
         rhs_shift[ii] = p->gauge.shift_advec_coeff * advec_shift[ii]
@@ -425,5 +452,5 @@ void ccz4_rhs_point(double **rhs, const double *const *src,
     rhs[FIELD_B3][idx]     = rhs_B[2];
 
     /* ========== 12. Kreiss-Oliger dissipation ========== */
-    add_ko_dissipation(rhs, src, g, p->sigma, i, j, k);
+    add_ko_dissipation(rhs, src, g, p, i, j, k);
 }

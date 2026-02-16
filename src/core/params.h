@@ -50,6 +50,24 @@ typedef struct {
     int    regrid_every;   /* check interval: 1=every step, 0=never (static)  */
 } amr_params_t;
 
+/*
+ * Noise reduction parameters.
+ * All disabled by default (existing behavior preserved).
+ * Ref: arXiv:2404.01137 (Etienne 2024)
+ */
+typedef struct {
+    int    use_cako;           /* CAKO: chi-adjusted KO dissipation        */
+    int    use_cahd;           /* CAHD: constraint-adjusted Hamiltonian    */
+    int    use_ssl;            /* SSL: slow-start lapse                    */
+    int    use_per_field_sigma;/* per-field dissipation strengths          */
+    double sigma_gauge;        /* KO sigma for gauge fields (default 0.99) */
+    double sigma_phys;         /* KO sigma for physical fields (def 0.3)   */
+    double cahd_coeff;         /* CAHD C coefficient (default 0.15)        */
+    double ssl_h;              /* SSL Gaussian height h/(M) (default 0.6)  */
+    double ssl_sigma_t;        /* SSL Gaussian width σ_t/(M) (default 20)  */
+    double ssl_total_mass;     /* total puncture mass M (default 1.0)       */
+} noise_params_t;
+
 /* Simulation parameters */
 typedef struct {
     int    N;              /* grid points per side (interior)        */
@@ -60,12 +78,14 @@ typedef struct {
     double sigma;          /* Kreiss-Oliger dissipation, default 0.3 */
     int    num_steps;      /* total evolution steps                  */
     int    output_every;   /* output interval (0 = never)            */
+    double time;           /* current simulation time (updated by caller) */
 
     rk_method_t rk_method;  /* RK_CLASSIC or RK_CK45              */
 
     ccz4_params_t  ccz4;
     gauge_params_t gauge;
     amr_params_t   amr;
+    noise_params_t noise;
 } sim_params_t;
 
 /* Default parameter initialization */
@@ -95,6 +115,8 @@ static inline sim_params_t default_params(void)
     p.gauge.lapse_advec_coeff = 0.0;
     p.gauge.shift_advec_coeff = 0.0;
 
+    p.time = 0.0;
+
     /* AMR defaults (disabled by default — uniform grid) */
     p.amr.enabled       = 0;
     p.amr.max_level     = 6;
@@ -103,6 +125,19 @@ static inline sim_params_t default_params(void)
     p.amr.chi_refine    = 0.1;
     p.amr.chi_coarsen   = 0.01;
     p.amr.regrid_every  = 1;
+
+    /* Noise reduction defaults (all disabled — existing behavior) */
+    /* Ref: arXiv:2404.01137, Table 1 and Eqs. (20), (26), (27) */
+    p.noise.use_cako           = 0;
+    p.noise.use_cahd           = 0;
+    p.noise.use_ssl            = 0;
+    p.noise.use_per_field_sigma = 0;
+    p.noise.sigma_gauge        = 0.99;
+    p.noise.sigma_phys         = 0.3;
+    p.noise.cahd_coeff         = 0.15;
+    p.noise.ssl_h              = 0.6;
+    p.noise.ssl_sigma_t        = 20.0;
+    p.noise.ssl_total_mass     = 1.0;
 
     return p;
 }

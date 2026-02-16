@@ -29,7 +29,8 @@ INITIAL_SRC   = src/initial_data/puncture.c
 DIAG_SRC      = src/diagnostics/constraints.c
 BOUNDARY_SRC  = src/boundary/sommerfeld.c
 IO_SRC        = src/io/output.c
-AMR_SRC       = src/amr/block.c src/amr/mesh.c src/amr/meshblock_pack.c src/amr/ghost_exchange.c
+AMR_SRC       = src/amr/block.c src/amr/mesh.c src/amr/meshblock_pack.c src/amr/ghost_exchange.c \
+                src/amr/prolongation.c src/amr/restriction.c
 MAIN_SRC      = src/main.c
 
 # Backend selection
@@ -74,7 +75,7 @@ LDFLAGS = $(BACKEND_LIBS) -lm
 BUILD = build
 
 # Targets
-.PHONY: all debug test test-single-bh test-convergence test-constraints test-head-on test-amr-mesh test-amr-ghost clean
+.PHONY: all debug test test-single-bh test-convergence test-constraints test-head-on test-amr-mesh test-amr-ghost test-amr-prolong clean
 
 all: $(BUILD)/lattice
 
@@ -147,6 +148,14 @@ $(BUILD)/test_amr_ghost: tests/test_amr_ghost.c $(ALL_SRC)
 test-amr-ghost: $(BUILD)/test_amr_ghost
 	@echo "=== Running AMR ghost exchange test ==="
 	$(BUILD)/test_amr_ghost
+
+$(BUILD)/test_amr_prolong: tests/test_amr_prolong.c $(ALL_SRC)
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS_OPT) -o $@ tests/test_amr_prolong.c $(ALL_SRC) $(LDFLAGS)
+
+test-amr-prolong: $(BUILD)/test_amr_prolong
+	@echo "=== Running AMR prolongation + noise reduction test ==="
+	$(BUILD)/test_amr_prolong
 
 clean:
 	rm -rf $(BUILD)
