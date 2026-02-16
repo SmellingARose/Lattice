@@ -29,7 +29,7 @@ INITIAL_SRC   = src/initial_data/puncture.c
 DIAG_SRC      = src/diagnostics/constraints.c
 BOUNDARY_SRC  = src/boundary/sommerfeld.c
 IO_SRC        = src/io/output.c
-AMR_SRC       = src/amr/block.c src/amr/mesh.c src/amr/meshblock_pack.c
+AMR_SRC       = src/amr/block.c src/amr/mesh.c src/amr/meshblock_pack.c src/amr/ghost_exchange.c
 MAIN_SRC      = src/main.c
 
 # Backend selection
@@ -74,7 +74,7 @@ LDFLAGS = $(BACKEND_LIBS) -lm
 BUILD = build
 
 # Targets
-.PHONY: all debug test test-single-bh test-convergence test-constraints test-head-on test-amr-mesh clean
+.PHONY: all debug test test-single-bh test-convergence test-constraints test-head-on test-amr-mesh test-amr-ghost clean
 
 all: $(BUILD)/lattice
 
@@ -139,6 +139,14 @@ $(BUILD)/test_amr_mesh: tests/test_amr_mesh.c $(ALL_SRC)
 test-amr-mesh: $(BUILD)/test_amr_mesh
 	@echo "=== Running AMR mesh test ==="
 	$(BUILD)/test_amr_mesh
+
+$(BUILD)/test_amr_ghost: tests/test_amr_ghost.c $(ALL_SRC)
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS_OPT) -o $@ tests/test_amr_ghost.c $(ALL_SRC) $(LDFLAGS)
+
+test-amr-ghost: $(BUILD)/test_amr_ghost
+	@echo "=== Running AMR ghost exchange test ==="
+	$(BUILD)/test_amr_ghost
 
 clean:
 	rm -rf $(BUILD)

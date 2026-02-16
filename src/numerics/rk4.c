@@ -25,6 +25,9 @@
  */
 
 #include "rk4.h"
+#include "../amr/mesh.h"
+#include "../amr/ghost_exchange.h"
+#include "../boundary/sommerfeld.h"
 #include "../core/fields.h"
 #include "../geometry/tensor_utils.h"
 #include "../backend/backend.h"
@@ -270,4 +273,155 @@ void rk4_step(grid_t *g, const sim_params_t *p,
         ck45_step(g, p, rhs_func, bc_func, dt);
     else
         classic_rk4_step(g, p, rhs_func, bc_func, dt);
+}
+
+/* ========================================================================
+ * Mesh-level RK steps (multi-block with ghost exchange)
+ *
+ * Same algorithms as single-grid steps, but with:
+ *   1. Ghost exchange before each RHS evaluation
+ *   2. Block-aware Sommerfeld (domain boundaries only)
+ *   3. Loop over all leaf blocks for each operation
+ * ======================================================================== */
+
+/*
+ * Compute RHS + apply Sommerfeld BCs for all blocks in the mesh.
+ * Ghost exchange must have been called before this.
+ */
+static void mesh_compute_rhs_and_bc(mesh_t *m, const sim_params_t *p,
+                                    rk4_rhs_func_t rhs_func)
+{
+    for (int bid = 0; bid < m->num_blocks; bid++) {
+        block_t *b = m->blocks[bid];
+        if (!b->is_leaf) continue;
+
+        grid_t *g = b->grid;
+        backend_compute_rhs(g->rhs, (const double *const *)g->fields,
+                            g, p, rhs_func);
+        apply_sommerfeld_block(g->rhs, (const double *const *)g->fields, b);
+    }
+}
+
+/* Enforce algebraic constraints on all leaf blocks */
+static void mesh_enforce_algebraic(mesh_t *m)
+{
+    for (int bid = 0; bid < m->num_blocks; bid++) {
+        block_t *b = m->blocks[bid];
+        if (!b->is_leaf) continue;
+        enforce_algebraic(b->grid);
+    }
+}
+
+/*
+ * Classic RK4 for multi-block mesh.
+ * Same 4-stage algorithm, with ghost exchange before each stage.
+ */
+static void classic_rk4_step_mesh(mesh_t *m, const sim_params_t *p,
+                                  rk4_rhs_func_t rhs_func, double dt)
+{
+    /* Save initial state and zero accumulators */
+    for (int bid = 0; bid < m->num_blocks; bid++) {
+        block_t *b = m->blocks[bid];
+        if (!b->is_leaf) continue;
+        grid_t *g = b->grid;
+        size_t n = g->npoints;
+        copy_fields(g->scratch, (const double *const *)g->fields, n);
+        zero_fields(g->accum, n);
+    }
+
+    /* Stage 1 */
+    ghost_exchange(m);
+    mesh_compute_rhs_and_bc(m, p, rhs_func);
+    for (int bid = 0; bid < m->num_blocks; bid++) {
+        block_t *b = m->blocks[bid];
+        if (!b->is_leaf) continue;
+        grid_t *g = b->grid;
+        size_t n = g->npoints;
+        accum_add(g->accum, (const double *const *)g->rhs, dt / 6.0, n);
+        axpy_fields(g->fields, (const double *const *)g->scratch,
+                    (const double *const *)g->rhs, dt / 2.0, n);
+    }
+
+    /* Stage 2 */
+    ghost_exchange(m);
+    mesh_compute_rhs_and_bc(m, p, rhs_func);
+    for (int bid = 0; bid < m->num_blocks; bid++) {
+        block_t *b = m->blocks[bid];
+        if (!b->is_leaf) continue;
+        grid_t *g = b->grid;
+        size_t n = g->npoints;
+        accum_add(g->accum, (const double *const *)g->rhs, dt / 3.0, n);
+        axpy_fields(g->fields, (const double *const *)g->scratch,
+                    (const double *const *)g->rhs, dt / 2.0, n);
+    }
+
+    /* Stage 3 */
+    ghost_exchange(m);
+    mesh_compute_rhs_and_bc(m, p, rhs_func);
+    for (int bid = 0; bid < m->num_blocks; bid++) {
+        block_t *b = m->blocks[bid];
+        if (!b->is_leaf) continue;
+        grid_t *g = b->grid;
+        size_t n = g->npoints;
+        accum_add(g->accum, (const double *const *)g->rhs, dt / 3.0, n);
+        axpy_fields(g->fields, (const double *const *)g->scratch,
+                    (const double *const *)g->rhs, dt, n);
+    }
+
+    /* Stage 4 */
+    ghost_exchange(m);
+    mesh_compute_rhs_and_bc(m, p, rhs_func);
+    for (int bid = 0; bid < m->num_blocks; bid++) {
+        block_t *b = m->blocks[bid];
+        if (!b->is_leaf) continue;
+        grid_t *g = b->grid;
+        size_t n = g->npoints;
+        accum_add(g->accum, (const double *const *)g->rhs, dt / 6.0, n);
+        copy_fields(g->fields, (const double *const *)g->scratch, n);
+        apply_accum(g->fields, (const double *const *)g->accum, n);
+    }
+
+    mesh_enforce_algebraic(m);
+}
+
+/*
+ * CK45 for multi-block mesh.
+ * Same 5-stage low-storage algorithm, with ghost exchange before each stage.
+ */
+static void ck45_step_mesh(mesh_t *m, const sim_params_t *p,
+                           rk4_rhs_func_t rhs_func, double dt)
+{
+    /* Zero dU (stored in scratch) for all blocks */
+    for (int bid = 0; bid < m->num_blocks; bid++) {
+        block_t *b = m->blocks[bid];
+        if (!b->is_leaf) continue;
+        zero_fields(b->grid->scratch, b->grid->npoints);
+    }
+
+    /* 5 CK45 stages */
+    for (int s = 0; s < 5; s++) {
+        ghost_exchange(m);
+        mesh_compute_rhs_and_bc(m, p, rhs_func);
+
+        for (int bid = 0; bid < m->num_blocks; bid++) {
+            block_t *b = m->blocks[bid];
+            if (!b->is_leaf) continue;
+            grid_t *g = b->grid;
+            ck45_update(g->fields, g->scratch,
+                        (const double *const *)g->rhs,
+                        CK_A[s], CK_B[s], dt, g->npoints);
+        }
+    }
+
+    mesh_enforce_algebraic(m);
+}
+
+/* Public interface for mesh-level stepping */
+void rk4_step_mesh(mesh_t *m, const sim_params_t *p,
+                   rk4_rhs_func_t rhs_func, double dt)
+{
+    if (p->rk_method == RK_CK45)
+        ck45_step_mesh(m, p, rhs_func, dt);
+    else
+        classic_rk4_step_mesh(m, p, rhs_func, dt);
 }

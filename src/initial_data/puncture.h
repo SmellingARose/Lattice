@@ -25,4 +25,11 @@ void set_brill_lindquist(grid_t *g, int n_bh,
                          const double *masses,
                          const double centers[][3]);
 
+/* Block-aware Brill-Lindquist: uses block origin for global coordinates.
+ * Required for multi-block meshes where COORD(g,i) gives block-local coords.
+ * origin[3] is the physical coordinate of the block's low corner. */
+void set_brill_lindquist_global(grid_t *g, const double origin[3],
+                                int n_bh, const double *masses,
+                                const double centers[][3]);
+
 #endif /* LATTICE_PUNCTURE_H */

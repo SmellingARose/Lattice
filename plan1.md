@@ -539,10 +539,10 @@ later stages must not break earlier tests.
 
 ## Progress Tracking
 
-### Status: STAGE 1 COMPLETE
+### Status: STAGE 2 COMPLETE
 
 - [x] **Stage 1:** block_t + mesh_t + MeshBlockPack foundation
-- [ ] **Stage 2:** Multi-block uniform mesh + 26-neighbor ghost exchange
+- [x] **Stage 2:** Multi-block uniform mesh + 26-neighbor ghost exchange
 - [ ] **Stage 3:** Prolongation + Restriction + CAKO/CAHD/SSL/per-field sigma
 - [ ] **Stage 4:** Oct-tree refinement + multi-level ghost exchange
 - [ ] **Stage 5:** Level-by-level subcycling
@@ -552,6 +552,16 @@ later stages must not break earlier tests.
 - None currently
 
 ### Completed milestones
+- **Stage 2** (2026-02-16): 13/13 tests pass. Ghost exchange + multi-block evolution.
+  - `src/amr/ghost_exchange.h/c` — 26-neighbor ghost exchange (unified index computation)
+  - `src/boundary/sommerfeld.h/c` — added `apply_sommerfeld_block()` (domain boundaries only)
+  - `src/numerics/rk4.h/c` — added `rk4_step_mesh()` (CK45 + classic RK4 for multi-block)
+  - `src/initial_data/puncture.h/c` — added `set_brill_lindquist_global()` (block-aware coords)
+  - `tests/test_amr_ghost.c` — polynomial exchange, BL ghost match, multi-block flat + BH evolution
+  - Multi-block flat: Ham L2 = 4.5e-14 (ratio 1.01x vs single-grid 4.4e-14)
+  - Ghost values match single-grid to 0 error (31232 points × 25 fields)
+  - Multi-block single BH: constraints bounded at 2e-02
+
 - **Stage 1** (2026-02-16): 33/33 tests pass. All data structures implemented.
   - `src/amr/block.h/c` — block_t with LogicalLocation, nblevel[3][3][3] (Athena++ pattern)
   - `src/amr/mesh.h/c` — mesh_t with Morton-sorted blocks, 26-neighbor finding

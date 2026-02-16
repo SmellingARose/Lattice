@@ -401,6 +401,78 @@ agree closely (5.43 vs 5.47), confirming we are in the asymptotic regime.
 - Christoffel symbols, Ricci tensor, gauge conditions all implemented correctly
 - KO dissipation is not degrading convergence order
 
+## 2026-02-16: AMR Stage 2 — Ghost Exchange + Multi-Block Evolution
+
+### Goal
+
+Decompose domain into N_root^3 blocks at level 0. Fill ghost zones by
+direct copy from all 26 neighbors (faces, edges, corners) in a single
+pass. All physics unchanged — CCZ4 RHS and Sommerfeld BCs work on
+per-block grids with correct global coordinates.
+
+### Reference code consulted
+
+- **Athena++** `src/bvals/cc/bvals_cc.cpp` — `LoadBoundaryBufferSameLevel()`,
+  `SetBoundarySameLevel()`: unified `(ox1,ox2,ox3)` index calculation for
+  all 26 neighbor types. Sender extracts NGHOST-wide slab from interior,
+  receiver fills ghost zone at corresponding face/edge/corner.
+- **Athena++** `src/utils/buffer_utils.cpp` — `PackData/UnpackData`: loop
+  order n→k→j→i with unit-stride x inner loop and `#pragma omp simd`.
+- **AthenaK** `src/bvals/bvals_cc.cpp` — GPU pattern: single fused kernel
+  for all blocks×neighbors×fields, 3-level parallelism (teams/threads/vectors).
+- **Athena++** buffer size formula: `((ox==0) ? N : NGHOST)` per direction.
+
+### Implementation
+
+**New files (2):**
+- `src/amr/ghost_exchange.h/c` — 26-neighbor ghost exchange. Uniform index
+  computation via `ghost_range()` for all neighbor types. Uses `memcpy` for
+  contiguous x-strips (unit-stride). Single pass over all blocks and neighbors.
+
+**Modified files (5):**
+- `src/boundary/sommerfeld.h/c` — added `apply_sommerfeld_block()`: only applies
+  to ghost points adjacent to domain boundaries (on_boundary[face]==1). Inter-block
+  ghost zones left to ghost exchange. Uses BLOCK_COORD for global coordinates.
+- `src/numerics/rk4.h/c` — added `rk4_step_mesh()`: CK45 and classic RK4 for
+  multi-block meshes. Ghost exchange before each RHS evaluation, block-aware
+  Sommerfeld on domain boundaries, enforce algebraic on all blocks after step.
+- `src/initial_data/puncture.h/c` — added `set_brill_lindquist_global()`:
+  uses explicit origin parameter for correct global coordinates in multi-block.
+- `src/amr/mesh.h` — changed anonymous struct to `struct mesh_s` tag for
+  forward declaration support.
+- `Makefile` — added ghost_exchange.c to AMR_SRC, test-amr-ghost target.
+
+### Key design: unified ghost range computation
+
+For each direction d with neighbor offset o:
+- `o == -1`: dst = `[0, ghost)`, src = `[N, ghost+N)` (neighbor's high interior)
+- `o ==  0`: dst = `[ghost, ghost+N)`, src = `[ghost, ghost+N)` (same range)
+- `o == +1`: dst = `[ghost+N, Ntotal)`, src = `[ghost, 2*ghost)` (neighbor's low interior)
+
+This handles all 26 cases uniformly: faces=slabs, edges=columns, corners=cubes.
+Matches Athena++ `LoadBoundaryBufferSameLevel`/`SetBoundarySameLevel` pattern.
+
+### Test results (13/13 passed)
+
+```
+test_amr_ghost:
+  Ghost exchange polynomial f=x+2y+3z: 0 error    PASS (31232 points checked)
+  Corner block: 3F+3E+1C neighbors                 PASS
+  Multi-block flat (2x2x2): Ham L2 = 4.5e-14       PASS (ratio 1.01x single-grid)
+  Ghost values match BL single-grid: 0 error        PASS (31232 points × 25 fields)
+  Multi-block single BH: Ham L2 bounded             PASS
+```
+
+Key result: **multi-block flat spacetime matches single-grid to 1%** (4.49e-14 vs
+4.44e-14 Ham L2). Ghost exchange values match to exact roundoff (0 error) for both
+polynomial test data and Brill-Lindquist initial data.
+
+All existing tests pass with no regressions (flat, convergence, amr-mesh).
+
+### What's next
+
+Stage 3: prolongation + restriction + noise reduction (CAKO, CAHD, SSL, per-field sigma).
+
 ## 2026-02-16: AMR Stage 1 — Data Structures Foundation
 
 ### What was built

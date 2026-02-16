@@ -29,4 +29,11 @@ void rk4_step(grid_t *g, const sim_params_t *p,
               rk4_rhs_func_t rhs_func, rk4_bc_func_t bc_func,
               double dt);
 
+/* Advance all blocks in a mesh by one full RK step (global dt).
+ * Ghost exchange before each RHS, Sommerfeld on domain boundaries only.
+ * Same integrator (classic or CK45) as rk4_step. */
+struct mesh_s;  /* forward declaration to avoid circular include */
+void rk4_step_mesh(struct mesh_s *m, const sim_params_t *p,
+                   rk4_rhs_func_t rhs_func, double dt);
+
 #endif /* LATTICE_RK4_H */

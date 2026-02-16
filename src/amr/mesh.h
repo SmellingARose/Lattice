@@ -21,7 +21,7 @@
 #include "block.h"
 #include "../core/params.h"
 
-typedef struct {
+typedef struct mesh_s {
     block_t   **blocks;       /* array of all blocks (indexed by ID)       */
     int         num_blocks;   /* total blocks (all are leaves in Stage 1)  */
     int         max_blocks;   /* allocated capacity                        */

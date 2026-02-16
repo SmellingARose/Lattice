@@ -162,7 +162,7 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
     <li><a href="#mod-diagnostics"><span class="status-dot dot-green"></span>diagnostics/</a></li>
     <li><a href="#mod-boundary"><span class="status-dot dot-green"></span>boundary/</a></li>
     <li><a href="#mod-io"><span class="status-dot dot-green"></span>io/</a></li>
-    <li><a href="#mod-amr"><span class="status-dot dot-yellow"></span>amr/ (Stage 1)</a></li>
+    <li><a href="#mod-amr"><span class="status-dot dot-yellow"></span>amr/ (Stage 2)</a></li>
 
     <li><a class="section-header">Tests &amp; Build</a></li>
     <li><a href="#tests">Test Infrastructure</a></li>
@@ -621,28 +621,37 @@ Grid indexing:  IDX(g, i, j, k) = k * Ntotal^2 + j * Ntotal + i
 </details>
 
 <!-- ========================================== -->
-<h2 id="mod-amr">Module: amr/ <span class="badge badge-yellow">Stage 1 Complete (6 stages total)</span></h2>
+<h2 id="mod-amr">Module: amr/ <span class="badge badge-yellow">Stage 2 Complete (6 stages total)</span></h2>
 
 <p>Oct-tree block AMR implemented in 6 stages (see <code>plan1.md</code>). The architecture wraps each <code>grid_t</code> in a <code>block_t</code> with tree metadata, managed by a <code>mesh_t</code>. A <code>meshblock_pack_t</code> packs block data into contiguous GPU-friendly buffers. The physics code (<code>ccz4_rhs_point</code>) runs unchanged on each block.</p>
 
 <p>Key patterns copied from <strong>Athena++</strong> (Stone et al. 2020) and <strong>AthenaK</strong> (Grete et al. 2024): <code>LogicalLocation</code> tree addressing, <code>nblevel[3][3][3]</code> neighbor level tables, child octant indexing <code>n = ox1 + (ox2&lt;&lt;1) + (ox3&lt;&lt;2)</code>, Morton Z-order block sorting, MeshBlockPack GPU batching.</p>
 
-<h4>Implemented Files (Stage 1):</h4>
+<h4>Implemented Files (Stages 1&ndash;2):</h4>
 <table class="file-table">
 <tr><th>File</th><th>Purpose</th><th>Status</th></tr>
 <tr><td><code>src/amr/morton.h</code></td><td>Header-only Morton Z-order encoding/decoding (bit-interleave, child/parent ops)</td><td><span class="badge badge-green">Done</span></td></tr>
 <tr><td><code>src/amr/block.h</code></td><td>block_t: grid_t* + LogicalLocation + nblevel[3][3][3] + 26 neighbors + tree links</td><td><span class="badge badge-green">Done</span></td></tr>
 <tr><td><code>src/amr/block.c</code></td><td>Block allocation (wraps grid_alloc), 26-neighbor offset table</td><td><span class="badge badge-green">Done</span></td></tr>
-<tr><td><code>src/amr/mesh.h</code></td><td>mesh_t struct, mesh_create/free API</td><td><span class="badge badge-green">Done</span></td></tr>
+<tr><td><code>src/amr/mesh.h</code></td><td>mesh_t struct (struct mesh_s tag), mesh_create/free API</td><td><span class="badge badge-green">Done</span></td></tr>
 <tr><td><code>src/amr/mesh.c</code></td><td>Uniform root grid creation, Morton sort, neighbor finding, nblevel + boundary flags</td><td><span class="badge badge-green">Done</span></td></tr>
 <tr><td><code>src/amr/meshblock_pack.h</code></td><td>meshblock_pack_t: contiguous GPU buffer, PACK_IDX macro, load/store API</td><td><span class="badge badge-green">Done</span></td></tr>
 <tr><td><code>src/amr/meshblock_pack.c</code></td><td>Page-aligned allocation, field data copy to/from blocks</td><td><span class="badge badge-green">Done</span></td></tr>
+<tr><td><code>src/amr/ghost_exchange.h</code></td><td>Ghost exchange API: ghost_exchange() and ghost_exchange_array()</td><td><span class="badge badge-green">Done</span></td></tr>
+<tr><td><code>src/amr/ghost_exchange.c</code></td><td>26-neighbor ghost fill: unified ghost_range() for faces/edges/corners, memcpy x-strips</td><td><span class="badge badge-green">Done</span></td></tr>
 </table>
 
-<h4>Remaining Files (Stages 2&ndash;6):</h4>
+<h4>Modified Files (Stage 2):</h4>
+<table class="file-table">
+<tr><th>File</th><th>Change</th></tr>
+<tr><td><code>src/boundary/sommerfeld.h/c</code></td><td>Added <code>apply_sommerfeld_block()</code>: domain-boundary-only Sommerfeld using BLOCK_COORD</td></tr>
+<tr><td><code>src/numerics/rk4.h/c</code></td><td>Added <code>rk4_step_mesh()</code>: CK45 + classic RK4 for multi-block (ghost exchange + per-block RHS)</td></tr>
+<tr><td><code>src/initial_data/puncture.h/c</code></td><td>Added <code>set_brill_lindquist_global()</code>: block-aware coords via explicit origin</td></tr>
+</table>
+
+<h4>Remaining Files (Stages 3&ndash;6):</h4>
 <table class="file-table">
 <tr><th>File</th><th>Stage</th><th>Purpose</th></tr>
-<tr><td><code>src/amr/ghost_exchange.h / .c</code></td><td>2</td><td>26-neighbor ghost zone fill (faces + edges + corners in 1 pass)</td></tr>
 <tr><td><code>src/amr/prolongation.h / .c</code></td><td>3</td><td>4th-order Lagrange coarse-to-fine interpolation</td></tr>
 <tr><td><code>src/amr/restriction.h / .c</code></td><td>3</td><td>Volume-weighted fine-to-coarse averaging</td></tr>
 <tr><td><code>src/amr/refine.h / .c</code></td><td>4</td><td>Oct-tree split/merge + 2:1 constraint enforcement</td></tr>
@@ -701,6 +710,12 @@ Grid indexing:  IDX(g, i, j, k) = k * Ntotal^2 + j * Ntotal + i
   <td>33 sub-tests pass, Ham L2 &lt; 1e-10, pack error = 0</td>
   <td><span class="badge badge-green">Passing</span></td>
 </tr>
+<tr>
+  <td><code>tests/test_amr_ghost.c</code></td>
+  <td>AMR Stage 2: ghost exchange (polynomial + BL), multi-block flat + single BH evolution</td>
+  <td>13 sub-tests pass, ghost error = 0, multi-block Ham L2 &lt; 1e-10</td>
+  <td><span class="badge badge-green">Passing</span></td>
+</tr>
 </table>
 
 <h3>How to Run Tests</h3>
@@ -709,7 +724,8 @@ make test-single-bh      # single BH (~40 min on M4 at N=128)
 make test-convergence    # 3-resolution convergence (~15 min)
 make test-constraints    # Hamiltonian + momentum constraint tests
 make test-head-on        # head-on binary collision (~6 hrs at N=128)
-make test-amr-mesh       # AMR Stage 1 infrastructure (33 tests, ~30 sec)</code></pre>
+make test-amr-mesh       # AMR Stage 1 infrastructure (33 tests, ~30 sec)
+make test-amr-ghost      # AMR Stage 2 ghost exchange + multi-block (13 tests, ~60 sec)</code></pre>
 
 <!-- ========================================== -->
 <h2 id="build">Build System</h2>
@@ -732,7 +748,7 @@ make clean                    # rm -rf build/</code></pre>
 <tr><td><code>DIAG_SRC</code></td><td>src/diagnostics/constraints.c</td></tr>
 <tr><td><code>BOUNDARY_SRC</code></td><td>src/boundary/sommerfeld.c</td></tr>
 <tr><td><code>IO_SRC</code></td><td>src/io/output.c</td></tr>
-<tr><td><code>AMR_SRC</code></td><td>src/amr/block.c src/amr/mesh.c src/amr/meshblock_pack.c</td></tr>
+<tr><td><code>AMR_SRC</code></td><td>src/amr/block.c src/amr/mesh.c src/amr/meshblock_pack.c src/amr/ghost_exchange.c</td></tr>
 <tr><td><code>BACKEND_SRC</code></td><td>src/backend/backend_cpu.c <em>or</em> backend_gpu.c (selected by BACKEND flag)</td></tr>
 <tr><td><code>MAIN_SRC</code></td><td>src/main.c</td></tr>
 </table>
