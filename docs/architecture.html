@@ -162,7 +162,7 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
     <li><a href="#mod-diagnostics"><span class="status-dot dot-green"></span>diagnostics/</a></li>
     <li><a href="#mod-boundary"><span class="status-dot dot-green"></span>boundary/</a></li>
     <li><a href="#mod-io"><span class="status-dot dot-green"></span>io/</a></li>
-    <li><a href="#mod-amr"><span class="status-dot dot-yellow"></span>amr/ (Stage 4)</a></li>
+    <li><a href="#mod-amr"><span class="status-dot dot-yellow"></span>amr/ (Stage 4.1)</a></li>
 
     <li><a class="section-header">Tests &amp; Build</a></li>
     <li><a href="#tests">Test Infrastructure</a></li>
@@ -625,35 +625,35 @@ Grid indexing:  IDX(g, i, j, k) = k * Ntotal^2 + j * Ntotal + i
 </details>
 
 <!-- ========================================== -->
-<h2 id="mod-amr">Module: amr/ <span class="badge badge-yellow">Stage 4 Complete (6 stages total)</span></h2>
+<h2 id="mod-amr">Module: amr/ <span class="badge badge-yellow">Stage 4.1 Complete (6 stages total)</span></h2>
 
-<p>Oct-tree block AMR implemented in 6 stages (see <code>plan1.md</code>). The architecture wraps each <code>grid_t</code> in a <code>block_t</code> with tree metadata, managed by a <code>mesh_t</code>. A <code>meshblock_pack_t</code> packs block data into contiguous GPU-friendly buffers. The physics code (<code>ccz4_rhs_point</code>) runs unchanged on each block. Stage 4 adds dynamic oct-tree refinement/coarsening with chi-gradient criterion and cross-level ghost exchange.</p>
+<p>Oct-tree block AMR implemented in 6 stages (see <code>plan1.md</code>). The architecture wraps each <code>grid_t</code> in a <code>block_t</code> with tree metadata, managed by a <code>mesh_t</code>. A <code>meshblock_pack_t</code> packs block data into contiguous GPU-friendly buffers. The physics code (<code>ccz4_rhs_point</code>) runs unchanged on each block. Stage 4 adds dynamic oct-tree refinement/coarsening with chi-gradient criterion and cross-level ghost exchange. Stage 4.1 introduces the AthenaK coarse-buffer architecture: each leaf block at level &gt; 0 carries a <code>coarse_buf</code> (half-resolution <code>grid_t</code>) for block-local multilevel ghost fill with no cross-block writes. Restriction upgraded to 4th-order Lagrange throughout.</p>
 
 <p>Key patterns copied from <strong>Athena++</strong> (Stone et al. 2020) and <strong>AthenaK</strong> (Grete et al. 2024): <code>LogicalLocation</code> tree addressing, <code>nblevel[3][3][3]</code> neighbor level tables, child octant indexing <code>n = ox1 + (ox2&lt;&lt;1) + (ox3&lt;&lt;2)</code>, Morton Z-order block sorting, MeshBlockPack GPU batching.</p>
 
-<h4>Implemented Files (Stages 1&ndash;4):</h4>
+<h4>Implemented Files (Stages 1&ndash;4.1):</h4>
 <table class="file-table">
 <tr><th>File</th><th>Purpose</th><th>Status</th></tr>
 <tr><td><code>src/amr/morton.h</code></td><td>Header-only Morton Z-order encoding/decoding (bit-interleave, child/parent ops)</td><td><span class="badge badge-green">Done</span></td></tr>
-<tr><td><code>src/amr/block.h</code></td><td>block_t: grid_t* + LogicalLocation + nblevel[3][3][3] + 26 neighbors + tree links</td><td><span class="badge badge-green">Done</span></td></tr>
-<tr><td><code>src/amr/block.c</code></td><td>Block allocation (wraps grid_alloc), 26-neighbor offset table</td><td><span class="badge badge-green">Done</span></td></tr>
+<tr><td><code>src/amr/block.h</code></td><td>block_t: grid_t* + grid_t *coarse_buf + LogicalLocation + nblevel[3][3][3] + 26 neighbors + tree links</td><td><span class="badge badge-green">Done</span></td></tr>
+<tr><td><code>src/amr/block.c</code></td><td>Block allocation (wraps grid_alloc), coarse_buf_alloc() for half-res buffer, 26-neighbor offset table</td><td><span class="badge badge-green">Done</span></td></tr>
 <tr><td><code>src/amr/mesh.h</code></td><td>mesh_t struct + find/add/remove/compact/rebuild_neighbors API</td><td><span class="badge badge-green">Done</span></td></tr>
-<tr><td><code>src/amr/mesh.c</code></td><td>Root grid creation, Morton sort, multi-level neighbor finding with coarse fallback</td><td><span class="badge badge-green">Done</span></td></tr>
+<tr><td><code>src/amr/mesh.c</code></td><td>Root grid creation, Morton sort, multi-level neighbor finding with coarse fallback (fixed for cross-level edge/corner lookups via floor division of neighbor coords)</td><td><span class="badge badge-green">Done</span></td></tr>
 <tr><td><code>src/amr/meshblock_pack.h</code></td><td>meshblock_pack_t: contiguous GPU buffer, PACK_IDX macro, load/store API</td><td><span class="badge badge-green">Done</span></td></tr>
 <tr><td><code>src/amr/meshblock_pack.c</code></td><td>Page-aligned allocation, field data copy to/from blocks</td><td><span class="badge badge-green">Done</span></td></tr>
 <tr><td><code>src/amr/ghost_exchange.h</code></td><td>Ghost exchange API: ghost_exchange(), ghost_exchange_array(), ghost_exchange_multilevel()</td><td><span class="badge badge-green">Done</span></td></tr>
-<tr><td><code>src/amr/ghost_exchange.c</code></td><td>26-neighbor ghost fill + 4-phase multilevel exchange (restrict &rarr; same-level &rarr; prolongate from parent &rarr; same-level)</td><td><span class="badge badge-green">Done</span></td></tr>
+<tr><td><code>src/amr/ghost_exchange.c</code></td><td>26-neighbor ghost fill + 5-phase coarse-buffer multilevel exchange (same-level &rarr; restrict to coarse_buf &rarr; fill coarse_buf ghosts &rarr; boundary extrapolation &rarr; prolongate from own coarse_buf)</td><td><span class="badge badge-green">Done</span></td></tr>
 <tr><td><code>src/amr/prolongation.h</code></td><td>4th-order cell-centered Lagrange prolongation API, weight array</td><td><span class="badge badge-green">Done</span></td></tr>
 <tr><td><code>src/amr/prolongation.c</code></td><td>5-point 1D stencil, 3D tensor product (125 coarse cells per fine child). Ref: AthenaK</td><td><span class="badge badge-green">Done</span></td></tr>
-<tr><td><code>src/amr/restriction.h</code></td><td>Volume-weighted restriction API (fine &rarr; coarse)</td><td><span class="badge badge-green">Done</span></td></tr>
-<tr><td><code>src/amr/restriction.c</code></td><td>U_coarse = (1/8) &times; sum of 8 fine children. Ref: GRChombo CoarseAverage</td><td><span class="badge badge-green">Done</span></td></tr>
+<tr><td><code>src/amr/restriction.h</code></td><td>4th-order Lagrange restriction API: RESTRICT_STENCIL, restrict_w[], restrict_to_coarse_buf()</td><td><span class="badge badge-green">Done</span></td></tr>
+<tr><td><code>src/amr/restriction.c</code></td><td>4th-order cell-average restriction (4-point Lagrange weights, 3D tensor product of 64 fine cells per coarse cell, 2nd-order fallback at boundaries). restrict_to_coarse_buf() for block-local fine&rarr;coarse_buf. Ref: ExaHyPE, AthenaK, GRChombo CoarseAverage</td><td><span class="badge badge-green">Done</span></td></tr>
 <tr><td><code>src/amr/criterion.h</code></td><td>Chi-gradient refinement criterion API: chi_gradient_max, criterion_check_block/mesh</td><td><span class="badge badge-green">Done</span></td></tr>
 <tr><td><code>src/amr/criterion.c</code></td><td>(dx/chi&sup2;)|&nabla;chi| criterion with hysteresis thresholds. Ref: GRChombo ChiTaggingCriterion</td><td><span class="badge badge-green">Done</span></td></tr>
 <tr><td><code>src/amr/refine.h</code></td><td>Oct-tree refinement API: mesh_refine_block, mesh_coarsen_siblings, mesh_enforce_2to1, mesh_regrid</td><td><span class="badge badge-green">Done</span></td></tr>
-<tr><td><code>src/amr/refine.c</code></td><td>Block split 1&rarr;8, merge 8&rarr;1, 2:1 cascade, full regrid cycle. Ref: Athena++ meshblock_tree</td><td><span class="badge badge-green">Done</span></td></tr>
+<tr><td><code>src/amr/refine.c</code></td><td>Block split 1&rarr;8, merge 8&rarr;1, 2:1 cascade, full regrid cycle. restrict_child_into_parent uses 4th-order Lagrange (RESTRICT_STENCIL/restrict_w[]). Ref: Athena++ meshblock_tree, ExaHyPE</td><td><span class="badge badge-green">Done</span></td></tr>
 </table>
 
-<h4>Modified Files (Stages 2&ndash;4):</h4>
+<h4>Modified Files (Stages 2&ndash;4.1):</h4>
 <table class="file-table">
 <tr><th>File</th><th>Change</th></tr>
 <tr><td><code>src/boundary/sommerfeld.h/c</code></td><td>Added <code>apply_sommerfeld_block()</code>: domain-boundary-only Sommerfeld using BLOCK_COORD</td></tr>
@@ -662,6 +662,13 @@ Grid indexing:  IDX(g, i, j, k) = k * Ntotal^2 + j * Ntotal + i
 <tr><td><code>src/core/params.h</code></td><td>Added <code>noise_params_t</code> (CAKO/CAHD/SSL/per-field sigma params), <code>amr_params_t</code>, <code>double time</code></td></tr>
 <tr><td><code>src/evolution/dissipation.c</code></td><td>CAKO: <code>sigma_eff = sqrt(chi) * sigma_base</code>. Per-field sigma: 0.99 gauge, 0.3 physical</td></tr>
 <tr><td><code>src/evolution/ccz4_rhs.c</code></td><td>CAHD: <code>rhs_chi += 4*chi*C*CFL*dx*H</code>. SSL: Gaussian lapse damping toward trumpet</td></tr>
+<tr><td><code>src/amr/block.h</code></td><td>Stage 4.1: added <code>grid_t *coarse_buf</code> field to <code>block_t</code> (half-res buffer for AMR ghost fill)</td></tr>
+<tr><td><code>src/amr/block.c</code></td><td>Stage 4.1: added <code>coarse_buf_alloc()</code> static helper (exact N, fields-only, no RK arrays). <code>block_alloc()</code> auto-creates coarse_buf for level &gt; 0</td></tr>
+<tr><td><code>src/amr/restriction.h</code></td><td>Stage 4.1: added <code>RESTRICT_STENCIL</code>, <code>restrict_w[]</code>, <code>restrict_to_coarse_buf()</code>. Upgraded from 2nd-order to 4th-order Lagrange</td></tr>
+<tr><td><code>src/amr/restriction.c</code></td><td>Stage 4.1: 4th-order Lagrange weights {1/48, 23/48, 23/48, 1/48}. Added <code>restrict_to_coarse_buf()</code> (block-local fine&rarr;coarse_buf)</td></tr>
+<tr><td><code>src/amr/ghost_exchange.c</code></td><td>Stage 4.1: 5-phase coarse-buffer architecture. Added static helpers: <code>fill_coarse_buf_boundary()</code>, <code>fill_coarse_buf_ghosts()</code>, <code>copy_from_coarse_grid()</code>, <code>exchange_grid_pair()</code>, <code>prolongate_from_own_coarse_buf()</code></td></tr>
+<tr><td><code>src/amr/mesh.c</code></td><td>Stage 4.1: fixed <code>mesh_rebuild_neighbors()</code> cross-level edge/corner lookups &mdash; floor-divides neighbor coords (not block's own coords) for correct coarse-level mapping</td></tr>
+<tr><td><code>src/amr/refine.c</code></td><td>Stage 4.1: <code>restrict_child_into_parent()</code> upgraded to 4th-order Lagrange restriction (uses <code>RESTRICT_STENCIL</code>/<code>restrict_w[]</code>) with 2nd-order fallback</td></tr>
 </table>
 
 <h4>Remaining Files (Stages 5&ndash;6):</h4>
@@ -669,6 +676,162 @@ Grid indexing:  IDX(g, i, j, k) = k * Ntotal^2 + j * Ntotal + i
 <tr><th>File</th><th>Stage</th><th>Purpose</th></tr>
 <tr><td><code>src/amr/subcycling.h / .c</code></td><td>5</td><td>Level-by-level time advance with restriction</td></tr>
 </table>
+
+<h4>AMR Function Details (Stages 1&ndash;4.1):</h4>
+
+<details>
+<summary>amr/block.h / block.c &mdash; AMR block with coarse buffer</summary>
+<div class="detail-body">
+<p>Wraps <code>grid_t</code> with oct-tree metadata: logical location, 26-neighbor IDs, nblevel table, tree links (parent/child), boundary flags. Stage 4.1 adds <code>coarse_buf</code>: a half-resolution <code>grid_t</code> for block-local AMR ghost fill.</p>
+
+<table class="file-table">
+<tr><th>Item</th><th>Description</th></tr>
+<tr><td><code>block_t</code></td><td>grid_t *grid, grid_t *coarse_buf (NULL if L==0), id, logical_location_t, origin[3], parent_id, child_ids[8], is_leaf, neighbor_ids[26], nblevel[3][3][3], on_boundary[6]</td></tr>
+<tr><td><code>BLOCK_COORD(b,dir,i)</code></td><td>Physical coordinate of grid point i in block b</td></tr>
+<tr><td><code>block_alloc(id, level, N, dx, origin, method)</code></td><td>Allocates block with grid_alloc + coarse_buf (level &gt; 0). Tree links = -1, is_leaf = 1</td></tr>
+<tr><td><code>block_free(b)</code></td><td>Frees grid, coarse_buf, and block struct</td></tr>
+<tr><td><code>coarse_buf_alloc(N, dx)</code></td><td>Static. Fields-only grid: exact N (no padding), no RK arrays. Used for coarse_buf where N may be &lt; 16</td></tr>
+<tr><td><code>nbr_offset[26][3]</code></td><td>Offset table: 6 faces + 12 edges + 8 corners in {-1,0,+1}^3</td></tr>
+</table>
+
+<p><strong>Ref:</strong> Athena++ MeshBlock, AthenaK coarse-buffer architecture</p>
+
+<p><strong>Depends on:</strong> grid.h, params.h, fields.h<br>
+<strong>Depended on by:</strong> mesh.h, ghost_exchange.c, restriction.c, refine.c, sommerfeld.c</p>
+</div>
+</details>
+
+<details>
+<summary>amr/restriction.h / restriction.c &mdash; 4th-order Lagrange restriction</summary>
+<div class="detail-body">
+<p>Cell-average restriction (fine &rarr; coarse) using 4th-order symmetric Lagrange stencil. 1D: 4 fine cells per coarse cell, weights {1/48, 23/48, 23/48, 1/48}. 3D: tensor product, 4&sup3; = 64 fine cells per coarse cell. Falls back to 2nd-order (8-cell average) when stencil exits grid bounds.</p>
+
+<table class="file-table">
+<tr><th>Item</th><th>Description</th></tr>
+<tr><td><code>RESTRICT_STENCIL</code></td><td>= 4 (4-point stencil per direction)</td></tr>
+<tr><td><code>restrict_w[4]</code></td><td>Lagrange weights: {1/48, 23/48, 23/48, 1/48}. Sum = 1, all positive</td></tr>
+<tr><td><code>restrict_field(fine, ff, coarse, cf)</code></td><td>Restrict one field from fine grid to coarse grid</td></tr>
+<tr><td><code>restrict_all(fine, coarse)</code></td><td>Restrict all NUM_FIELDS</td></tr>
+<tr><td><code>restrict_to_coarse_buf(b)</code></td><td>Restrict fine block interior &rarr; block's own coarse_buf (block-local, no cross-block access)</td></tr>
+<tr><td><code>restrict_cell(src, fg, fi, fj, fk)</code></td><td>Static inline. Single coarse cell from fine data with 4th/2nd-order dispatch</td></tr>
+</table>
+
+<p><strong>Ref:</strong> ExaHyPE (arXiv:2504.15814), AthenaK, GRChombo CoarseAverage, Fornberg SIAM Review 40 (1998)</p>
+
+<p><strong>Depends on:</strong> grid.h, block.h, fields.h<br>
+<strong>Depended on by:</strong> ghost_exchange.c (Phase 2), refine.c (coarsening)</p>
+</div>
+</details>
+
+<details>
+<summary>amr/ghost_exchange.h / ghost_exchange.c &mdash; 26-neighbor + multilevel ghost exchange</summary>
+<div class="detail-body">
+<p>Same-level ghost exchange copies 26-neighbor regions between same-resolution blocks. Multilevel exchange (Stage 4.1) uses the AthenaK coarse-buffer architecture: 5 phases with no cross-block writes.</p>
+
+<table class="file-table">
+<tr><th>Function</th><th>Description</th></tr>
+<tr><td><code>ghost_exchange(m)</code></td><td>Public. Same-level 26-neighbor exchange for all leaf blocks</td></tr>
+<tr><td><code>ghost_exchange_array(m, src_field)</code></td><td>Public. Exchange specific array (0=fields, 1=scratch) for RK intermediate states</td></tr>
+<tr><td><code>ghost_exchange_multilevel(m)</code></td><td>Public. 5-phase coarse-buffer multilevel exchange. Falls back to ghost_exchange() for uniform grids</td></tr>
+<tr><td><code>exchange_neighbor(b, nbr, ox, oy, oz, field_arrays)</code></td><td>Static. Copy one neighbor's interior to block's ghost zone (memcpy x-strips)</td></tr>
+<tr><td><code>exchange_same_level(m, level)</code></td><td>Static. Same-level exchange at a specific level (Phase 0+1)</td></tr>
+<tr><td><code>exchange_grid_pair(dg, sg, ox, oy, oz)</code></td><td>Static. Exchange between two grids of same dimensions (coarse_buf &harr; coarse_buf)</td></tr>
+<tr><td><code>copy_from_coarse_grid(dst, dst_origin, src, src_origin, ox, oy, oz)</code></td><td>Static. Copy from coarser neighbor's grid into coarse_buf ghost zone (index-offset mapping)</td></tr>
+<tr><td><code>fill_coarse_buf_ghosts(m)</code></td><td>Static. Phase 3: fill all coarse_buf ghost zones from sibling bufs + coarse neighbors</td></tr>
+<tr><td><code>fill_coarse_buf_boundary(b)</code></td><td>Static. Phase 3.5: quadratic extrapolation for domain-boundary ghost cells of coarse_buf</td></tr>
+<tr><td><code>prolongate_from_own_coarse_buf(b)</code></td><td>Static. Phase 4: 5-point Lagrange from coarse_buf &rarr; fine ghost zones (skips same-level-filled directions)</td></tr>
+<tr><td><code>ghost_range(offset, ghost, N, Nt, ...)</code></td><td>Static inline. Compute source/destination index ranges for one direction</td></tr>
+</table>
+
+<p><strong>Ref:</strong> AthenaK src/bvals/ (coarse-buffer), Athena++ bvals_cc.cpp, GRChombo GRAMRLevel.cpp:1029-1043</p>
+
+<p><strong>Depends on:</strong> mesh.h, prolongation.h, restriction.h, fields.h<br>
+<strong>Depended on by:</strong> rk4.c (rk4_step_mesh)</p>
+</div>
+</details>
+
+<details>
+<summary>amr/mesh.h / mesh.c &mdash; AMR mesh management</summary>
+<div class="detail-body">
+<p>Manages the collection of blocks forming the computational domain. Creates uniform root grid, supports dynamic block addition/removal, Morton Z-order sorting, and multi-level neighbor finding. Stage 4.1 fixes cross-level edge/corner neighbor lookups in <code>mesh_rebuild_neighbors()</code>.</p>
+
+<table class="file-table">
+<tr><th>Function</th><th>Description</th></tr>
+<tr><td><code>mesh_create(N_root, N_block, L, method)</code></td><td>Creates uniform level-0 mesh: N_root^3 blocks, Morton-sorted, neighbors set</td></tr>
+<tr><td><code>mesh_free(m)</code></td><td>Frees all blocks and mesh struct</td></tr>
+<tr><td><code>mesh_num_leaves(m)</code></td><td>Count active leaf blocks</td></tr>
+<tr><td><code>mesh_find_block(m, level, lx1, lx2, lx3)</code></td><td>Linear search for block at given logical location</td></tr>
+<tr><td><code>mesh_add_block(m, b)</code></td><td>Add block to mesh (fills NULL slots first, then appends)</td></tr>
+<tr><td><code>mesh_remove_block(m, id)</code></td><td>Set slot to NULL (caller frees)</td></tr>
+<tr><td><code>mesh_compact(m)</code></td><td>Compact NULL slots, remap all internal IDs (parent, child, neighbor)</td></tr>
+<tr><td><code>mesh_rebuild_neighbors(m)</code></td><td>Rebuild all 26 neighbors + nblevel for every block. Cross-level: floor-divides neighbor's fine-level coords to find coarse-level blocks (fixed in Stage 4.1)</td></tr>
+</table>
+
+<p><strong>Stage 4.1 fix:</strong> <code>mesh_rebuild_neighbors()</code> previously mapped the block's own coordinates to coarser levels before adding the offset, which failed for edge/corner directions at coarse-fine boundaries. Now it first computes the neighbor's fine-level coordinates, then floor-divides those to coarser levels.</p>
+
+<p><strong>Ref:</strong> Athena++ mesh.cpp, bvals_base.cpp SearchAndSetNeighbors, MeshBlockTree::FindNeighbor</p>
+
+<p><strong>Depends on:</strong> block.h, morton.h<br>
+<strong>Depended on by:</strong> ghost_exchange.h, criterion.h, refine.h, meshblock_pack.h, rk4.c</p>
+</div>
+</details>
+
+<details>
+<summary>amr/refine.h / refine.c &mdash; Oct-tree refinement and coarsening</summary>
+<div class="detail-body">
+<p>Block split (1&rarr;8 children via prolongation), merge (8&rarr;1 parent via restriction), 2:1 constraint enforcement, and full regrid cycle. Stage 4.1 upgrades <code>restrict_child_into_parent()</code> to use 4th-order Lagrange restriction.</p>
+
+<table class="file-table">
+<tr><th>Function</th><th>Description</th></tr>
+<tr><td><code>mesh_refine_block(m, block_id)</code></td><td>Split leaf into 8 children with prolongated data + algebraic enforcement</td></tr>
+<tr><td><code>mesh_coarsen_siblings(m, parent_id)</code></td><td>Merge 8 children back into parent with 4th-order restricted data</td></tr>
+<tr><td><code>mesh_enforce_2to1(m, flags, n_flags)</code></td><td>Cascade refinement flags to maintain &le; 1 level difference between neighbors</td></tr>
+<tr><td><code>mesh_regrid(m, ap)</code></td><td>Full cycle: criterion &rarr; 2:1 enforce &rarr; split/merge &rarr; compact &rarr; rebuild neighbors</td></tr>
+<tr><td><code>prolongate_into_child(parent, child, cx, cy, cz)</code></td><td>Static. Creates tmp fine grid, prolongates parent, copies octant to child</td></tr>
+<tr><td><code>restrict_child_into_parent(child, parent, cx, cy, cz)</code></td><td>Static. 4th-order Lagrange restriction (RESTRICT_STENCIL/restrict_w[]) with 2nd-order fallback</td></tr>
+<tr><td><code>enforce_algebraic_block(g)</code></td><td>Static. det(h)=1, tr(A)=0, chi/lapse floor on single block</td></tr>
+</table>
+
+<p><strong>Ref:</strong> Athena++ meshblock_tree.cpp, ExaHyPE (arXiv:2504.15814)</p>
+
+<p><strong>Depends on:</strong> mesh.h, criterion.h, prolongation.h, restriction.h, fields.h, tensor_utils.h<br>
+<strong>Depended on by:</strong> rk4.c (rk4_step_mesh), test_amr_refine.c</p>
+</div>
+</details>
+
+<h4>Coarse-Buffer Architecture (Stage 4.1, AthenaK pattern) &mdash; Implemented:</h4>
+<p>Each leaf block at level &gt; 0 carries a <code>coarse_buf</code> grid_t at half resolution (N/2 cells, 2&times; dx). This enables block-local multilevel ghost exchange with no cross-block memory writes. The coarse_buf is allocated by <code>coarse_buf_alloc()</code> (fields-only, no RK arrays). The <code>ghost_exchange_multilevel()</code> function uses 5 phases:</p>
+
+<div class="diagram"><span class="fn">ghost_exchange_multilevel</span>(mesh_t *m)
+  |
+  +--&gt; <span class="highlight">Phase 0+1:</span> <span class="fn">exchange_same_level</span>(m, L) for L=0..max_level
+  |     Same-level neighbor exchange at each level (fills sibling ghosts)
+  |
+  +--&gt; <span class="highlight">Phase 2:</span> <span class="fn">restrict_to_coarse_buf</span>(b) for each fine leaf
+  |     4th-order Lagrange: fine interior &rarr; own coarse_buf interior
+  |     w = {1/48, 23/48, 23/48, 1/48}, 3D tensor product (64 fine cells)
+  |
+  +--&gt; <span class="highlight">Phase 3:</span> <span class="fn">fill_coarse_buf_ghosts</span>(m)
+  |     For each fine leaf, for each of 26 neighbors:
+  |       Same-level nbr: <span class="fn">exchange_grid_pair</span>(buf &harr; buf)
+  |       Coarser nbr:    <span class="fn">copy_from_coarse_grid</span>(buf &larr; coarse grid)
+  |
+  +--&gt; <span class="highlight">Phase 3.5:</span> <span class="fn">fill_coarse_buf_boundary</span>(b)
+  |     Quadratic extrapolation for domain-boundary ghost cells
+  |     Ensures prolongation stencil reads valid data at boundaries
+  |
+  +--&gt; <span class="highlight">Phase 4:</span> <span class="fn">prolongate_from_own_coarse_buf</span>(b)
+        5-point Lagrange interpolation: coarse_buf &rarr; fine ghost zones
+        Skips directions already filled by same-level exchange (Phase 1)</div>
+
+<h4>4th-Order Restriction (Stage 4.1) &mdash; Implemented:</h4>
+<p>Restriction upgraded from 2nd-order (8-cell average) to 4th-order cell-average Lagrange. The 1D 4-point symmetric stencil covers fine positions {-3&delta;/2, -&delta;/2, +&delta;/2, +3&delta;/2} with weights derived by integrating Lagrange basis polynomials over the coarse cell. 3D: tensor product of 1D weights, 4&sup3; = 64 fine cells per coarse cell. Falls back to 2nd-order when stencil exits grid bounds. Used in:</p>
+<ul>
+  <li><code>restrict_to_coarse_buf()</code> &mdash; fine block interior &rarr; own coarse_buf (Phase 2 of ghost exchange)</li>
+  <li><code>restrict_child_into_parent()</code> &mdash; child data &rarr; parent during coarsening (refine.c)</li>
+  <li><code>restrict_field()</code> / <code>restrict_all()</code> &mdash; standalone fine&rarr;coarse restriction</li>
+</ul>
+<p><strong>Ref:</strong> ExaHyPE (arXiv:2504.15814) &mdash; matching restriction order to prolongation eliminates Hamiltonian violations at AMR boundaries. Fornberg, SIAM Review 40 (1998) &mdash; FD weight generation.</p>
 
 <h4>Noise Reduction (Stage 3, arXiv:2404.01137) &mdash; Implemented:</h4>
 <ul>
@@ -841,7 +1004,7 @@ make clean                    # rm -rf build/</code></pre>
 <tr><td>Einstein-Maxwell (charge)</td><td><span class="badge badge-gray">Future</span></td><td>+6 fields (E_i, B_i)</td></tr>
 <tr><td>Spin (Bowen-York)</td><td><span class="badge badge-gray">Future</span></td><td>Spinning puncture initial data</td></tr>
 <tr><td>Apparent horizon finder</td><td><span class="badge badge-gray">Future</span></td><td>Remnant properties</td></tr>
-<tr><td>AMR (oct-tree)</td><td><span class="badge badge-yellow">Stage 4/6</span></td><td>Stages 1&ndash;4 done (blocks, ghost exchange, prolongation, refinement). Stage 5: subcycling</td></tr>
+<tr><td>AMR (oct-tree)</td><td><span class="badge badge-yellow">Stage 4.1/6</span></td><td>Stages 1&ndash;4.1 done (blocks, ghost exchange, prolongation, refinement, coarse-buffer architecture, 4th-order restriction). Stage 5: subcycling</td></tr>
 </table>
 
 <h3>Phase 3: Production (Future)</h3>
@@ -890,19 +1053,47 @@ make clean                    # rm -rf build/</code></pre>
   <span class="type">ccz4_rhs.h</span> ─── grid.h, params.h ───┼──&gt; <span class="fn">ccz4_rhs.c</span> ─── fields.h, finite_diff.h, tensor_utils.h
                                        │                       └──&gt; <span class="fn">dissipation.c</span> ─── fields.h, grid.h, finite_diff.h
                                        │
-  <span class="type">rk4.h</span> ─── grid.h, params.h, ────────┼──&gt; <span class="fn">rk4.c</span> ─── fields.h, tensor_utils.h, backend.h
-            backend.h                  │
+  <span class="type">rk4.h</span> ─── grid.h, params.h, ────────┼──&gt; <span class="fn">rk4.c</span> ─── fields.h, tensor_utils.h, backend.h,
+            backend.h                  │                       mesh.h, ghost_exchange.h, sommerfeld.h
                                        │
   <span class="type">puncture.h</span> ─── grid.h ──────────────┼──&gt; <span class="fn">puncture.c</span> ─── fields.h
                                        │
   <span class="type">constraints.h</span> ─── grid.h ────────────┼──&gt; <span class="fn">constraints.c</span> ─── fields.h, finite_diff.h, tensor_utils.h
                                        │
-  <span class="type">sommerfeld.h</span> ─── grid.h, params.h ──┼──&gt; <span class="fn">sommerfeld.c</span> ─── fields.h
+  <span class="type">sommerfeld.h</span> ─── grid.h, params.h ──┼──&gt; <span class="fn">sommerfeld.c</span> ─── fields.h, block.h
                                        │
                                        └──&gt; <span class="fn">output.c</span> ─── grid.h, fields.h, constraints.h
                                            <span class="fn">main.c</span> ─── grid.h, params.h, fields.h, puncture.h,
                                                        ccz4_rhs.h, sommerfeld.h, rk4.h,
-                                                       constraints.h, backend.h</div>
+                                                       constraints.h, backend.h
+
+<span class="comment">  AMR module (src/amr/) — internal dependency graph</span>
+
+  <span class="type">morton.h</span> ─── (standalone, bit-interleave)
+                                       │
+  <span class="type">block.h</span> ─── grid.h, params.h ────────┼──&gt; <span class="fn">block.c</span> ─── fields.h
+                                       │     coarse_buf_alloc() (static)
+                                       │
+  <span class="type">mesh.h</span> ─── block.h ─────────────────┼──&gt; <span class="fn">mesh.c</span> ─── morton.h
+                                       │     mesh_rebuild_neighbors() (cross-level floor-div)
+                                       │
+  <span class="type">ghost_exchange.h</span> ─── mesh.h ────────┼──&gt; <span class="fn">ghost_exchange.c</span> ─── prolongation.h, restriction.h, fields.h
+                                       │     5-phase multilevel: exchange_same_level,
+                                       │       restrict_to_coarse_buf, fill_coarse_buf_ghosts,
+                                       │       fill_coarse_buf_boundary, prolongate_from_own_coarse_buf
+                                       │     Static helpers: exchange_grid_pair, copy_from_coarse_grid
+                                       │
+  <span class="type">prolongation.h</span> ─── grid.h ──────────┼──&gt; <span class="fn">prolongation.c</span> ─── fields.h
+                                       │
+  <span class="type">restriction.h</span> ─── grid.h ───────────┼──&gt; <span class="fn">restriction.c</span> ─── block.h, fields.h
+                                       │     RESTRICT_STENCIL=4, restrict_w[4]
+                                       │     restrict_to_coarse_buf() (block-local)
+                                       │
+  <span class="type">criterion.h</span> ─── mesh.h ──────────────┼──&gt; <span class="fn">criterion.c</span> ─── fields.h
+                                       │
+  <span class="type">refine.h</span> ─── mesh.h, criterion.h ───┼──&gt; <span class="fn">refine.c</span> ─── prolongation.h, restriction.h, fields.h,
+                                       │                       tensor_utils.h
+  <span class="type">meshblock_pack.h</span> ─── mesh.h ────────┴──&gt; <span class="fn">meshblock_pack.c</span> ─── fields.h</div>
 
 </main>
 

@@ -82,7 +82,7 @@ Priority order:
 - Spatially varying KO dissipation
 - Full waveform catalog capability
 
-**Current status: Phase 1 — infrastructure + flat spacetime + single BH stable. AMR Stage 4 complete (oct-tree refinement + multi-level ghost exchange).** Update as milestones are reached.
+**Current status: Phase 1 — infrastructure + flat spacetime + single BH stable. AMR Stage 4.1 in progress (coarse-buffer architecture + 4th-order restriction, Test 6 WIP).** Update as milestones are reached.
 
 ## Project Structure
 

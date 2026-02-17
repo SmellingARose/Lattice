@@ -3,6 +3,161 @@
 > **Note:** When adding/removing/renaming files or functions, also update
 > `docs/architecture.html` — the living map of the codebase structure.
 
+## 2026-02-16: AMR Stage 4.1 — Coarse-Buffer Architecture + 4th-Order Restriction (WIP)
+
+### Overview
+
+Replaced the parent-based inter-level ghost fill (Stage 4) with AthenaK's
+coarse-buffer architecture. Each leaf block at level > 0 now carries its own
+`coarse_buf` grid at half resolution (N_c = N_block/2, dx_c = 2*dx_fine).
+All inter-level operations become block-local -- no cross-block writes, no
+parent grid dependency for ghost fill, GPU-friendly.
+
+Upgraded restriction from 2nd-order (8-cell average) to 4th-order (4-point
+symmetric Lagrange stencil) to match the prolongation order. ExaHyPE
+(arXiv:2504.15814) showed that mismatched restriction/prolongation orders
+cause Hamiltonian constraint violations at AMR boundaries.
+
+### Reference code consulted
+
+- **AthenaK `src/bvals/`**: Coarse-buffer architecture. Each MeshBlock
+  carries a `coarse_buf` (same as `pmb->pmr->pcoarsebuf` in Athena++).
+  Ghost fill is entirely block-local: restrict own fine data into coarse_buf
+  interior, exchange coarse_buf ghosts with neighbors, prolongate from own
+  coarse_buf into fine ghost zones. No cross-block memory writes.
+- **AthenaK `ApplyPhysicalBoundariesOnCoarseLevel`**: Applies physical
+  boundary conditions on coarse_buf before prolongation. We substitute
+  quadratic extrapolation as a general-purpose alternative (Phase 3.5).
+- **ExaHyPE (arXiv:2504.15814)**: Upgrading restriction to match prolongation
+  order eliminates Hamiltonian constraint violations at AMR boundaries.
+- **GRChombo `CoarseAverage`** (Chombo library): 2nd-order volume-weighted
+  averaging -- the baseline we improve upon.
+- **Fornberg, SIAM Review 40 (1998)**: FD weight generation algorithm used to
+  derive 4th-order cell-average restriction weights.
+
+### Key design decisions
+
+1. **Coarse-buffer architecture.** Every leaf block at level > 0 allocates
+   `coarse_buf` (a fields-only `grid_t` with N = N_block/2, ghost = GHOST_WIDTH,
+   dx = 2*dx_fine). The coarse_buf covers the same physical domain as the fine
+   block but at parent resolution. All inter-level communication goes through
+   the local coarse_buf -- the parent grid is no longer needed for ghost fill.
+
+2. **4th-order cell-average restriction weights.**
+   ```
+   w = { 1/48, 23/48, 23/48, 1/48 }
+   ```
+   1D symmetric 4-point Lagrange stencil, exact for polynomial degree <= 3.
+   Derived by integrating Lagrange basis polynomials over the coarse cell:
+   `w_j = (1/dx_c) * integral_{-dx_c/2}^{+dx_c/2} L_j(x) dx`, where L_j
+   are 4-point Lagrange polynomials through fine cell centers at
+   {-3d/2, -d/2, +d/2, +3d/2} (d = dx_fine). 3D: tensor product gives
+   4^3 = 64 fine cells per coarse cell. Falls back to 2nd-order (8-cell
+   average) at grid boundaries where the stencil extends outside the
+   interior region.
+
+3. **5-phase ghost exchange in `ghost_exchange_multilevel()`:**
+   - Phase 0+1: Same-level exchange per level (coarsest first)
+   - Phase 2: Restrict fine interior -> own coarse_buf (4th-order, block-local)
+   - Phase 3: Fill coarse_buf ghosts from sibling coarse_bufs + coarser neighbors
+   - Phase 3.5: Fill coarse_buf boundary ghost cells by quadratic extrapolation
+     (like AthenaK's `ApplyPhysicalBoundariesOnCoarseLevel`)
+   - Phase 4: Prolongate own coarse_buf -> fine ghost zones (5-point Lagrange,
+     skip directions with same-level neighbors)
+
+   Phases 2-4 are embarrassingly parallel per block. No phase writes to
+   another block's memory.
+
+4. **`coarse_buf_alloc()` vs `grid_alloc()`.** The coarse_buf uses exact N
+   (no padding to multiple of 16) since N_c may be small (e.g. N_c=8 for
+   N_block=16). Only allocates `fields_block`; rhs/scratch/accum are NULL
+   since coarse_buf is never time-evolved.
+
+### Bug fixes
+
+1. **`mesh_rebuild_neighbors()` cross-level edge/corner lookup.** The original
+   code divided the block's own coordinates by 2 then added the neighbor
+   offset. This fails for edge/corner directions at coarse-fine boundaries
+   because the fine-level neighbor coords may be negative (e.g. coord 0 with
+   offset -1 = -1). Fix: compute the neighbor's fine-level coordinates first
+   (block coords + offset), then map to coarser levels using floor division.
+   Floor div for negative x: `~(~x >> shift)`. For non-negative: `x >> shift`.
+
+2. **`restrict_cell()` bounds check.** Was checking stencil bounds against
+   `[0, Ntotal)` (full array including ghost zones). Changed to `[ghost,
+   ghost + N)` (interior only). At coarse-fine boundaries, fine ghost zones
+   may not yet be filled when restriction runs, so the 4th-order stencil
+   must only read from valid interior data. Falls back to 2nd-order where
+   stencil exits interior.
+
+### New files
+
+- `src/amr/block.c`: `coarse_buf_alloc()` -- fields-only `grid_t` with exact N
+  (no padding), no RK scratch arrays. Page-aligned allocation for potential GPU use.
+
+### New functions
+
+- `restrict_to_coarse_buf()` (`restriction.h/c`): Restrict fine block interior
+  into block's own coarse_buf interior. 4th-order tensor product with 2nd-order
+  fallback. Block-local, no cross-block access.
+- `fill_coarse_buf_boundary()` (`ghost_exchange.c`): Fill domain-boundary ghost
+  cells of coarse_buf by quadratic extrapolation (3-point Lagrange, exact for
+  degree <= 2). Processes faces sequentially (x, y, z) so edge/corner cells
+  are filled correctly by later passes.
+- `fill_coarse_buf_ghosts()` (`ghost_exchange.c`): Fill coarse_buf ghost zones
+  for all fine leaf blocks. Same-level neighbors: exchange coarse_buf <-> coarse_buf
+  via `exchange_grid_pair()`. Coarser neighbors: copy from coarse neighbor's main
+  grid via `copy_from_coarse_grid()` using index-offset mapping.
+- `copy_from_coarse_grid()` (`ghost_exchange.c`): Copy from a coarse neighbor's
+  main grid into a block's coarse_buf ghost zone. Both grids share dx; uses
+  integer offset mapping from origin difference.
+- `exchange_grid_pair()` (`ghost_exchange.c`): Exchange between two grids of the
+  same dimensions (N, ghost). Used for coarse_buf <-> coarse_buf exchange.
+- `prolongate_from_own_coarse_buf()` (`ghost_exchange.c`): 5-point Lagrange
+  interpolation from block's own coarse_buf into fine ghost zones. Skips cells
+  where same-level neighbor already filled (Phase 1). Maps fine index to
+  coarse_buf continuous index: `ci = (fi - ghost_f + 0.5) / 2.0 + ghost_c - 0.5`.
+
+### Modified files
+
+- `src/amr/restriction.h` -- Added `RESTRICT_STENCIL=4`, `restrict_w[]` extern,
+  `restrict_to_coarse_buf()` declaration, forward-declared `struct block_s`.
+- `src/amr/restriction.c` -- 4th-order tensor product restriction. Weights
+  derived from Lagrange basis integrals. `restrict_cell()` with interior-only
+  bounds check and 2nd-order fallback.
+- `src/amr/block.h` -- Added `coarse_buf` field (`grid_t*`) to `block_t`.
+- `src/amr/block.c` -- `block_alloc()` now allocates `coarse_buf` for level > 0
+  blocks. `block_free()` frees coarse_buf. Added `coarse_buf_alloc()` static.
+- `src/amr/mesh.c` -- `mesh_rebuild_neighbors()` fixed cross-level lookup using
+  floor division on neighbor's fine-level coordinates.
+- `src/amr/ghost_exchange.h/c` -- Rewrote `ghost_exchange_multilevel()` for
+  5-phase coarse-buffer architecture. Added 6 new static/public functions.
+
+### Known issue
+
+**Test 6 (multi-level ghost exchange accuracy) fails.** max_err = 0.386,
+threshold = 9.8e-5. Worst cells at domain boundary corners where the
+prolongation stencil (Phase 4) reads coarse_buf ghost cells filled by Phase 3.5
+quadratic extrapolation. The extrapolation error compounds through the 5-point
+Lagrange stencil, producing O(1) errors at corner ghost cells where all 3
+directions use extrapolated data.
+
+Root cause under investigation. Likely fix: either (a) extend Phase 3.5
+extrapolation order to match prolongation stencil width, or (b) apply
+Sommerfeld BCs directly to coarse_buf at domain boundaries (matching AthenaK's
+`ApplyPhysicalBoundariesOnCoarseLevel` more faithfully), or (c) reduce
+prolongation stencil to 3-point at boundary ghost cells.
+
+### References
+
+- AthenaK coarse-buffer architecture (`src/bvals/`)
+- ExaHyPE (arXiv:2504.15814) -- upgrading restriction to match prolongation
+  order eliminates Hamiltonian violations at AMR boundaries
+- GRChombo CoarseAverage -- 2nd-order baseline we improve upon
+- Fornberg, SIAM Review 40 (1998) -- FD weight generation algorithm
+
+---
+
 ## 2026-02-10: Fresh Start — Phase 1, Milestones 1+2
 
 ### Decision: Start from scratch with GRChombo reference approach
