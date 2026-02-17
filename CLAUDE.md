@@ -82,7 +82,7 @@ Priority order:
 - Spatially varying KO dissipation
 - Full waveform catalog capability
 
-**Current status: Phase 1 — infrastructure + flat spacetime + single BH stable. AMR Stage 4.1 complete (coarse-buffer architecture + 4th-order restriction, all tests passing).** Update as milestones are reached.
+**Current status: Phase 1 — infrastructure + flat spacetime + single BH stable + head-on binary collision complete. AMR Stage 4.1 complete (coarse-buffer architecture + 4th-order restriction, all tests passing).** Update as milestones are reached.
 
 ## Project Structure
 
@@ -135,6 +135,8 @@ lattice/
 │   ├── test_amr_mesh.c         # AMR mesh creation + Morton ordering
 │   ├── test_amr_ghost.c        # ghost exchange + multi-block evolution
 │   ├── test_amr_prolong.c     # prolongation + noise reduction
+│   ├── test_head_on.c          # head-on binary collision
+│   ├── test_head_on_output.txt # saved test output (merger diagnostics)
 │   ├── test_amr_refine.c     # oct-tree refinement + multi-level ghost
 │   └── convergence.sh          # 3-resolution convergence check
 ├── docs/

@@ -3,6 +3,44 @@
 > **Note:** When adding/removing/renaming files or functions, also update
 > `docs/architecture.html` — the living map of the codebase structure.
 
+## 2026-02-17: Head-On Binary Collision — Milestone 4 Complete
+
+### Setup
+
+Two equal-mass Brill-Lindquist punctures (m1=m2=0.5, d=10M separation on
+z-axis), N=128 uniform grid, L=64, dx=0.5, CK45 integrator. No new physics
+code needed — all existing infrastructure (CCZ4 RHS, Sommerfeld BCs, puncture
+initial data, constraint diagnostics) worked out of the box for the binary case.
+
+### Results
+
+- **Merger at t~8M**: BH separation (tracked via z-axis lapse minima) dropped
+  to zero. Two distinct lapse dips merged into a single minimum.
+- **Constraints peaked at ~1e-2**: well under the 1.0 failure threshold.
+  Hamiltonian and momentum L2 norms bounded throughout the evolution.
+- **Post-merger lapse settled at ~0.91**: remnant BH with total mass M~1.0.
+
+### Test rewrite
+
+Rewrote `tests/test_head_on.c` with live per-step diagnostic output, printing
+a table of: step, time/M, lapse_min, z_min (location of minimum), sep/M
+(BH separation), #dip (number of lapse minima on z-axis), Ham L2, Mom L2.
+Output saved to `tests/test_head_on_output.txt` for reference.
+
+### New helper
+
+`bh_separation()` — scans z-axis lapse profile to find two distinct local
+minima, returns their spatial separation. Uses the z-axis slice (x=y=0) and
+identifies dips by sign changes in the lapse gradient. Returns 0 when only
+one minimum is found (post-merger).
+
+### References
+
+- gr-qc/0606079: Sperhake 2006, "Binary black-hole evolutions of excision and
+  puncture data" — head-on collision benchmarks
+
+---
+
 ## 2026-02-17: Fix Phase 3.5 dimension-sweep loop ranges (Test 6 passes)
 
 ### Overview

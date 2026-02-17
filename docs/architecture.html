@@ -875,9 +875,9 @@ Grid indexing:  IDX(g, i, j, k) = k * Ntotal^2 + j * Ntotal + i
 </tr>
 <tr>
   <td><code>tests/test_head_on.c</code></td>
-  <td>Head-on binary collision: 2 BHs on z-axis (m=0.5 each, d=10M), T=50M</td>
+  <td>Head-on binary collision: 2 BHs on z-axis (m=0.5 each, d=10M), T=50M. Output: <code>tests/test_head_on_output.txt</code></td>
   <td>No crash, Ham &lt; 1.0, Mom &lt; 1.0, merger detected</td>
-  <td><span class="badge badge-yellow">Implemented</span></td>
+  <td><span class="badge badge-green">Passing</span></td>
 </tr>
 <tr>
   <td><code>tests/test_amr_mesh.c</code></td>
@@ -974,7 +974,7 @@ make clean                    # rm -rf build/</code></pre>
 <tr>
   <td>4. Head-on binary</td>
   <td>Merger visible in lapse, constraints bounded</td>
-  <td><span class="badge badge-yellow">Test written</span></td>
+  <td><span class="badge badge-green">Done</span> merger t~8M, Ham peak ~1e-2</td>
 </tr>
 <tr>
   <td>5. Binary inspiral</td>
