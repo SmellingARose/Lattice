@@ -199,7 +199,7 @@ int main(void)
     double mx, my, mz;
     double ml     = min_lapse(g, &mx, &my, &mz);
     int    ndip   = count_z_axis_minima(g, 0.8);
-    double sep    = bh_separation(g);
+    double sep    = (ndip >= 2) ? bh_separation(g) : 0.0;
     double ham    = compute_constraint_l2(g);
     double mom    = compute_momentum_l2(g);
 
@@ -227,7 +227,7 @@ int main(void)
 
         ml   = min_lapse(g, &mx, &my, &mz);
         ndip = count_z_axis_minima(g, 0.8);
-        sep  = bh_separation(g);
+        sep  = (ndip >= 2) ? bh_separation(g) : 0.0;
         ham  = compute_constraint_l2(g);
         mom  = compute_momentum_l2(g);
 
