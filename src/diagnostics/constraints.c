@@ -17,6 +17,7 @@
 #include "../core/fields.h"
 #include "../numerics/finite_diff.h"
 #include "../geometry/tensor_utils.h"
+#include "../amr/mesh.h"
 #include <math.h>
 
 double compute_hamiltonian_at(const double *const *fields, const grid_t *g,
@@ -327,4 +328,67 @@ double compute_constraint_l2(const grid_t *g)
     }
 
     return sqrt(sum / count);
+}
+
+/*
+ * Mesh-level Hamiltonian constraint L2 norm.
+ * Accumulates sum of H^2 over all leaf block interiors, returns sqrt(sum/count).
+ */
+double mesh_constraint_l2(const struct mesh_s *m)
+{
+    double sum = 0.0;
+    int count = 0;
+
+    for (int bid = 0; bid < m->num_blocks; bid++) {
+        block_t *b = m->blocks[bid];
+        if (!b || !b->is_leaf) continue;
+        grid_t *g = b->grid;
+        int lo = g->ghost;
+        int hi = lo + g->N;
+
+        for (int k = lo; k < hi; k++) {
+            for (int j = lo; j < hi; j++) {
+                for (int i = lo; i < hi; i++) {
+                    double H = compute_hamiltonian_at(
+                        (const double *const *)g->fields, g, i, j, k);
+                    sum += H * H;
+                    count++;
+                }
+            }
+        }
+    }
+
+    return (count > 0) ? sqrt(sum / count) : 0.0;
+}
+
+/*
+ * Mesh-level momentum constraint L2 norm.
+ * Accumulates sum of |M_i|^2 over all leaf block interiors.
+ */
+double mesh_momentum_l2(const struct mesh_s *m)
+{
+    double sum = 0.0;
+    int count = 0;
+
+    for (int bid = 0; bid < m->num_blocks; bid++) {
+        block_t *b = m->blocks[bid];
+        if (!b || !b->is_leaf) continue;
+        grid_t *g = b->grid;
+        int lo = g->ghost;
+        int hi = lo + g->N;
+
+        for (int k = lo; k < hi; k++) {
+            for (int j = lo; j < hi; j++) {
+                for (int i = lo; i < hi; i++) {
+                    double mom[3];
+                    compute_momentum_at(
+                        (const double *const *)g->fields, g, i, j, k, mom);
+                    sum += mom[0]*mom[0] + mom[1]*mom[1] + mom[2]*mom[2];
+                    count++;
+                }
+            }
+        }
+    }
+
+    return (count > 0) ? sqrt(sum / (3 * count)) : 0.0;
 }

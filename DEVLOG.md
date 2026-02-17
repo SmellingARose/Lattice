@@ -3,6 +3,51 @@
 > **Note:** When adding/removing/renaming files or functions, also update
 > `docs/architecture.html` — the living map of the codebase structure.
 
+## 2026-02-17: AMR Integration into Main Evolution Loop (WIP)
+
+### What's done
+
+Wired AMR into `src/main.c` so `./lattice --amr ...` runs a real BH evolution
+on a multi-block mesh with dynamic regridding. Changes:
+
+- **`src/main.c`**: Added `--amr`, `--N_root`, `--N_block`, `--max_level`,
+  `--chi_refine`, `--chi_coarsen`, `--regrid_every` CLI args. Conditional AMR
+  path creates `mesh_t`, sets initial data on all leaf blocks, evolves with
+  `rk4_step_mesh`, regrids periodically, prints per-step diagnostics with
+  block count.
+- **`src/diagnostics/constraints.c/h`**: Added `mesh_constraint_l2()` and
+  `mesh_momentum_l2()` — accumulate L2 norms over all leaf blocks.
+- **`tests/test_amr_evolve.c`**: New integration test with 3 tests:
+  1. Uniform mesh vs single-grid BH (ratio within 2x) — PASSES
+  2. Dynamic regridding around BH (refinement triggers) — PARTIAL (NaN in
+     constraint computation after multi-level evolution; see below)
+  3. Flat spacetime with regridding (no refinement) — PASSES
+- **`Makefile`**: Added `test-amr-evolve` target, added to `test:` deps.
+
+### What's left (pick up here)
+
+Test 2 produces NaN in the Hamiltonian constraint computation after evolving
+on a refined multi-level mesh. Diagnostic shows:
+- Data is finite immediately after regridding (prolongation OK)
+- Data is finite after 1 post-regrid step
+- NaN appears later, likely from near-puncture chi→0 effects at the finer level
+
+Next steps to investigate:
+1. Run more diagnostic steps to pinpoint when NaN first appears
+2. May need to adjust CFL for fine-level dt, or the issue is in the constraint
+   computation itself (division by chi near puncture at higher resolution)
+3. Once test 2 passes, update `docs/architecture.html` with new functions
+
+### Files touched
+
+| File | Change |
+|------|--------|
+| `src/main.c` | AMR CLI args + conditional mesh evolution loop |
+| `src/diagnostics/constraints.c` | `mesh_constraint_l2()`, `mesh_momentum_l2()` |
+| `src/diagnostics/constraints.h` | Declare mesh-level functions |
+| `tests/test_amr_evolve.c` | New AMR evolution integration test |
+| `Makefile` | `test-amr-evolve` target |
+
 ## 2026-02-17: Head-On Binary Collision — Milestone 4 Complete
 
 ### Setup

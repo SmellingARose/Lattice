@@ -82,7 +82,7 @@ Priority order:
 - Spatially varying KO dissipation
 - Full waveform catalog capability
 
-**Current status: Phase 1 — infrastructure + flat spacetime + single BH stable + head-on binary collision complete. AMR Stage 4.1 complete (coarse-buffer architecture + 4th-order restriction, all tests passing).** Update as milestones are reached.
+**Current status: Phase 1 — infrastructure + flat spacetime + single BH stable + head-on binary collision complete. AMR Stage 4.1 complete (coarse-buffer architecture + 4th-order restriction, all tests passing). AMR integration into main.c in progress (CLI args wired, mesh evolution loop works, test_amr_evolve test 2 NaN under investigation).** Update as milestones are reached.
 
 ## Project Structure
 

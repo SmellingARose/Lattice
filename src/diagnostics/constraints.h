@@ -28,4 +28,10 @@ double compute_constraint_l2(const grid_t *g);
 /* L2 norm of momentum constraint (rms of |M_i|) over interior */
 double compute_momentum_l2(const grid_t *g);
 
+/* Mesh-level L2 norms: accumulate over all leaf blocks.
+ * Same computation as single-grid variants but across the full AMR mesh. */
+struct mesh_s;  /* forward declaration */
+double mesh_constraint_l2(const struct mesh_s *m);
+double mesh_momentum_l2(const struct mesh_s *m);
+
 #endif /* LATTICE_CONSTRAINTS_H */

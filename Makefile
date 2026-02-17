@@ -75,7 +75,7 @@ LDFLAGS = $(BACKEND_LIBS) -lm
 BUILD = build
 
 # Targets
-.PHONY: all debug test test-single-bh test-convergence test-constraints test-head-on test-amr-mesh test-amr-ghost test-amr-prolong test-amr-refine clean
+.PHONY: all debug test test-single-bh test-convergence test-constraints test-head-on test-amr-mesh test-amr-ghost test-amr-prolong test-amr-refine test-amr-evolve clean
 
 all: $(BUILD)/lattice
 
@@ -100,10 +100,11 @@ $(BUILD)/test_single_bh: tests/test_single_bh.c $(ALL_SRC)
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS_OPT) -o $@ tests/test_single_bh.c $(ALL_SRC) $(LDFLAGS)
 
-test: $(BUILD)/test_flat $(BUILD)/test_convergence
+test: $(BUILD)/test_flat $(BUILD)/test_convergence $(BUILD)/test_amr_evolve
 	@echo "=== Running tests ==="
 	$(BUILD)/test_flat
 	$(BUILD)/test_convergence
+	$(BUILD)/test_amr_evolve
 
 test-single-bh: $(BUILD)/test_single_bh
 	@echo "=== Running single BH test ==="
@@ -164,6 +165,14 @@ $(BUILD)/test_amr_refine: tests/test_amr_refine.c $(ALL_SRC)
 test-amr-refine: $(BUILD)/test_amr_refine
 	@echo "=== Running AMR refinement + multi-level ghost test ==="
 	$(BUILD)/test_amr_refine
+
+$(BUILD)/test_amr_evolve: tests/test_amr_evolve.c $(ALL_SRC)
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS_OPT) -o $@ tests/test_amr_evolve.c $(ALL_SRC) $(LDFLAGS)
+
+test-amr-evolve: $(BUILD)/test_amr_evolve
+	@echo "=== Running AMR evolution test ==="
+	$(BUILD)/test_amr_evolve
 
 clean:
 	rm -rf $(BUILD)
