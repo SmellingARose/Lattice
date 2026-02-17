@@ -367,43 +367,59 @@ void mesh_rebuild_neighbors(mesh_t *m)
         b->on_boundary[4] = (b->loc.lx3 == 0)       ? 1 : 0;
         b->on_boundary[5] = (b->loc.lx3 == bps - 1) ? 1 : 0;
 
-        /* 26 neighbors */
+        /* 26 neighbors.
+         * For each direction, first try same-level. If not found (refined
+         * away or boundary), walk up to coarser levels by mapping the
+         * NEIGHBOR'S fine-level coordinates to coarser levels via floor
+         * division. This is the key difference from the naive approach
+         * of dividing the block's own coords then adding the offset —
+         * that fails for edge/corner directions at coarse-fine boundaries.
+         *
+         * Ref: Athena++ MeshBlockTree::FindNeighbor (tree walk) */
         for (int n = 0; n < NUM_NEIGHBORS; n++) {
             int ox = nbr_offset[n][0];
             int oy = nbr_offset[n][1];
             int oz = nbr_offset[n][2];
 
+            /* Neighbor's fine-level logical coordinates */
             int nx = b->loc.lx1 + ox;
             int ny = b->loc.lx2 + oy;
             int nz = b->loc.lx3 + oz;
 
-            /* Check domain boundary at this level */
-            if (nx < 0 || nx >= bps ||
-                ny < 0 || ny >= bps ||
-                nz < 0 || nz >= bps) {
-                /* Physical boundary: check if coarser level neighbor exists.
-                 * At the domain boundary of root level, no neighbor. */
-                /* Map to parent level coordinates */
-                int cur_lx1 = b->loc.lx1, cur_lx2 = b->loc.lx2, cur_lx3 = b->loc.lx3;
+            /* Try same-level neighbor (must be within bounds) */
+            if (nx >= 0 && nx < bps &&
+                ny >= 0 && ny < bps &&
+                nz >= 0 && nz < bps) {
+                block_t *nbr = mesh_find_block(m, level, nx, ny, nz);
+                if (nbr) {
+                    b->neighbor_ids[n] = nbr->id;
+                    b->nblevel[oz + 1][oy + 1][ox + 1] = level;
+                    continue;
+                }
+            }
+
+            /* Try coarser levels: map neighbor's fine-level coords to
+             * coarser levels using floor division.
+             * Floor div for negative x: ~(~x >> shift).
+             * For non-negative x: simple right shift. */
+            {
                 int cur_level = level;
                 int found = 0;
 
                 while (cur_level > 0 && !found) {
-                    /* Map to parent level */
-                    cur_lx1 = cur_lx1 / 2;
-                    cur_lx2 = cur_lx2 / 2;
-                    cur_lx3 = cur_lx3 / 2;
                     cur_level--;
-
                     int cbps = blocks_per_side(m, cur_level);
-                    int cnx = cur_lx1 + ox;
-                    int cny = cur_lx2 + oy;
-                    int cnz = cur_lx3 + oz;
+                    int shift = level - cur_level;
+
+                    /* Floor division by 2^shift (handles negative coords) */
+                    int cnx = (nx >= 0) ? (nx >> shift) : ~(~nx >> shift);
+                    int cny = (ny >= 0) ? (ny >> shift) : ~(~ny >> shift);
+                    int cnz = (nz >= 0) ? (nz >> shift) : ~(~nz >> shift);
 
                     if (cnx < 0 || cnx >= cbps ||
                         cny < 0 || cny >= cbps ||
                         cnz < 0 || cnz >= cbps)
-                        continue;  /* still boundary, try coarser */
+                        continue;
 
                     block_t *nbr = mesh_find_block(m, cur_level, cnx, cny, cnz);
                     if (nbr) {
@@ -412,54 +428,8 @@ void mesh_rebuild_neighbors(mesh_t *m)
                         found = 1;
                     }
                 }
-                /* If not found, remains -1 (physical boundary) */
-                continue;
             }
-
-            /* Try same-level neighbor */
-            block_t *nbr = mesh_find_block(m, level, nx, ny, nz);
-            if (nbr) {
-                /* Same-level neighbor found */
-                b->neighbor_ids[n] = nbr->id;
-                b->nblevel[oz + 1][oy + 1][ox + 1] = level;
-
-                /* If neighbor is non-leaf (refined), we still point to it.
-                 * The ghost exchange will handle finding the correct child. */
-                continue;
-            }
-
-            /* Try coarser level: map coords to parent level */
-            {
-                int cur_lx1 = b->loc.lx1;
-                int cur_lx2 = b->loc.lx2;
-                int cur_lx3 = b->loc.lx3;
-                int cur_level = level;
-                int found = 0;
-
-                while (cur_level > 0 && !found) {
-                    cur_lx1 = cur_lx1 / 2;
-                    cur_lx2 = cur_lx2 / 2;
-                    cur_lx3 = cur_lx3 / 2;
-                    cur_level--;
-
-                    int cbps = blocks_per_side(m, cur_level);
-                    int cnx = cur_lx1 + ox;
-                    int cny = cur_lx2 + oy;
-                    int cnz = cur_lx3 + oz;
-
-                    if (cnx < 0 || cnx >= cbps ||
-                        cny < 0 || cny >= cbps ||
-                        cnz < 0 || cnz >= cbps)
-                        continue;
-
-                    nbr = mesh_find_block(m, cur_level, cnx, cny, cnz);
-                    if (nbr) {
-                        b->neighbor_ids[n] = nbr->id;
-                        b->nblevel[oz + 1][oy + 1][ox + 1] = cur_level;
-                        found = 1;
-                    }
-                }
-            }
+            /* If not found at any level, remains -1 (physical boundary) */
         }
     }
 }

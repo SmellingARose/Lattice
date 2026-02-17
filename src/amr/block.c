@@ -7,9 +7,61 @@
  */
 
 #include "block.h"
+#include "../core/fields.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#define PAGE_ALIGN 4096
+
+/*
+ * Allocate a fields-only grid with exact N (no padding to multiple of 16).
+ * Used for coarse_buf which may have N < 16 (e.g. N=8 for N_block=16).
+ * Only allocates fields_block; rhs/scratch/accum are NULL.
+ *
+ * Unlike grid_alloc(), this does not pad N and does not allocate
+ * RK scratch arrays since coarse_buf is never time-evolved.
+ */
+static grid_t *coarse_buf_alloc(int N, double dx)
+{
+    grid_t *g = calloc(1, sizeof(grid_t));
+    if (!g) {
+        fprintf(stderr, "coarse_buf_alloc: calloc failed\n");
+        exit(1);
+    }
+
+    g->N      = N;
+    g->ghost  = GHOST_WIDTH;
+    g->Ntotal = N + 2 * GHOST_WIDTH;
+    g->L      = N * dx;
+    g->dx     = dx;
+    g->npoints = (size_t)g->Ntotal * g->Ntotal * g->Ntotal;
+
+    /* Allocate only fields block (page-aligned for potential GPU use) */
+    size_t block_bytes = (size_t)NUM_FIELDS * g->npoints * sizeof(double);
+    void *ptr = NULL;
+    if (posix_memalign(&ptr, PAGE_ALIGN, block_bytes) != 0) {
+        fprintf(stderr, "coarse_buf_alloc: posix_memalign failed\n");
+        exit(1);
+    }
+    memset(ptr, 0, block_bytes);
+    g->fields_block = (double *)ptr;
+
+    for (int f = 0; f < NUM_FIELDS; f++)
+        g->fields[f] = g->fields_block + f * g->npoints;
+
+    /* No RK arrays needed for coarse_buf */
+    g->rhs_block = NULL;
+    g->scratch_block = NULL;
+    g->accum_block = NULL;
+    for (int f = 0; f < NUM_FIELDS; f++) {
+        g->rhs[f] = NULL;
+        g->scratch[f] = NULL;
+        g->accum[f] = NULL;
+    }
+
+    return g;
+}
 
 /*
  * 26-neighbor offset table: (ox1, ox2, ox3) for each neighbor.
@@ -51,6 +103,18 @@ block_t *block_alloc(int id, int level, int N_block, double dx,
         exit(1);
     }
 
+    /* Allocate coarse buffer at half resolution for level > 0 blocks.
+     * N_c = N_block / 2, dx_c = 2 * dx (same resolution as coarse-level).
+     * Uses coarse_buf_alloc (exact N, no padding, fields-only).
+     * Ref: AthenaK coarse-buffer architecture (block-local AMR ghost fill) */
+    if (level > 0 && N_block >= 2) {
+        int N_c = N_block / 2;
+        double dx_c = 2.0 * dx;
+        b->coarse_buf = coarse_buf_alloc(N_c, dx_c);
+    } else {
+        b->coarse_buf = NULL;
+    }
+
     b->id = id;
     b->loc.lx1   = 0;  /* caller sets via mesh_create */
     b->loc.lx2   = 0;
@@ -83,6 +147,7 @@ block_t *block_alloc(int id, int level, int N_block, double dx,
 void block_free(block_t *b)
 {
     if (!b) return;
+    grid_free(b->coarse_buf);
     grid_free(b->grid);
     free(b);
 }

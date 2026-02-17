@@ -64,6 +64,7 @@ static inline neighbor_type_t nbr_type(int n)
  */
 typedef struct block_s {
     grid_t  *grid;                 /* field data (NULL if non-leaf)           */
+    grid_t  *coarse_buf;           /* half-res buffer for AMR (NULL if L==0)  */
     int      id;                   /* unique block ID (Z-order within level)  */
     logical_location_t loc;        /* position in oct-tree                    */
     double   origin[3];            /* physical coords of block's low corner   */

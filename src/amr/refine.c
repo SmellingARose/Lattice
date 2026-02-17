@@ -202,6 +202,11 @@ int mesh_refine_block(mesh_t *m, int block_id)
 /*
  * Restrict one child's interior into the overlapping region of the parent.
  * Child at octant (cx,cy,cz) covers parent interior cells [cx*N/2, (cx+1)*N/2).
+ *
+ * Uses 4th-order cell-average Lagrange restriction (restrict_w[] weights)
+ * with 2nd-order fallback at boundaries where stencil exits child grid.
+ *
+ * Ref: ExaHyPE (arXiv:2504.15814) — matching restriction to prolongation order
  */
 static void restrict_child_into_parent(const block_t *child, block_t *parent,
                                        int cx, int cy, int cz)
@@ -211,33 +216,61 @@ static void restrict_child_into_parent(const block_t *child, block_t *parent,
     const int ghost = pg->ghost;
     const int N = pg->N;
     const int half_N = N / 2;
+    const int child_ghost = cg->ghost;
+    const int child_Nt = cg->Ntotal;
 
-    /* Each coarse cell maps to 8 fine cells.
-     * Parent cell (pi, pj, pk) overlaps child cells at:
-     *   fi = 2*(pi - parent_offset) in child's interior indexing */
     int p_off_i = cx * half_N;
     int p_off_j = cy * half_N;
     int p_off_k = cz * half_N;
 
     for (int f = 0; f < NUM_FIELDS; f++) {
+        const double *src = cg->fields[f];
+
         for (int pk = 0; pk < half_N; pk++) {
             for (int pj = 0; pj < half_N; pj++) {
                 for (int pi = 0; pi < half_N; pi++) {
-                    double sum = 0.0;
-                    for (int ok = 0; ok < 2; ok++) {
-                        for (int oj = 0; oj < 2; oj++) {
-                            for (int oi = 0; oi < 2; oi++) {
-                                int fi = cg->ghost + 2 * pi + oi;
-                                int fj = cg->ghost + 2 * pj + oj;
-                                int fk = cg->ghost + 2 * pk + ok;
-                                sum += cg->fields[f][IDX(cg, fi, fj, fk)];
+                    /* Fine base index: first direct child cell */
+                    int fi_base = child_ghost + 2 * pi;
+                    int fj_base = child_ghost + 2 * pj;
+                    int fk_base = child_ghost + 2 * pk;
+
+                    double val;
+
+                    /* Check if 4-point stencil fits within child grid */
+                    if (fi_base - 1 >= 0 && fi_base + 2 < child_Nt &&
+                        fj_base - 1 >= 0 && fj_base + 2 < child_Nt &&
+                        fk_base - 1 >= 0 && fk_base + 2 < child_Nt) {
+
+                        /* 4th-order: 3D tensor product of 4-point stencil */
+                        val = 0.0;
+                        for (int sk = 0; sk < RESTRICT_STENCIL; sk++) {
+                            int fk = fk_base - 1 + sk;
+                            for (int sj = 0; sj < RESTRICT_STENCIL; sj++) {
+                                double wkj = restrict_w[sk] * restrict_w[sj];
+                                int fj = fj_base - 1 + sj;
+                                for (int si = 0; si < RESTRICT_STENCIL; si++) {
+                                    int fi = fi_base - 1 + si;
+                                    val += wkj * restrict_w[si] *
+                                           src[IDX(cg, fi, fj, fk)];
+                                }
                             }
                         }
+                    } else {
+                        /* 2nd-order fallback: 8-cell average */
+                        val = 0.0;
+                        for (int ok = 0; ok < 2; ok++)
+                            for (int oj = 0; oj < 2; oj++)
+                                for (int oi = 0; oi < 2; oi++)
+                                    val += src[IDX(cg, fi_base + oi,
+                                                       fj_base + oj,
+                                                       fk_base + ok)];
+                        val *= 0.125;
                     }
+
                     int pii = ghost + p_off_i + pi;
                     int pjj = ghost + p_off_j + pj;
                     int pkk = ghost + p_off_k + pk;
-                    pg->fields[f][IDX(pg, pii, pjj, pkk)] = sum * 0.125;
+                    pg->fields[f][IDX(pg, pii, pjj, pkk)] = val;
                 }
             }
         }
