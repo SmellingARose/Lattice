@@ -3,6 +3,40 @@
 > **Note:** When adding/removing/renaming files or functions, also update
 > `docs/architecture.html` — the living map of the codebase structure.
 
+## 2026-02-17: Fix Phase 3.5 dimension-sweep loop ranges (Test 6 passes)
+
+### Overview
+
+Fixed the multi-level ghost exchange bug that caused Test 6 to fail (max_err=0.386, threshold=9.8e-5). Root cause: Phase 3.5's boundary extrapolation loops used interior-only ranges in non-ghost directions, leaving coarse_buf ghost cells unfilled at boundary-edge intersections.
+
+### Root cause analysis
+
+- Phase 3 (`copy_from_coarse_grid`) fills coarse_buf ghost zones from coarse neighbors, but `ghost_range(0, ...)` returns the interior range `[ghost, ghost+N)` for non-ghost directions. So the z+ ghost zone only gets filled for interior x and y cells.
+- Phase 3.5 (`fill_coarse_buf_boundary`) extrapolates domain-boundary ghost cells, but only processes boundary faces — the X face loop used `j=gh..gh+N, k=gh..gh+N` (interior only), the Y face loop used `k=gh..gh+N` (interior only).
+- Cells at the intersection of a domain-boundary ghost zone (e.g., x-) and a non-boundary ghost zone (e.g., z+) were never filled by either phase. Prolongation read stale data → O(1) errors.
+
+### Fix
+
+Widened Phase 3.5's face loop ranges to cover the FULL array (0 to Ntotal) in non-ghost directions, matching AthenaK's `BCHelper` dimension-by-dimension sweep pattern (`src/bvals/physics/z4c_bcs.cpp`). The sequential face ordering (X→Y→Z) ensures edges and corners are filled automatically: each later sweep reads ghost data written by earlier sweeps.
+
+Changes:
+- X faces: `j` and `k` ranges changed from `[gh, gh+N)` to `[0, Nt)`
+- Y faces: `k` range changed from `[gh, gh+N)` to `[0, Nt)` (i was already `[0, Nt)`)
+- Z faces: unchanged (already used `[0, Nt)` for both i and j)
+
+### Result
+
+- Test 6: max_err dropped from 0.386 to 4.1e-6 (threshold 9.8e-5) → PASS
+- All 72 AMR tests pass, all other tests unchanged
+- Added `docs/phase3_ghost_exchange.html` — visual explainer of the coarse-buffer ghost exchange and this bug
+
+### References
+
+- AthenaK `src/bvals/physics/z4c_bcs.cpp` BCHelper — dimension-by-dimension sweep with full-width loops
+- AthenaK NR paper (arXiv:2409.10383) Section 3.1
+
+---
+
 ## 2026-02-16: AMR Stage 4.1 — Coarse-Buffer Architecture + 4th-Order Restriction (WIP)
 
 ### Overview
@@ -133,20 +167,12 @@ cause Hamiltonian constraint violations at AMR boundaries.
 - `src/amr/ghost_exchange.h/c` -- Rewrote `ghost_exchange_multilevel()` for
   5-phase coarse-buffer architecture. Added 6 new static/public functions.
 
-### Known issue
+### Known issue (RESOLVED 2026-02-17)
 
-**Test 6 (multi-level ghost exchange accuracy) fails.** max_err = 0.386,
-threshold = 9.8e-5. Worst cells at domain boundary corners where the
-prolongation stencil (Phase 4) reads coarse_buf ghost cells filled by Phase 3.5
-quadratic extrapolation. The extrapolation error compounds through the 5-point
-Lagrange stencil, producing O(1) errors at corner ghost cells where all 3
-directions use extrapolated data.
-
-Root cause under investigation. Likely fix: either (a) extend Phase 3.5
-extrapolation order to match prolongation stencil width, or (b) apply
-Sommerfeld BCs directly to coarse_buf at domain boundaries (matching AthenaK's
-`ApplyPhysicalBoundariesOnCoarseLevel` more faithfully), or (c) reduce
-prolongation stencil to 3-point at boundary ghost cells.
+**Test 6 (multi-level ghost exchange) now passes.** See 2026-02-17 entry. Root cause was
+Phase 3.5 loop ranges using interior-only bounds in non-ghost directions, leaving
+boundary-edge intersection cells unfilled. Fix: widen to full array ranges matching
+AthenaK's BCHelper dimension sweep.
 
 ### References
 

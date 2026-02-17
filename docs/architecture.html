@@ -179,7 +179,7 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 
 <div class="banner">
   <strong>Living document.</strong> This file should be updated whenever the codebase structure changes &mdash; see CLAUDE.md.<br>
-  <strong>Last updated:</strong> 2026-02-16
+  <strong>Last updated:</strong> 2026-02-17
 </div>
 
 <!-- ========================================== -->
@@ -625,7 +625,7 @@ Grid indexing:  IDX(g, i, j, k) = k * Ntotal^2 + j * Ntotal + i
 </details>
 
 <!-- ========================================== -->
-<h2 id="mod-amr">Module: amr/ <span class="badge badge-yellow">Stage 4.1 Complete (6 stages total)</span></h2>
+<h2 id="mod-amr">Module: amr/ <span class="badge badge-yellow">Stage 4.1 Complete — All Tests Passing</span></h2>
 
 <p>Oct-tree block AMR implemented in 6 stages (see <code>plan1.md</code>). The architecture wraps each <code>grid_t</code> in a <code>block_t</code> with tree metadata, managed by a <code>mesh_t</code>. A <code>meshblock_pack_t</code> packs block data into contiguous GPU-friendly buffers. The physics code (<code>ccz4_rhs_point</code>) runs unchanged on each block. Stage 4 adds dynamic oct-tree refinement/coarsening with chi-gradient criterion and cross-level ghost exchange. Stage 4.1 introduces the AthenaK coarse-buffer architecture: each leaf block at level &gt; 0 carries a <code>coarse_buf</code> (half-resolution <code>grid_t</code>) for block-local multilevel ghost fill with no cross-block writes. Restriction upgraded to 4th-order Lagrange throughout.</p>
 
@@ -642,7 +642,7 @@ Grid indexing:  IDX(g, i, j, k) = k * Ntotal^2 + j * Ntotal + i
 <tr><td><code>src/amr/meshblock_pack.h</code></td><td>meshblock_pack_t: contiguous GPU buffer, PACK_IDX macro, load/store API</td><td><span class="badge badge-green">Done</span></td></tr>
 <tr><td><code>src/amr/meshblock_pack.c</code></td><td>Page-aligned allocation, field data copy to/from blocks</td><td><span class="badge badge-green">Done</span></td></tr>
 <tr><td><code>src/amr/ghost_exchange.h</code></td><td>Ghost exchange API: ghost_exchange(), ghost_exchange_array(), ghost_exchange_multilevel()</td><td><span class="badge badge-green">Done</span></td></tr>
-<tr><td><code>src/amr/ghost_exchange.c</code></td><td>26-neighbor ghost fill + 5-phase coarse-buffer multilevel exchange (same-level &rarr; restrict to coarse_buf &rarr; fill coarse_buf ghosts &rarr; boundary extrapolation &rarr; prolongate from own coarse_buf)</td><td><span class="badge badge-green">Done</span></td></tr>
+<tr><td><code>src/amr/ghost_exchange.c</code></td><td>26-neighbor ghost fill + 5-phase coarse-buffer multilevel exchange (same-level &rarr; restrict to coarse_buf &rarr; fill coarse_buf ghosts &rarr; boundary extrapolation (full-width dimension sweep, AthenaK BCHelper pattern) &rarr; prolongate from own coarse_buf)</td><td><span class="badge badge-green">Done</span></td></tr>
 <tr><td><code>src/amr/prolongation.h</code></td><td>4th-order cell-centered Lagrange prolongation API, weight array</td><td><span class="badge badge-green">Done</span></td></tr>
 <tr><td><code>src/amr/prolongation.c</code></td><td>5-point 1D stencil, 3D tensor product (125 coarse cells per fine child). Ref: AthenaK</td><td><span class="badge badge-green">Done</span></td></tr>
 <tr><td><code>src/amr/restriction.h</code></td><td>4th-order Lagrange restriction API: RESTRICT_STENCIL, restrict_w[], restrict_to_coarse_buf()</td><td><span class="badge badge-green">Done</span></td></tr>
@@ -818,7 +818,8 @@ Grid indexing:  IDX(g, i, j, k) = k * Ntotal^2 + j * Ntotal + i
   |
   +--&gt; <span class="highlight">Phase 3.5:</span> <span class="fn">fill_coarse_buf_boundary</span>(b)
   |     Quadratic extrapolation for domain-boundary ghost cells
-  |     Ensures prolongation stencil reads valid data at boundaries
+  |     Dimension-by-dimension sweep (X&rarr;Y&rarr;Z) with full-width loops
+  |     Ref: AthenaK BCHelper — fills edges/corners automatically
   |
   +--&gt; <span class="highlight">Phase 4:</span> <span class="fn">prolongate_from_own_coarse_buf</span>(b)
         5-point Lagrange interpolation: coarse_buf &rarr; fine ghost zones

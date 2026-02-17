@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lattice &mdash; Coarse-Buffer Ghost Exchange</title>
+<style>
+/* ===== Reset & Base ===== */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { font-size: 15px; scroll-behavior: smooth; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  color: #2d333b; background: #f6f8fa; line-height: 1.6;
+  display: flex; min-height: 100vh;
+}
+
+/* ===== Sidebar ===== */
+nav.sidebar {
+  position: fixed; top: 0; left: 0; bottom: 0; width: 260px;
+  background: #1c2128; color: #adbac7; overflow-y: auto;
+  padding: 20px 0; z-index: 100; font-size: 0.87rem;
+}
+nav.sidebar::-webkit-scrollbar { width: 6px; }
+nav.sidebar::-webkit-scrollbar-thumb { background: #444c56; border-radius: 3px; }
+nav.sidebar .logo { padding: 0 20px 18px; border-bottom: 1px solid #373e47; margin-bottom: 12px; }
+nav.sidebar .logo h1 { font-size: 1.25rem; color: #e6edf3; font-weight: 700; letter-spacing: 0.5px; }
+nav.sidebar .logo p { font-size: 0.75rem; color: #768390; margin-top: 2px; }
+nav.sidebar ul { list-style: none; }
+nav.sidebar ul li a {
+  display: block; padding: 6px 20px; color: #adbac7; text-decoration: none;
+  transition: background 0.15s, color 0.15s;
+}
+nav.sidebar ul li a:hover { background: #262c36; color: #e6edf3; }
+nav.sidebar ul li a.section-header {
+  font-size: 0.7rem; text-transform: uppercase; letter-spacing: 1.2px;
+  color: #636e7b; margin-top: 14px; pointer-events: none; font-weight: 600;
+}
+nav.sidebar ul li a .status-dot {
+  display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle;
+}
+.dot-green { background: #3fb950; }
+.dot-yellow { background: #d29922; }
+.dot-red { background: #f85149; }
+.dot-gray { background: #636e7b; }
+
+/* ===== Main content ===== */
+main {
+  margin-left: 260px; flex: 1; padding: 32px 48px 80px;
+  max-width: 1100px;
+}
+main h2 {
+  font-size: 1.5rem; color: #1c2128; margin-top: 44px; margin-bottom: 12px;
+  padding-bottom: 8px; border-bottom: 2px solid #d0d7de;
+}
+main h2:first-of-type { margin-top: 0; }
+main h3 { font-size: 1.15rem; color: #2d333b; margin-top: 28px; margin-bottom: 8px; }
+main h4 { font-size: 1rem; color: #444c56; margin-top: 18px; margin-bottom: 6px; }
+main p { margin-bottom: 10px; }
+main ul, main ol { margin-left: 22px; margin-bottom: 10px; }
+main li { margin-bottom: 4px; }
+main code {
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', Menlo, Consolas, monospace;
+  font-size: 0.88em; background: #eef1f5; padding: 1px 5px; border-radius: 3px;
+}
+main pre {
+  background: #1c2128; color: #adbac7; padding: 16px 20px; border-radius: 6px;
+  overflow-x: auto; font-size: 0.82rem; line-height: 1.55; margin: 12px 0 16px;
+  font-family: 'SF Mono', 'Fira Code', Menlo, Consolas, monospace;
+}
+main pre code { background: none; padding: 0; color: inherit; font-size: inherit; }
+a { color: #2f81f7; text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ===== Banner ===== */
+.banner {
+  background: #ddf4ff; border: 1px solid #54aeff44; border-radius: 6px;
+  padding: 14px 18px; margin-bottom: 24px; font-size: 0.88rem; color: #1a4b77;
+}
+.banner strong { color: #0550ae; }
+
+/* ===== Warning banner ===== */
+.warn-banner {
+  background: #fff8c5; border: 1px solid #d4a72c66; border-radius: 6px;
+  padding: 14px 18px; margin: 14px 0 18px; font-size: 0.88rem; color: #6a4e00;
+}
+.warn-banner strong { color: #7c4d12; }
+
+/* ===== Status badges ===== */
+.badge {
+  display: inline-block; font-size: 0.72rem; font-weight: 600; padding: 2px 8px;
+  border-radius: 10px; vertical-align: middle; letter-spacing: 0.3px;
+}
+.badge-green { background: #2ea04333; color: #1a7f37; }
+.badge-yellow { background: #d299221a; color: #9a6700; }
+.badge-red { background: #f8514933; color: #cf222e; }
+.badge-gray { background: #636e7b22; color: #57606a; }
+
+/* ===== File table ===== */
+table.file-table {
+  width: 100%; border-collapse: collapse; margin: 12px 0 20px; font-size: 0.88rem;
+}
+table.file-table th {
+  text-align: left; padding: 8px 10px; background: #eef1f5;
+  border-bottom: 2px solid #d0d7de; font-weight: 600; color: #1c2128;
+}
+table.file-table td {
+  padding: 7px 10px; border-bottom: 1px solid #d8dee4; vertical-align: top;
+}
+table.file-table tr:hover td { background: #f3f6fa; }
+table.file-table td:first-child { font-family: 'SF Mono', Menlo, monospace; font-size: 0.84em; white-space: nowrap; }
+
+/* ===== Collapsible sections ===== */
+details { margin: 10px 0; }
+details > summary {
+  cursor: pointer; font-weight: 600; color: #1c2128; padding: 10px 14px;
+  background: #f3f6fa; border: 1px solid #d8dee4; border-radius: 6px;
+  list-style: none; user-select: none; transition: background 0.15s;
+}
+details > summary::-webkit-details-marker { display: none; }
+details > summary::before {
+  content: '\25B6'; display: inline-block; margin-right: 8px; font-size: 0.7em;
+  transition: transform 0.2s; color: #636e7b;
+}
+details[open] > summary::before { transform: rotate(90deg); }
+details > summary:hover { background: #eaeff4; }
+details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-top: none; border-radius: 0 0 6px 6px; }
+
+/* ===== Diagram ===== */
+.diagram {
+  background: #1c2128; color: #7ee787; padding: 20px 24px; border-radius: 6px;
+  font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 0.78rem;
+  line-height: 1.5; overflow-x: auto; margin: 14px 0 18px; white-space: pre;
+}
+.diagram .comment { color: #636e7b; }
+.diagram .highlight { color: #f0883e; }
+.diagram .type { color: #79c0ff; }
+.diagram .fn { color: #d2a8ff; }
+.diagram .err { color: #f85149; font-weight: 700; }
+.diagram .ok { color: #3fb950; font-weight: 700; }
+
+/* ===== Diff blocks ===== */
+.diff {
+  background: #1c2128; color: #adbac7; padding: 16px 20px; border-radius: 6px;
+  overflow-x: auto; font-size: 0.82rem; line-height: 1.55; margin: 12px 0 16px;
+  font-family: 'SF Mono', 'Fira Code', Menlo, Consolas, monospace;
+  white-space: pre;
+}
+.diff .del { color: #f85149; background: #f851491a; display: inline-block; width: 100%; }
+.diff .add { color: #3fb950; background: #3fb9501a; display: inline-block; width: 100%; }
+.diff .ctx { color: #636e7b; }
+.diff .hdr { color: #79c0ff; font-weight: 600; }
+
+/* ===== Dep graph ===== */
+.dep-arrow { color: #768390; }
+.dep-file { color: #79c0ff; font-weight: 500; }
+
+/* ===== Responsive ===== */
+@media (max-width: 900px) {
+  nav.sidebar { position: static; width: 100%; }
+  main { margin-left: 0; padding: 20px; }
+}
+</style>
+</head>
+<body>
+
+<!-- ===== SIDEBAR ===== -->
+<nav class="sidebar">
+  <div class="logo">
+    <h1>Lattice</h1>
+    <p>Coarse-Buffer Ghost Exchange</p>
+  </div>
+  <ul>
+    <li><a class="section-header">Overview</a></li>
+    <li><a href="#problem">The Problem</a></li>
+    <li><a href="#coarse-buffer">Coarse-Buffer Pattern</a></li>
+
+    <li><a class="section-header">The Pipeline</a></li>
+    <li><a href="#pipeline">5-Phase Pipeline</a></li>
+    <li><a href="#phase01">Phase 0+1: Same-Level</a></li>
+    <li><a href="#phase2">Phase 2: Restrict</a></li>
+    <li><a href="#phase3">Phase 3: Fill Buf Ghosts</a></li>
+    <li><a href="#phase35"><span class="status-dot dot-yellow"></span>Phase 3.5: Boundary Extrap</a></li>
+    <li><a href="#phase4">Phase 4: Prolongate</a></li>
+
+    <li><a class="section-header">The Bug</a></li>
+    <li><a href="#bug"><span class="status-dot dot-red"></span>Dimension-Sweep Bug</a></li>
+    <li><a href="#diagnosis">Diagnosis</a></li>
+    <li><a href="#fix">The Fix</a></li>
+    <li><a href="#chain">Sweep Chain</a></li>
+
+    <li><a class="section-header">Code</a></li>
+    <li><a href="#diff">Code Diff</a></li>
+    <li><a href="#references">References</a></li>
+    <li><a href="#nav">Back to Architecture</a></li>
+  </ul>
+</nav>
+
+<!-- ===== MAIN ===== -->
+<main>
+
+<div class="banner">
+  <strong>Deep-dive document.</strong> Explains the coarse-buffer multi-level ghost exchange (Phases 2&ndash;4 of <code>ghost_exchange_multilevel</code>) and the Phase&nbsp;3.5 dimension-sweep bug fix.<br>
+  <strong>Last updated:</strong> 2026-02-17 &nbsp;|&nbsp; <strong>Source:</strong> <code>src/amr/ghost_exchange.c</code>
+</div>
+
+<!-- ========================================== -->
+<h2 id="problem">The Problem: Cross-Level Ghost Zones</h2>
+
+<p>In a uniform grid, ghost zone exchange is simple: every block has neighbors at the same resolution. Copy a slab of interior data from the neighbor into the block's ghost region. Done.</p>
+
+<p>With AMR, fine blocks at level L+1 may sit next to coarser blocks at level L. The fine block's ghost cells need data that doesn't exist at fine resolution &mdash; it lives on the coarser grid. Someone needs to <strong>interpolate</strong> (prolongate) coarse data to fill those fine ghost cells.</p>
+
+<p>This is the <strong>multi-level ghost exchange problem</strong>: how to fill ghost zones when neighbors exist at different refinement levels.</p>
+
+<h3>Why not just prolongate directly from the coarse neighbor?</h3>
+
+<p>Because the prolongation stencil is wide (5 points per direction for 4th-order accuracy). A fine block's ghost cell near a corner might need coarse data that lives <em>in the coarse block's ghost zone</em>, which itself might come from another block, or from a domain boundary. You can't just read from the coarse block's interior &mdash; you need a complete, ghost-filled coarse representation around the fine block.</p>
+
+<!-- ========================================== -->
+<h2 id="coarse-buffer">The AthenaK Coarse-Buffer Pattern</h2>
+
+<p>The solution (from AthenaK / Athena++) is elegant: <strong>each fine block carries its own half-resolution buffer</strong>.</p>
+
+<div class="diagram"><span class="highlight">coarse_buf</span>: a private grid_t at the <span class="type">parent level's resolution</span>
+covering the same physical domain as the fine block, plus ghost zones.
+
+Fine block:   N = 32,  dx = 0.1,  domain = [0, 3.2]
+coarse_buf:   N = 16,  dx = 0.2,  domain = [0, 3.2]  <span class="comment">(same physical extent)</span>
+              ghost = 4 on each side  <span class="comment">(same ghost width)</span>
+              Ntotal = 24  <span class="comment">(N + 2*ghost = 16 + 8)</span>
+
+<span class="comment">The coarse_buf is block-local. No other block writes to it.</span>
+<span class="comment">All cross-level communication goes through this buffer.</span></div>
+
+<p>The key insight: by filling the coarse_buf <em>completely</em> (interior + ghosts), the prolongation stencil can always find valid data regardless of where the fine ghost cell is located &mdash; faces, edges, or corners.</p>
+
+<!-- ========================================== -->
+<h2 id="pipeline">The 5-Phase Pipeline</h2>
+
+<p>The complete multi-level ghost exchange runs in <code>ghost_exchange_multilevel()</code>. Every phase is embarrassingly parallel per block &mdash; no cross-block writes.</p>
+
+<div class="diagram"><span class="highlight">ghost_exchange_multilevel(mesh_t *m)</span>
+
+Phase 0+1  <span class="fn">exchange_same_level</span>()       Fine siblings share ghost data
+   |                                    (same as uniform grid exchange)
+   v
+Phase 2    <span class="fn">restrict_to_coarse_buf</span>()    Fine interior --> coarse_buf interior
+   |                                    (4th-order Lagrange, block-local)
+   v
+Phase 3    <span class="fn">fill_coarse_buf_ghosts</span>()    Coarse_buf ghosts from neighbors:
+   |                                      same-level: buf <--> buf exchange
+   |                                      coarser:    coarse grid --> buf
+   v
+Phase 3.5  <span class="fn">fill_coarse_buf_boundary</span>()  Domain boundaries: quadratic extrapolation
+   |                                    (only faces where nblevel &lt; 0)
+   v
+Phase 4    <span class="fn">prolongate_from_own_</span>        Coarse_buf --> fine ghost zones
+           <span class="fn">coarse_buf</span>()                 (5-point Lagrange, skip same-level dirs)</div>
+
+<p>After Phase 4, every fine leaf block has valid ghost data in all 26 directions, regardless of whether the neighbor is same-level, coarser, or a domain boundary.</p>
+
+<!-- ========================================== -->
+<h3 id="phase01">Phase 0+1: Same-Level Exchange</h3>
+
+<p>Standard 26-neighbor ghost exchange, applied level by level (coarsest first). For each pair of same-level leaf blocks that are neighbors, copy interior data into the other's ghost zone. This is identical to uniform-grid ghost exchange.</p>
+
+<table class="file-table">
+<tr><th>Reads</th><th>Writes</th><th>Scope</th></tr>
+<tr><td>Fine block interior (<code>fields[]</code>)</td><td>Fine block ghost zones (<code>fields[]</code>)</td><td>Same-level leaf pairs at each level</td></tr>
+</table>
+
+<p>After this phase, any fine ghost cell whose neighbor is also a fine leaf at the same level is correctly filled. Ghost cells facing coarser neighbors or domain boundaries remain stale.</p>
+
+<!-- ========================================== -->
+<h3 id="phase2">Phase 2: Restrict Fine Interior to coarse_buf</h3>
+
+<p>Each fine leaf block restricts its own interior data into its own <code>coarse_buf</code> interior. Uses a 4th-order symmetric Lagrange stencil (4 fine cells per coarse cell per direction, 64 fine cells total in 3D). Falls back to 2nd-order (8-cell average) where the stencil reaches outside the fine interior.</p>
+
+<table class="file-table">
+<tr><th>Reads</th><th>Writes</th><th>Scope</th></tr>
+<tr><td>Fine block interior (<code>fields[]</code>)</td><td><code>coarse_buf</code> interior (<code>fields[]</code>)</td><td>Each fine leaf block independently</td></tr>
+</table>
+
+<p>After this phase, the coarse_buf interior contains a 4th-order accurate coarse representation of the fine block's data. The coarse_buf ghost zones are still empty.</p>
+
+<!-- ========================================== -->
+<h3 id="phase3">Phase 3: Fill coarse_buf Ghost Zones</h3>
+
+<p>For each of 26 neighbor directions, fill the coarse_buf's ghost zone from the appropriate source:</p>
+
+<ul>
+<li><strong>Same-level sibling</strong> (neighbor at level L+1): Copy from the sibling's <code>coarse_buf</code> interior. Both coarse_bufs have the same N and dx, so this is a standard grid-pair exchange via <code>exchange_grid_pair()</code>.</li>
+<li><strong>Coarser neighbor</strong> (neighbor at level L): Copy from the coarse neighbor's main grid. The coarse grid and coarse_buf share the same dx, so an integer index-offset mapping suffices. Implemented in <code>copy_from_coarse_grid()</code>.</li>
+<li><strong>Domain boundary</strong> (nblevel &lt; 0): Skip &mdash; handled by Phase 3.5.</li>
+</ul>
+
+<table class="file-table">
+<tr><th>Reads</th><th>Writes</th><th>Scope</th></tr>
+<tr><td>Sibling <code>coarse_buf</code> interior, or coarse neighbor <code>grid</code> interior</td><td><code>coarse_buf</code> ghost zones</td><td>Each fine leaf block, 26 directions</td></tr>
+</table>
+
+<div class="warn-banner">
+<strong>Subtle issue:</strong> The <code>ghost_range(0, ...)</code> call for non-ghost directions returns the <strong>interior range</strong> <code>[ghost, ghost+N)</code>. This means that when copying the z+ ghost slab, only cells at interior x and interior y are filled. Cells at ghost x or ghost y positions within the z+ slab are <strong>not touched</strong>. This is by design &mdash; those edge/corner cells will be filled by Phase 3.5 if they are domain boundaries, or were already filled by an earlier Phase 3 neighbor copy for a different direction. But this design assumption is where the dimension-sweep bug manifests.
+</div>
+
+<!-- ========================================== -->
+<h3 id="phase35">Phase 3.5: Boundary Extrapolation on coarse_buf <span class="badge badge-yellow">Bug-Fix Critical</span></h3>
+
+<p>At domain boundaries (faces where <code>nblevel &lt; 0</code>), there is no neighbor to copy from. Phase 3.5 fills these boundary ghost cells by quadratic extrapolation from interior data &mdash; a 3-point Lagrange polynomial evaluated at ghost positions.</p>
+
+<p>The extrapolation is applied face-by-face in a <strong>sequential dimension sweep</strong>: X faces first, then Y faces, then Z faces. The loop ranges for the non-ghost directions must span the <strong>full array</strong> <code>[0, Ntotal)</code>, not just the interior <code>[ghost, ghost+N)</code>. This is what makes edge and corner cells work correctly. See <a href="#bug">the bug section</a> for why this matters.</p>
+
+<table class="file-table">
+<tr><th>Reads</th><th>Writes</th><th>Scope</th></tr>
+<tr><td><code>coarse_buf</code> interior (+ earlier-sweep ghost data)</td><td><code>coarse_buf</code> domain-boundary ghost zones</td><td>Each fine leaf at domain boundary faces</td></tr>
+</table>
+
+<!-- ========================================== -->
+<h3 id="phase4">Phase 4: Prolongate coarse_buf to Fine Ghosts</h3>
+
+<p>The final step: 5-point tensor-product Lagrange interpolation from the (now fully filled) <code>coarse_buf</code> into the fine block's ghost zones. For each fine ghost cell:</p>
+
+<ol>
+<li>Determine which neighbor direction this cell belongs to (ox, oy, oz).</li>
+<li>If that direction has a same-level neighbor, skip (Phase 0+1 already filled it).</li>
+<li>If it's a domain boundary, skip (Sommerfeld BCs handle it on the fine grid).</li>
+<li>Otherwise, map the fine index to a continuous coarse_buf index and interpolate with a 5x5x5 stencil.</li>
+</ol>
+
+<table class="file-table">
+<tr><th>Reads</th><th>Writes</th><th>Scope</th></tr>
+<tr><td><code>coarse_buf</code> (interior + ghosts, all filled)</td><td>Fine block ghost zones (<code>fields[]</code>)</td><td>Ghost cells facing coarser neighbors only</td></tr>
+</table>
+
+<p>The 5-point stencil needs 2 cells of padding around the interpolation point. This is why <code>coarse_buf</code> has a ghost width of 4 (= GHOST_WIDTH) &mdash; plenty of room for the stencil.</p>
+
+
+<!-- ========================================== -->
+<!-- ========================================== -->
+<h2 id="bug">The Dimension-Sweep Bug <span class="badge badge-red">Root Cause</span></h2>
+
+<p>This was the root cause of Test 6 failure: <code>max_err = 0.386</code> (threshold = 9.8e-5). The error appeared at domain boundary corners where the prolongation stencil read unfilled coarse_buf ghost cells.</p>
+
+<h3 id="diagnosis">Diagnosis: The Unfilled Corner Problem</h3>
+
+<p>Consider a fine block at a domain corner, where x- is a domain boundary and z+ has a coarser neighbor. The coarse_buf has ghost zones that need filling on both sides.</p>
+
+<h4>What Phase 3 fills (and doesn't fill)</h4>
+
+<p>When <code>copy_from_coarse_grid()</code> fills the <strong>z+ ghost slab</strong> from the coarser neighbor, it calls <code>ghost_range()</code> for each direction:</p>
+
+<pre><code>ghost_range(ox=0, ...)  // x direction: offset 0 (not a ghost dir)
+                        // returns INTERIOR range: [ghost, ghost+N)
+
+ghost_range(oy=0, ...)  // y direction: offset 0
+                        // returns INTERIOR range: [ghost, ghost+N)
+
+ghost_range(oz=+1, ...) // z direction: offset +1 (ghost dir)
+                        // returns GHOST range: [ghost+N, Ntotal)</code></pre>
+
+<p>So the z+ ghost slab is only filled for <code>x in [ghost, ghost+N)</code> and <code>y in [ghost, ghost+N)</code> &mdash; the <strong>interior range</strong>. Cells at x-ghost positions <code>[0, ghost)</code> within the z+ slab are <strong>not filled by Phase 3</strong>.</p>
+
+<h4>What Phase 3.5 fills (and doesn't fill)</h4>
+
+<p>Phase 3.5 processes <strong>domain boundary faces only</strong>. If x- is a domain boundary, it fills the x- ghost slab. But it does NOT process the z+ face (z+ has a coarser neighbor, not a domain boundary).</p>
+
+<p>Result: the cell at position <code>(x_ghost, y_interior, z_ghost+)</code> is <strong>never filled by anything</strong>.</p>
+
+<h4>2D slice of coarse_buf (x-z plane)</h4>
+
+<p>This diagram shows which phase fills each region of the coarse_buf, viewed as an x-z slice. The x- face is a domain boundary; the z+ face has a coarser neighbor.</p>
+
+<div class="diagram">                <span class="type">x- domain boundary</span>         <span class="type">x interior</span>              <span class="type">x+ (coarse nbr)</span>
+             i: [0, ghost)         i: [ghost, ghost+N)       i: [ghost+N, Ntotal)
+          +--------------------+----------------------------+--------------------+
+          |                    |                            |                    |
+ z+ ghost | <span class="err">   UNFILLED        </span>|  Phase 3 fills             |  Phase 3 fills     |  k: [ghost+N, Ntotal)
+ (coarser | <span class="err">   (THE BUG!)       </span>|  (from z+ coarse nbr)      |  (from z+ and x+)  |
+  nbr)    |                    |                            |                    |
+          +--------------------+----------------------------+--------------------+
+          |                    |                            |                    |
+ z int.   |  Phase 3.5 fills   |  Phase 2 fills             |  Phase 3 fills     |  k: [ghost, ghost+N)
+          |  (x- domain bdry)  |  (restriction from fine)   |  (from x+ nbr)    |
+          |                    |                            |                    |
+          +--------------------+----------------------------+--------------------+
+          |                    |                            |                    |
+ z- ghost |  Phase 3.5 fills   |  Phase 3.5 fills           |  Phase 3 fills     |  k: [0, ghost)
+ (domain  |  (x- bdry extrap)  |  (z- domain bdry extrap)   |  (from x+ nbr)    |  (if z- is boundary)
+  bdry)   |                    |                            |                    |
+          +--------------------+----------------------------+--------------------+
+
+The top-left cell <span class="err">(x_ghost, z_ghost+)</span> is at the intersection of a domain boundary
+face (x-) and a coarse-neighbor face (z+). Neither Phase 3 nor Phase 3.5
+reaches it. The prolongation stencil in Phase 4 reads this cell and gets <span class="err">garbage</span>.</div>
+
+<p>In 3D, this problem is even worse: a triple-corner cell at <code>(x_ghost, y_ghost, z_ghost+)</code> where x- and y- are domain boundaries but z+ is a coarse neighbor has <strong>three unfilled dimensions</strong>. The 5-point prolongation stencil reads multiple unfilled cells, producing the observed O(1) error.</p>
+
+<!-- ========================================== -->
+<h3 id="fix">The Fix: Full-Width Loop Ranges</h3>
+
+<p>The fix is to widen Phase 3.5's loop ranges in the non-ghost directions from the interior range <code>[ghost, ghost+N)</code> to the <strong>full array range</strong> <code>[0, Ntotal)</code>. This matches AthenaK's <code>BCHelper</code> implementation, which uses <code>n1</code>, <code>n2</code>, <code>n3</code> (full grid dimensions including ghosts) in its dimension-by-dimension sweep loops.</p>
+
+<p>The sequential ordering (X, then Y, then Z) ensures correctness automatically:</p>
+
+<div class="diagram"><span class="highlight">Dimension-by-dimension sweep with full-width ranges:</span>
+
+<span class="ok">X sweep</span>: extrapolate X-boundary ghosts for j = [0, Nt), k = [0, Nt)
+         Fills X ghost cells at ALL y and z positions,
+         including y-ghost and z-ghost regions.
+
+<span class="ok">Y sweep</span>: extrapolate Y-boundary ghosts for i = [0, Nt), k = [0, Nt)
+         When it reads an X-ghost position, that value was
+         <span class="ok">already set by the X sweep above</span>.
+
+<span class="ok">Z sweep</span>: extrapolate Z-boundary ghosts for i = [0, Nt), j = [0, Nt)
+         When it reads an X-ghost or Y-ghost position, those values were
+         <span class="ok">already set by the X and Y sweeps above</span>.</div>
+
+<h4 id="chain">The Sweep Chain for a Triple-Boundary Corner</h4>
+
+<p>Consider a corner cell at <code>(i_ghost, j_ghost, k_ghost)</code> where all three faces are domain boundaries. The dimension sweep fills it through a chain of dependencies:</p>
+
+<div class="diagram"><span class="highlight">Reading order for corner cell (i_ghost, j_ghost, k_ghost):</span>
+
+<span class="ok">Z sweep</span> writes (i_ghost, j_ghost, <span class="fn">k_ghost</span>)
+  reads (i_ghost, j_ghost, k_interior)  <span class="comment">// where did this value come from?</span>
+    |
+    +--&gt; <span class="ok">Y sweep</span> wrote (i_ghost, <span class="fn">j_ghost</span>, k_interior)
+           reads (i_ghost, j_interior, k_interior)  <span class="comment">// and this one?</span>
+             |
+             +--&gt; <span class="ok">X sweep</span> wrote (<span class="fn">i_ghost</span>, j_interior, k_interior)
+                    reads (i_interior, j_interior, k_interior)
+                      |
+                      +--&gt; <span class="type">INTERIOR DATA (always valid from Phase 2)</span>
+
+Each sweep's output feeds the next sweep's input. The chain terminates at
+interior data, which was filled by restriction in Phase 2. No cell is left
+unfilled, regardless of how many boundary faces meet at the corner.</div>
+
+<p>This pattern &mdash; sequential dimension sweeps with full-width loops &mdash; is a standard technique for filling edge and corner ghost cells without explicit edge/corner handling. AthenaK's <code>BCHelper</code> in <code>z4c_bcs.cpp</code> uses exactly this approach.</p>
+
+<!-- ========================================== -->
+<h2 id="diff">Code Diff</h2>
+
+<p>The fix is a 4-line change in <code>fill_coarse_buf_boundary()</code>. The X-face loops already had full-width ranges for j and k (they were correct from the start). The Y-face loops needed widening for i and k, and the Z-face loops needed widening for i and j.</p>
+
+<p>In practice, the original (buggy) code used interior-only ranges <code>[ghost, ghost+N)</code> in the non-ghost directions. The fix widens them to <code>[0, Ntotal)</code>:</p>
+
+<div class="diff"><span class="hdr">--- a/src/amr/ghost_exchange.c   (buggy: interior-only ranges)</span>
+<span class="hdr">+++ b/src/amr/ghost_exchange.c   (fixed: full-width ranges)</span>
+
+<span class="ctx"> /* Y-faces: extrapolate in j */</span>
+<span class="ctx"> if (b-&gt;nblevel[1][0][1] &lt; 0) {  /* y- boundary */</span>
+<span class="del">-    for (int k = ghost; k &lt; ghost + N; k++) {</span>
+<span class="del">-        for (int i = ghost; i &lt; ghost + N; i++) {</span>
+<span class="add">+    for (int k = 0; k &lt; Nt; k++) {</span>
+<span class="add">+        for (int i = 0; i &lt; Nt; i++) {</span>
+<span class="ctx">             for (int d = 0; d &lt; gh; d++) {</span>
+<span class="ctx">                 ...</span>
+
+<span class="ctx"> if (b-&gt;nblevel[1][2][1] &lt; 0) {  /* y+ boundary */</span>
+<span class="del">-    for (int k = ghost; k &lt; ghost + N; k++) {</span>
+<span class="del">-        for (int i = ghost; i &lt; ghost + N; i++) {</span>
+<span class="add">+    for (int k = 0; k &lt; Nt; k++) {</span>
+<span class="add">+        for (int i = 0; i &lt; Nt; i++) {</span>
+<span class="ctx">             for (int d = 0; d &lt; gh; d++) {</span>
+<span class="ctx">                 ...</span></div>
+
+<p>The X-face and Z-face loops were already using <code>[0, Nt)</code> for their non-ghost directions, so they required no changes. Only the Y-face loops had the narrower ranges.</p>
+
+<p>After the fix, the X sweep writes valid data into the x-ghost columns for all j,k. The Y sweep then reads those x-ghost values when extrapolating y-boundary ghosts, and the Z sweep reads both x- and y-ghost values when extrapolating z-boundary ghosts. Edge and corner cells are filled transitively.</p>
+
+<!-- ========================================== -->
+<h2 id="references">References</h2>
+
+<details open>
+<summary>AthenaK coarse-buffer and boundary conditions</summary>
+<div class="detail-body">
+<table class="file-table">
+<tr><th>Source</th><th>What it shows</th></tr>
+<tr><td><code>AthenaK src/bvals/physics/z4c_bcs.cpp</code></td><td><strong>BCHelper</strong> &mdash; the reference implementation for dimension-by-dimension boundary extrapolation on the coarse buffer. Uses <code>n1</code>, <code>n2</code>, <code>n3</code> (full grid dimensions including ghosts) for the non-ghost loop ranges. Sequential X, Y, Z sweep order.</td></tr>
+<tr><td><code>AthenaK src/bvals/bvals_refine.cpp</code></td><td><strong>ApplyPhysicalBoundariesOnCoarseLevel</strong> &mdash; orchestrates the call to BCHelper after coarse_buf ghost zone filling. This is "Phase 3.5" in our terminology.</td></tr>
+<tr><td>arXiv:2409.10383 Section 3.1</td><td>AthenaK NR paper describing coarse-buffer data sources: restriction from own fine data, copy from same-level sibling buffers, copy from coarser neighbor grids.</td></tr>
+<tr><td><code>Athena++ src/bvals/bvals_refine.cpp</code></td><td><strong>ApplyPhysicalBoundariesOnCoarseLevel</strong> &mdash; the original Athena++ C++ implementation (CPU). Same dimension-sweep logic.</td></tr>
+</table>
+</div>
+</details>
+
+<details>
+<summary>Lattice source files</summary>
+<div class="detail-body">
+<table class="file-table">
+<tr><th>File</th><th>Role</th></tr>
+<tr><td><code>src/amr/ghost_exchange.c</code></td><td>All 5 phases: <code>ghost_exchange_multilevel()</code>, <code>fill_coarse_buf_ghosts()</code>, <code>fill_coarse_buf_boundary()</code>, <code>prolongate_from_own_coarse_buf()</code></td></tr>
+<tr><td><code>src/amr/ghost_exchange.h</code></td><td>Public API: <code>ghost_exchange()</code>, <code>ghost_exchange_array()</code>, <code>ghost_exchange_multilevel()</code></td></tr>
+<tr><td><code>src/amr/restriction.h/c</code></td><td>4th-order Lagrange restriction: <code>restrict_to_coarse_buf()</code> (Phase 2)</td></tr>
+<tr><td><code>src/amr/prolongation.h/c</code></td><td>5-point Lagrange prolongation weights: <code>prolong_w[]</code> (Phase 4)</td></tr>
+<tr><td><code>src/amr/block.h/c</code></td><td><code>block_t</code> with <code>coarse_buf</code> field, <code>nblevel[3][3][3]</code> neighbor level table</td></tr>
+<tr><td><code>tests/test_amr_refine.c</code></td><td>Test 6: verifies polynomial <code>x^2+y^2+z^2</code> accuracy through multi-level ghost exchange</td></tr>
+</table>
+</div>
+</details>
+
+<details>
+<summary>Related papers and methods</summary>
+<div class="detail-body">
+<table class="file-table">
+<tr><th>Reference</th><th>Relevance</th></tr>
+<tr><td>arXiv:2409.10383</td><td>AthenaK: GPU-native GR code with coarse-buffer architecture</td></tr>
+<tr><td>arXiv:2504.15814</td><td>ExaHyPE: upgrading restriction order to match prolongation eliminates Hamiltonian violations at AMR boundaries</td></tr>
+<tr><td>arXiv:2312.05438</td><td>AMR refinement strategy comparison (Berger-Oliger vs. cell-by-cell)</td></tr>
+<tr><td>Fornberg, SIAM Review 40 (1998)</td><td>FD weight generation algorithm used for restriction stencil derivation</td></tr>
+</table>
+</div>
+</details>
+
+<p id="nav" style="margin-top: 32px;"><a href="architecture.html">&larr; Back to Architecture Reference</a></p>
+
+</main>
+</body>
+</html>

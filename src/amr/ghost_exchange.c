@@ -303,12 +303,16 @@ static void fill_coarse_buf_ghosts(mesh_t *m)
  *   ghost[d] = 6*interior[0] - 8*interior[1] + 3*interior[2] (d=2 from bdry)
  *   ...general: sum_j C(d,j) * interior[j], j=0..2
  *
- * Processes faces sequentially (x, then y, then z) so that edge and corner
- * ghost cells are filled correctly by later passes reading earlier results.
+ * Processes faces sequentially (x, then y, then z) with FULL array ranges
+ * in the non-ghost directions, matching AthenaK's BCHelper dimension sweep.
+ * Each later sweep reads data written by earlier sweeps, so edge and corner
+ * ghost cells are filled automatically without special edge/corner logic:
+ *   X sweep: fills X ghosts for ALL j,k (y,z ghost zones may have stale data)
+ *   Y sweep: fills Y ghosts for ALL i,k (X ghosts already valid from X sweep)
+ *   Z sweep: fills Z ghosts for ALL i,j (X,Y ghosts already valid)
  *
- * Ref: AthenaK ApplyPhysicalBoundariesOnCoarseLevel — applies BCs to
- *      coarse buffer before prolongation. We use extrapolation as a
- *      general-purpose substitute that works for any smooth field.
+ * Ref: AthenaK src/bvals/physics/z4c_bcs.cpp BCHelper — dimension-by-dimension
+ *      sweep with full-width loops (n1, n2, n3 include ghost zones).
  */
 static void fill_coarse_buf_boundary(block_t *b)
 {
@@ -334,12 +338,12 @@ static void fill_coarse_buf_boundary(block_t *b)
     for (int f = 0; f < NUM_FIELDS; f++) {
         double *data = cg->fields[f];
 
-        /* X-faces: extrapolate in i, for interior j and k only.
-         * (j, k must be in [0, Nt) to include all cells, but initially
-         * only interior j,k have valid data from restriction.) */
+        /* X-faces: extrapolate in i for ALL j, k (full array width).
+         * Non-interior j,k may read stale data, but the Y and Z sweeps
+         * below will overwrite those cells with correct values. */
         if (b->nblevel[1][1][0] < 0) {  /* x- boundary */
-            for (int k = gh; k < gh + N; k++) {
-                for (int j = gh; j < gh + N; j++) {
+            for (int k = 0; k < Nt; k++) {
+                for (int j = 0; j < Nt; j++) {
                     for (int d = 0; d < gh; d++) {
                         int gi = gh - 1 - d;  /* ghost index */
                         data[IDX(cg, gi, j, k)] =
@@ -351,8 +355,8 @@ static void fill_coarse_buf_boundary(block_t *b)
             }
         }
         if (b->nblevel[1][1][2] < 0) {  /* x+ boundary */
-            for (int k = gh; k < gh + N; k++) {
-                for (int j = gh; j < gh + N; j++) {
+            for (int k = 0; k < Nt; k++) {
+                for (int j = 0; j < Nt; j++) {
                     for (int d = 0; d < gh; d++) {
                         int gi = gh + N + d;
                         data[IDX(cg, gi, j, k)] =
@@ -364,10 +368,11 @@ static void fill_coarse_buf_boundary(block_t *b)
             }
         }
 
-        /* Y-faces: extrapolate in j, for ALL i (includes x-ghost from above)
-         * and interior k. */
+        /* Y-faces: extrapolate in j for ALL i, ALL k (full array width).
+         * X-ghost cells already filled by X sweep above; Z-ghost cells
+         * may be stale but the Z sweep below will overwrite them. */
         if (b->nblevel[1][0][1] < 0) {  /* y- boundary */
-            for (int k = gh; k < gh + N; k++) {
+            for (int k = 0; k < Nt; k++) {
                 for (int i = 0; i < Nt; i++) {
                     for (int d = 0; d < gh; d++) {
                         int gj = gh - 1 - d;
@@ -380,7 +385,7 @@ static void fill_coarse_buf_boundary(block_t *b)
             }
         }
         if (b->nblevel[1][2][1] < 0) {  /* y+ boundary */
-            for (int k = gh; k < gh + N; k++) {
+            for (int k = 0; k < Nt; k++) {
                 for (int i = 0; i < Nt; i++) {
                     for (int d = 0; d < gh; d++) {
                         int gj = gh + N + d;
