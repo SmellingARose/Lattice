@@ -475,10 +475,13 @@ static void prolongate_from_own_coarse_buf(block_t *b)
                              (fk >= ghost_f + N_f) ? 1 : 0;
 
                     /* Check nblevel: skip if same-level neighbor filled this
-                     * direction in Phase 1, or domain boundary (-1) */
+                     * direction in Phase 1. Domain boundary ghost cells
+                     * (nlev < 0) ARE filled here — Phase 3.5 extrapolated
+                     * the coarse_buf boundary, so the prolongation stencil
+                     * has valid data. Without this, fine boundary ghosts
+                     * stay zero → NaN in the RHS from chi=0, h_ij=0. */
                     int nlev = b->nblevel[oz + 1][oy + 1][ox + 1];
                     if (nlev == b->loc.level) continue;  /* same-level */
-                    if (nlev < 0) continue;              /* boundary */
 
                     /* Map fine index to coarse_buf continuous index */
                     double ci_cont = (fi - ghost_f + 0.5) / 2.0

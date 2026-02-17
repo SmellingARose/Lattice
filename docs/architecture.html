@@ -572,14 +572,16 @@ Grid indexing:  IDX(g, i, j, k) = k * Ntotal^2 + j * Ntotal + i
 <tr><th>Function</th><th>Description</th></tr>
 <tr><td><code>compute_hamiltonian_at(fields, g, i, j, k)</code></td><td>H = R + (2/3)K^2 - A^{ij}A_{ij} at one point</td></tr>
 <tr><td><code>compute_momentum_at(fields, g, i, j, k, mom[3])</code></td><td>M_i = -(2/3)d_iK + h^{jk} covd_k A_{ji} - (3/2chi) h^{jk} A_{ij} d_k chi</td></tr>
-<tr><td><code>compute_constraint_l2(g)</code></td><td>L2 norm of Hamiltonian over interior</td></tr>
-<tr><td><code>compute_momentum_l2(g)</code></td><td>RMS of |M_i| over interior</td></tr>
+<tr><td><code>compute_constraint_l2(g)</code></td><td>L2 norm of Hamiltonian over interior (single grid)</td></tr>
+<tr><td><code>compute_momentum_l2(g)</code></td><td>RMS of |M_i| over interior (single grid)</td></tr>
+<tr><td><code>mesh_constraint_l2(m)</code></td><td>L2 norm of Hamiltonian over all leaf blocks (AMR mesh)</td></tr>
+<tr><td><code>mesh_momentum_l2(m)</code></td><td>RMS of |M_i| over all leaf blocks (AMR mesh)</td></tr>
 </table>
 
 <p><strong>Ref:</strong> GRChombo NewConstraints.impl.hpp:55-100</p>
 
-<p><strong>Depends on:</strong> grid.h, fields.h, finite_diff.h, tensor_utils.h<br>
-<strong>Depended on by:</strong> main.c, output.c, all tests</p>
+<p><strong>Depends on:</strong> grid.h, fields.h, finite_diff.h, tensor_utils.h, mesh.h (for mesh-level functions)<br>
+<strong>Depended on by:</strong> main.c, output.c, all tests (including test_amr_evolve.c)</p>
 </div>
 </details>
 
@@ -823,7 +825,8 @@ Grid indexing:  IDX(g, i, j, k) = k * Ntotal^2 + j * Ntotal + i
   |
   +--&gt; <span class="highlight">Phase 4:</span> <span class="fn">prolongate_from_own_coarse_buf</span>(b)
         5-point Lagrange interpolation: coarse_buf &rarr; fine ghost zones
-        Skips directions already filled by same-level exchange (Phase 1)</div>
+        Skips directions already filled by same-level exchange (Phase 1)
+        Domain boundary directions ARE filled (Phase 3.5 extrapolated coarse_buf)</div>
 
 <h4>4th-Order Restriction (Stage 4.1) &mdash; Implemented:</h4>
 <p>Restriction upgraded from 2nd-order (8-cell average) to 4th-order cell-average Lagrange. The 1D 4-point symmetric stencil covers fine positions {-3&delta;/2, -&delta;/2, +&delta;/2, +3&delta;/2} with weights derived by integrating Lagrange basis polynomials over the coarse cell. 3D: tensor product of 1D weights, 4&sup3; = 64 fine cells per coarse cell. Falls back to 2nd-order when stencil exits grid bounds. Used in:</p>
@@ -903,10 +906,16 @@ Grid indexing:  IDX(g, i, j, k) = k * Ntotal^2 + j * Ntotal + i
   <td>72 sub-tests pass, multilevel ghost error &lt; 0.001*dx&sup2;, no NaN/Inf after regrid</td>
   <td><span class="badge badge-green">Passing</span></td>
 </tr>
+<tr>
+  <td><code>tests/test_amr_evolve.c</code></td>
+  <td>AMR integration: uniform mesh vs single-grid BH, dynamic regridding with BH, flat spacetime no-refine</td>
+  <td>8 sub-tests pass, mesh/ref Ham ratio ~0.99, regridding 8&rarr;64 blocks, flat Ham &lt; 1e-10</td>
+  <td><span class="badge badge-green">Passing</span></td>
+</tr>
 </table>
 
 <h3>How to Run Tests</h3>
-<pre><code>make test                # runs test_flat + test_convergence (quick automated tests)
+<pre><code>make test                # runs test_flat + test_convergence + test_amr_evolve
 make test-single-bh      # single BH (~40 min on M4 at N=128)
 make test-convergence    # 3-resolution convergence (~15 min)
 make test-constraints    # Hamiltonian + momentum constraint tests
@@ -914,7 +923,8 @@ make test-head-on        # head-on binary collision (~6 hrs at N=128)
 make test-amr-mesh       # AMR Stage 1 infrastructure (33 tests, ~30 sec)
 make test-amr-ghost      # AMR Stage 2 ghost exchange + multi-block (13 tests, ~60 sec)
 make test-amr-prolong    # AMR Stage 3 prolongation + noise reduction (15 tests, ~30 sec)
-make test-amr-refine     # AMR Stage 4 refinement + multilevel ghost (72 tests, ~60 sec)</code></pre>
+make test-amr-refine     # AMR Stage 4 refinement + multilevel ghost (72 tests, ~60 sec)
+make test-amr-evolve     # AMR integration: mesh BH evolution + dynamic regridding (8 tests, ~30 sec)</code></pre>
 
 <!-- ========================================== -->
 <h2 id="build">Build System</h2>

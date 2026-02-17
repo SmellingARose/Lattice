@@ -3,12 +3,12 @@
 > **Note:** When adding/removing/renaming files or functions, also update
 > `docs/architecture.html` — the living map of the codebase structure.
 
-## 2026-02-17: AMR Integration into Main Evolution Loop (WIP)
-
-### What's done
+## 2026-02-17: AMR Integration into Main Evolution Loop — Complete
 
 Wired AMR into `src/main.c` so `./lattice --amr ...` runs a real BH evolution
-on a multi-block mesh with dynamic regridding. Changes:
+on a multi-block mesh with dynamic regridding. All 8/8 integration tests pass.
+
+### Changes
 
 - **`src/main.c`**: Added `--amr`, `--N_root`, `--N_block`, `--max_level`,
   `--chi_refine`, `--chi_coarsen`, `--regrid_every` CLI args. Conditional AMR
@@ -18,25 +18,37 @@ on a multi-block mesh with dynamic regridding. Changes:
 - **`src/diagnostics/constraints.c/h`**: Added `mesh_constraint_l2()` and
   `mesh_momentum_l2()` — accumulate L2 norms over all leaf blocks.
 - **`tests/test_amr_evolve.c`**: New integration test with 3 tests:
-  1. Uniform mesh vs single-grid BH (ratio within 2x) — PASSES
-  2. Dynamic regridding around BH (refinement triggers) — PARTIAL (NaN in
-     constraint computation after multi-level evolution; see below)
-  3. Flat spacetime with regridding (no refinement) — PASSES
+  1. Uniform mesh vs single-grid BH (ratio 0.99 — within 2x) ✓
+  2. Dynamic regridding around BH (8→64 blocks, Ham L2=2.5e-3) ✓
+  3. Flat spacetime with regridding (no refinement, Ham L2=2.8e-14) ✓
 - **`Makefile`**: Added `test-amr-evolve` target, added to `test:` deps.
 
-### What's left (pick up here)
+### Bug fix: boundary ghost NaN after regridding
 
-Test 2 produces NaN in the Hamiltonian constraint computation after evolving
-on a refined multi-level mesh. Diagnostic shows:
-- Data is finite immediately after regridding (prolongation OK)
-- Data is finite after 1 post-regrid step
-- NaN appears later, likely from near-puncture chi→0 effects at the finer level
+After regridding, fine-level child blocks at domain boundaries had zero-valued
+ghost zones (chi=0, h_ij=0, lapse=0). Root cause: `prolongate_from_own_coarse_buf`
+in Phase 4 of ghost exchange skipped boundary directions with
+`if (nlev < 0) continue;`. The 4th-order FD stencils at interior points near
+the boundary would read these zeros, causing division by chi=0 → NaN.
 
-Next steps to investigate:
-1. Run more diagnostic steps to pinpoint when NaN first appears
-2. May need to adjust CFL for fine-level dt, or the issue is in the constraint
-   computation itself (division by chi near puncture at higher resolution)
-3. Once test 2 passes, update `docs/architecture.html` with new functions
+**Fix**: Removed the `if (nlev < 0) continue;` guard in
+`src/amr/ghost_exchange.c:prolongate_from_own_coarse_buf()`. Phase 3.5 already
+fills the coarse_buf boundary ghosts by quadratic extrapolation, so the 4th-order
+Lagrange prolongation stencil has valid data. This gives 4th-order accurate
+boundary ghost fills — better than GRChombo's 1st-order radial extrapolation
+approach (ref: `BoundaryConditions.cpp:fill_extrapolating_cell()`).
+
+### GRChombo cross-reference
+
+GRChombo has TWO boundary operations where we had one:
+- `fill_rhs_boundaries` — Sommerfeld on RHS (equivalent to our `apply_sommerfeld_block`)
+- `fill_solution_boundaries` → `fill_extrapolating_cell` — fills boundary ghost
+  FIELD VALUES by linear radial extrapolation (we were missing this entirely)
+
+GRChombo calls `fillBdyGhosts(soln)` before every RHS eval, after every update
+step, and after every regrid (`GRAMRLevel.cpp` lines 158, 183, 346, 942, 963).
+Our fix achieves the same effect through the prolongation pathway, which is
+architecturally cleaner for block-structured AMR.
 
 ### Files touched
 
@@ -46,6 +58,7 @@ Next steps to investigate:
 | `src/diagnostics/constraints.c` | `mesh_constraint_l2()`, `mesh_momentum_l2()` |
 | `src/diagnostics/constraints.h` | Declare mesh-level functions |
 | `tests/test_amr_evolve.c` | New AMR evolution integration test |
+| `src/amr/ghost_exchange.c` | Fix: allow boundary prolongation in Phase 4 |
 | `Makefile` | `test-amr-evolve` target |
 
 ## 2026-02-17: Head-On Binary Collision — Milestone 4 Complete
