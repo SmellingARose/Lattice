@@ -14,9 +14,9 @@
  * Evolve to T=50M (merger ~15-20M, then ringdown settles).
  *
  * Pass criteria:
- *   - No crash (NaN/Inf)
- *   - Lapse forms single minimum at late times (merger)
- *   - Constraints bounded (Ham L2 < 1.0, Mom L2 < 1.0)
+ *   1. No crash (NaN/Inf)
+ *   2. Ham L2 < 1.0
+ *   3. Mom L2 < 1.0
  *
  * Uses CK45 integrator. Memory: ~1.3 GB.
  *
@@ -38,8 +38,11 @@
 #include <stdio.h>
 #include <math.h>
 
-/* Find minimum lapse and its location */
-static double min_lapse(const grid_t *g, double *min_x, double *min_y, double *min_z)
+/* ── helpers (all static, test-local) ──────────────────────────────── */
+
+/* Global minimum of lapse and its (x,y,z) location. */
+static double min_lapse(const grid_t *g,
+                        double *min_x, double *min_y, double *min_z)
 {
     int lo = g->ghost;
     int hi = g->ghost + g->N;
@@ -63,8 +66,10 @@ static double min_lapse(const grid_t *g, double *min_x, double *min_y, double *m
     return min_val;
 }
 
-/* Count lapse minima on z-axis (x=y=0): how many local dips below threshold.
- * Two dips = two separate BHs, one dip = merged remnant. */
+/*
+ * Count lapse minima on the z-axis (x=y=0): how many local dips below
+ * the given threshold.  Two dips = two separate BHs, one dip = merged.
+ */
 static int count_z_axis_minima(const grid_t *g, double threshold)
 {
     int lo = g->ghost;
@@ -73,7 +78,7 @@ static int count_z_axis_minima(const grid_t *g, double threshold)
     int j0 = lo + g->N / 2;
 
     int in_dip = 0;
-    int count = 0;
+    int count  = 0;
 
     for (int k = lo; k < hi; k++) {
         int idx = IDX(g, i0, j0, k);
@@ -88,7 +93,48 @@ static int count_z_axis_minima(const grid_t *g, double threshold)
     return count;
 }
 
-/* Check for NaN/Inf in all fields */
+/*
+ * BH separation: walk the z-axis (x=y=0) and find the two deepest local
+ * minima of the lapse.  Return the z-distance between them.
+ * When only one minimum exists, return 0.0 (merged).
+ */
+static double bh_separation(const grid_t *g)
+{
+    int lo = g->ghost;
+    int hi = g->ghost + g->N;
+    int i0 = lo + g->N / 2;
+    int j0 = lo + g->N / 2;
+
+    /* Collect z-axis lapse profile */
+    int nz = hi - lo;
+    double *alpha_z = (double *)__builtin_alloca(sizeof(double) * (size_t)nz);
+    for (int k = lo; k < hi; k++)
+        alpha_z[k - lo] = g->fields[FIELD_LAPSE][IDX(g, i0, j0, k)];
+
+    /* Find the two deepest local minima (interior points only) */
+    double best1 = 1.0e30, best2 = 1.0e30;   /* lapse values */
+    int    loc1  = -1,     loc2  = -1;         /* k-indices    */
+
+    for (int n = 1; n < nz - 1; n++) {
+        if (alpha_z[n] <= alpha_z[n - 1] && alpha_z[n] <= alpha_z[n + 1]) {
+            if (alpha_z[n] < best1) {
+                best2 = best1; loc2 = loc1;
+                best1 = alpha_z[n]; loc1 = n;
+            } else if (alpha_z[n] < best2) {
+                best2 = alpha_z[n]; loc2 = n;
+            }
+        }
+    }
+
+    if (loc1 < 0 || loc2 < 0)
+        return 0.0;   /* zero or one minimum — merged */
+
+    double z1 = COORD(g, lo + loc1);
+    double z2 = COORD(g, lo + loc2);
+    return fabs(z1 - z2);
+}
+
+/* NaN/Inf scan over all interior field values. Returns 1 if all finite. */
 static int check_finite(const grid_t *g)
 {
     int lo = g->ghost;
@@ -108,13 +154,11 @@ static int check_finite(const grid_t *g)
     return 1;
 }
 
+/* ── main ──────────────────────────────────────────────────────────── */
+
 int main(void)
 {
-    printf("=== Head-On Binary BH Collision ===\n");
-    printf("  Ref: Sperhake (2006) gr-qc/0606079, BL models\n");
-    printf("  m1=m2=0.5, d=10M, Brill-Lindquist, no momentum\n\n");
-    fflush(stdout);
-
+    /* ── parameters ─────────────────────────────────────────────── */
     sim_params_t p = default_params();
     p.N     = 128;
     p.L     = 64.0;
@@ -126,100 +170,106 @@ int main(void)
     double T_final = 50.0;
     p.num_steps = (int)(T_final / p.dt + 0.5);
 
+    /* ── grid ───────────────────────────────────────────────────── */
     backend_init();
-
     grid_t *g = grid_alloc(p.N, p.L, p.rk_method);
+
+    /* grid_alloc may pad N — refresh derived quantities */
     p.N  = g->N;
     p.dx = g->dx;
     p.dt = p.CFL * p.dx;
     p.num_steps = (int)(T_final / p.dt + 0.5);
 
-    printf("  N=%d, dx=%.4f, dt=%.6f, steps=%d\n", g->N, g->dx, p.dt, p.num_steps);
-    fflush(stdout);
-
-    /* Two equal-mass BHs on z-axis: m=0.5 each at z=±5 (d=10M)
-     * Ref: Sperhake Table I, BL1 model (d/M ~ 10) */
-    double masses[2] = {0.5, 0.5};
+    /* ── initial data ───────────────────────────────────────────── */
+    double masses[2]     = {0.5, 0.5};
     double centers[2][3] = {{0.0, 0.0, 5.0}, {0.0, 0.0, -5.0}};
     set_brill_lindquist(g, 2, masses, centers);
 
-    double mx, my, mz;
-    double ml0 = min_lapse(g, &mx, &my, &mz);
-    int nm0 = count_z_axis_minima(g, 0.8);
-    double ham0 = compute_constraint_l2(g);
-    double mom0 = compute_momentum_l2(g);
-
-    printf("  Initial: min_lapse=%.4f at (%.1f,%.1f,%.1f), z-axis minima=%d\n",
-           ml0, mx, my, mz, nm0);
-    printf("  Initial: Ham L2=%.4e, Mom L2=%.4e\n", ham0, mom0);
-    printf("  Evolving to T=%.0fM (%d steps)...\n\n", T_final, p.num_steps);
+    /* ── banner ─────────────────────────────────────────────────── */
+    printf("\n");
+    printf("=== Head-On Binary BH Collision ===\n");
+    printf("  m1=m2=0.5, d=10M, Brill-Lindquist (gr-qc/0606079)\n");
+    printf("  N=%d, dx=%.3f, dt=%.3f, T=%.0fM (%d steps)\n\n",
+           g->N, g->dx, p.dt, T_final, p.num_steps);
+    printf(" step     t/M   lapse_min   z_min    sep/M  #dip    Ham_L2     Mom_L2\n");
+    printf("--------------------------------------------------------------------------\n");
     fflush(stdout);
 
-    int diag_every = p.num_steps / 30;
-    if (diag_every < 1) diag_every = 1;
+    /* ── initial diagnostics (step 0) ───────────────────────────── */
+    double mx, my, mz;
+    double ml     = min_lapse(g, &mx, &my, &mz);
+    int    ndip   = count_z_axis_minima(g, 0.8);
+    double sep    = bh_separation(g);
+    double ham    = compute_constraint_l2(g);
+    double mom    = compute_momentum_l2(g);
 
-    double ham_peak = 0.0, mom_peak = 0.0;
-    int crashed = 0;
+    printf("%5d  %7.2f    %7.4f  %+6.2f  %7.2f    %d   %10.3e  %10.3e\n",
+           0, 0.0, ml, mz, sep, ndip, ham, mom);
+    fflush(stdout);
 
+    int    ndip_init = ndip;
+    double ham_peak  = ham;
+    double mom_peak  = mom;
+    int    crashed   = 0;
+
+    /* ── evolution loop ─────────────────────────────────────────── */
     for (int step = 1; step <= p.num_steps; step++) {
         rk4_step(g, &p, ccz4_rhs_point, apply_sommerfeld, p.dt);
 
-        if (step % diag_every == 0 || step == p.num_steps) {
-            if (!check_finite(g)) {
-                printf("  CRASH: NaN/Inf at step %d (t=%.2fM)\n", step, step * p.dt);
-                fflush(stdout);
-                crashed = 1;
-                break;
-            }
-
-            double ham = compute_constraint_l2(g);
-            double mom = compute_momentum_l2(g);
-            double ml = min_lapse(g, &mx, &my, &mz);
-            int nm = count_z_axis_minima(g, 0.8);
-
-            if (ham > ham_peak) ham_peak = ham;
-            if (mom > mom_peak) mom_peak = mom;
-
-            printf("  t=%6.2fM  lapse_min=%.4f at (%.1f,%.1f,%.1f)  minima=%d  Ham=%.3e  Mom=%.3e\n",
-                   step * p.dt, ml, mx, my, mz, nm, ham, mom);
+        /* diagnostics every step */
+        if (!check_finite(g)) {
+            printf("  *** CRASH: NaN/Inf detected at step %d (t=%.2fM) ***\n",
+                   step, step * p.dt);
             fflush(stdout);
+            crashed = 1;
+            break;
         }
+
+        ml   = min_lapse(g, &mx, &my, &mz);
+        ndip = count_z_axis_minima(g, 0.8);
+        sep  = bh_separation(g);
+        ham  = compute_constraint_l2(g);
+        mom  = compute_momentum_l2(g);
+
+        if (ham > ham_peak) ham_peak = ham;
+        if (mom > mom_peak) mom_peak = mom;
+
+        double t = step * p.dt;
+        printf("%5d  %7.2f    %7.4f  %+6.2f  %7.2f    %d   %10.3e  %10.3e\n",
+               step, t, ml, mz, sep, ndip, ham, mom);
+        fflush(stdout);
     }
 
-    if (!crashed) {
-        double ham_final = compute_constraint_l2(g);
-        double mom_final = compute_momentum_l2(g);
-        double ml_final = min_lapse(g, &mx, &my, &mz);
-        int nm_final = count_z_axis_minima(g, 0.8);
+    /* ── summary ────────────────────────────────────────────────── */
+    printf("==========================================================================\n");
 
-        printf("\n  Final: min_lapse=%.4f at (%.1f,%.1f,%.1f), z-axis minima=%d\n",
-               ml_final, mx, my, mz, nm_final);
-        printf("  Final: Ham L2=%.4e, Mom L2=%.4e\n", ham_final, mom_final);
-        printf("  Peak:  Ham L2=%.4e, Mom L2=%.4e\n", ham_peak, mom_peak);
-
-        /* Pass criteria */
-        int finite_ok     = check_finite(g);
-        int ham_ok        = (ham_peak < 1.0);
-        int mom_ok        = (mom_peak < 1.0);
-        int merged        = (nm_final == 1);
-
-        printf("\n  Fields finite:       %s\n", finite_ok ? "YES" : "NO");
-        printf("  Ham bounded:         %s (peak=%.3e, want < 1.0)\n",
-               ham_ok ? "YES" : "NO", ham_peak);
-        printf("  Mom bounded:         %s (peak=%.3e, want < 1.0)\n",
-               mom_ok ? "YES" : "NO", mom_peak);
-        printf("  BHs merged:          %s (z-axis minima: %d->%d)\n",
-               merged ? "YES" : "NO", nm0, nm_final);
-
-        int passed = finite_ok && ham_ok && mom_ok;
-        printf("\n  %s\n", passed ? "PASSED" : "FAILED");
-
+    if (crashed) {
+        printf("  Fields finite:  NO\n");
+        printf("\n  FAILED\n");
+        printf("==========================================================================\n\n");
         grid_free(g);
         backend_cleanup();
-        return passed ? 0 : 1;
+        return 1;
     }
+
+    int finite_ok = check_finite(g);
+    int ham_ok    = (ham_peak < 1.0);
+    int mom_ok    = (mom_peak < 1.0);
+    int merged    = (ndip <= 1);
+
+    printf("  Fields finite:  %s\n", finite_ok ? "YES" : "NO");
+    printf("  Ham bounded:    %s  (peak %.3e, limit 1.0)\n",
+           ham_ok ? "YES" : "NO", ham_peak);
+    printf("  Mom bounded:    %s  (peak %.3e, limit 1.0)\n",
+           mom_ok ? "YES" : "NO", mom_peak);
+    printf("  BHs merged:     %s  (z-axis minima: %d -> %d)\n",
+           merged ? "YES" : "NO", ndip_init, ndip);
+
+    int passed = finite_ok && ham_ok && mom_ok;
+    printf("\n  %s\n", passed ? "PASSED" : "FAILED");
+    printf("==========================================================================\n\n");
 
     grid_free(g);
     backend_cleanup();
-    return 1;
+    return passed ? 0 : 1;
 }
