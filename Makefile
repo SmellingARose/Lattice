@@ -75,7 +75,7 @@ LDFLAGS = $(BACKEND_LIBS) -lm
 BUILD = build
 
 # Targets
-.PHONY: all debug test test-single-bh test-convergence test-constraints test-head-on test-amr-mesh test-amr-ghost test-amr-prolong test-amr-refine test-amr-evolve clean
+.PHONY: all debug test test-single-bh test-convergence test-constraints test-head-on test-amr-mesh test-amr-ghost test-amr-prolong test-amr-refine test-amr-evolve test-pack-evolve clean
 
 all: $(BUILD)/lattice
 
@@ -173,6 +173,14 @@ $(BUILD)/test_amr_evolve: tests/test_amr_evolve.c $(ALL_SRC)
 test-amr-evolve: $(BUILD)/test_amr_evolve
 	@echo "=== Running AMR evolution test ==="
 	$(BUILD)/test_amr_evolve
+
+$(BUILD)/test_pack_evolve: tests/test_pack_evolve.c $(ALL_SRC)
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS_OPT) -o $@ tests/test_pack_evolve.c $(ALL_SRC) $(LDFLAGS)
+
+test-pack-evolve: $(BUILD)/test_pack_evolve
+	@echo "=== Running packed evolution test ==="
+	$(BUILD)/test_pack_evolve
 
 clean:
 	rm -rf $(BUILD)

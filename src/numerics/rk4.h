@@ -30,10 +30,19 @@ void rk4_step(grid_t *g, const sim_params_t *p,
               double dt);
 
 /* Advance all blocks in a mesh by one full RK step (global dt).
+ * Uses the packed batch kernel path: all leaf blocks are packed into
+ * a contiguous meshblock_pack_t, kernels operate on the full pack,
+ * ghost exchange uses CPU fallback (Commit 1) or device kernels (Commit 2).
  * Ghost exchange before each RHS, Sommerfeld on domain boundaries only.
  * Same integrator (classic or CK45) as rk4_step. */
 struct mesh_s;  /* forward declaration to avoid circular include */
 void rk4_step_mesh(struct mesh_s *m, const sim_params_t *p,
                    rk4_rhs_func_t rhs_func, double dt);
+
+/* Per-block fallback for debug/comparison.
+ * Same algorithm as rk4_step_mesh but launches one kernel per block.
+ * Kept for validation: packed should produce identical results. */
+void rk4_step_mesh_perblock(struct mesh_s *m, const sim_params_t *p,
+                             rk4_rhs_func_t rhs_func, double dt);
 
 #endif /* LATTICE_RK4_H */

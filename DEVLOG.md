@@ -3,6 +3,66 @@
 > **Note:** When adding/removing/renaming files or functions, also update
 > `docs/architecture.html` — the living map of the codebase structure.
 
+## 2026-02-17: GPU Batch Kernels — Commit 1 Complete
+
+Implemented AthenaK-style packed batch kernels for the AMR mesh stepper.
+All leaf blocks are packed into a single contiguous `meshblock_pack_t` buffer;
+one kernel launch per operation (RHS, Sommerfeld, CK45/RK4 update) covers all
+blocks. Replaces the old per-block stepper (320 kernel launches/step for 64
+blocks × 5 CK45 stages) with ~15 launches/step.
+
+### Architecture
+
+- **meshblock_pack_t** extended with per-block metadata (origins, dx, boundary
+  flags, levels, neighbor_table), coarse_buf data for multilevel ghost exchange,
+  and an optional accum buffer for classic RK4.
+- **Batched backend API**: `backend_compute_rhs_packed`, `backend_sommerfeld_packed`,
+  `backend_update_ck45_packed`, plus classic RK4 ops (`copy`, `accum_add`, `axpy`,
+  `apply_accum`). CPU backend uses `omp parallel for`; GPU backend uses
+  `omp target teams distribute parallel for collapse(4)`.
+- **Packed mesh steppers**: `ck45_step_mesh_packed` and `classic_rk4_step_mesh_packed`
+  in `rk4.c`. Old per-block steppers kept as `rk4_step_mesh_perblock` for
+  debug/comparison.
+- **Ghost exchange (Commit 1 fallback)**: unpack → CPU 5-phase multilevel
+  exchange → repack. Correct but requires full data round-trip. Commit 2 will
+  replace with device-side ghost exchange kernels.
+- **Sommerfeld helpers** (`asymptotic_value`, `boundary_d1`) made non-static with
+  `#pragma omp declare target` for GPU compilation.
+
+### Files changed
+
+| File | Changes |
+|------|---------|
+| `src/amr/meshblock_pack.h` | Extended struct: metadata arrays, coarse_data, neighbor tables |
+| `src/amr/meshblock_pack.c` | New functions: `load_meta`, `build_neighbors`, `load/store_coarse` |
+| `src/backend/backend.h` | 11 new packed backend function declarations |
+| `src/backend/backend_cpu.c` | CPU implementations of all packed functions |
+| `src/backend/backend_gpu.c` | GPU implementations with `omp target` kernels |
+| `src/boundary/sommerfeld.h/c` | `declare target` on helpers, made non-static |
+| `src/numerics/rk4.h/c` | Packed steppers, `mesh_build_leaf_pack`, dispatch |
+| `tests/test_pack_evolve.c` | New: packed vs per-block, multilevel, flat stability |
+| `Makefile` | `test-pack-evolve` target |
+| `docs/gpu_batch_kernels.html` | New: interactive GPU optimization explainer |
+
+### Test results
+
+```
+test_pack_evolve: 8/8 passed
+  Packed vs per-block max |diff| = 7.14e-16 (< 1e-12 threshold)
+  Multilevel AMR: regridding works, Ham L2 finite and bounded
+  Flat spacetime: Ham L2 = 4.48e-14 (< 1e-10 threshold)
+
+make test: all existing tests still pass
+  Flat stability, convergence order 5.4, AMR evolve 8/8
+```
+
+### Next: Commit 2
+
+Replace `packed_ghost_exchange_fallback` with `backend_ghost_exchange_packed` —
+5 device-side kernels for same-level exchange, restrict, coarse ghost fill,
+boundary extrapolation, and prolongation. Eliminates all CPU-GPU sync during
+the RK step.
+
 ## 2026-02-17: AMR Integration into Main Evolution Loop — Complete
 
 Wired AMR into `src/main.c` so `./lattice --amr ...` runs a real BH evolution

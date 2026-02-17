@@ -15,8 +15,13 @@
 #include "../core/fields.h"
 #include <math.h>
 
-/* Asymptotic values for each field */
-static double asymptotic_value(int field)
+/* Asymptotic values for each field.
+ * Non-static: exposed in sommerfeld.h for packed GPU kernels.
+ * Ref: GRChombo BoundaryConditions.cpp:593-598 */
+#ifdef LATTICE_GPU
+#pragma omp declare target
+#endif
+double asymptotic_value(int field)
 {
     switch (field) {
         case FIELD_CHI:   return 1.0;
@@ -30,10 +35,11 @@ static double asymptotic_value(int field)
 
 /*
  * 2nd-order derivative at boundary using one-sided stencils.
+ * Non-static: exposed in sommerfeld.h for packed GPU kernels.
  * Ref: GRChombo BoundaryConditions.cpp:617-649
  */
-static double boundary_d1(const double *f, int idx, int stride,
-                          int lo_offset, int hi_offset, double dx)
+double boundary_d1(const double *f, int idx, int stride,
+                   int lo_offset, int hi_offset, double dx)
 {
     if (lo_offset < 1) {
         /* Near low boundary — forward stencil */
@@ -48,6 +54,9 @@ static double boundary_d1(const double *f, int idx, int stride,
         return 0.5 * (f[idx + stride] - f[idx - stride]) / dx;
     }
 }
+#ifdef LATTICE_GPU
+#pragma omp end declare target
+#endif
 
 void apply_sommerfeld(double **rhs, const double *const *src, const grid_t *g)
 {

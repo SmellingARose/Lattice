@@ -444,13 +444,18 @@ Grid indexing:  IDX(g, i, j, k) = k * Ntotal^2 + j * Ntotal + i
 
 <table class="file-table">
 <tr><th>Function</th><th>Description</th></tr>
+<tr><td colspan="2"><em>Single-grid steppers</em></td></tr>
 <tr><td><code>rk4_step(g, p, rhs_func, bc_func, dt)</code></td><td>Public interface: dispatches to CK45 or classic based on p->rk_method</td></tr>
 <tr><td><code>ck45_step(...)</code></td><td>Carpenter-Kennedy 2N low-storage: dU = A[s]*dU + dt*F; U += B[s]*dU</td></tr>
 <tr><td><code>classic_rk4_step(...)</code></td><td>Standard 4-stage: scratch + accumulator pattern</td></tr>
 <tr><td><code>enforce_algebraic(g)</code></td><td>det(h)=1, tr(A)=0, chi>0, lapse>0. OpenMP collapse(2).</td></tr>
 <tr><td><code>ck45_update(...)</code></td><td>Fused dU/U update kernel. OpenMP parallel for.</td></tr>
 <tr><td><code>copy_fields, axpy_fields, accum_add, apply_accum, zero_fields</code></td><td>Helper array operations (all OpenMP parallelized)</td></tr>
-<tr><td><code>rk4_step_mesh(m, p, rhs_func, dt)</code></td><td>Multi-block mesh stepping: ghost exchange before each RK stage, per-block RHS + Sommerfeld. Stage 4: dispatches to multilevel ghost exchange when max_level &gt; 0, restricts to parents after each step</td></tr>
+<tr><td colspan="2"><em>Mesh steppers (AMR production path)</em></td></tr>
+<tr><td><code>rk4_step_mesh(m, p, rhs_func, dt)</code></td><td>Packed batch: builds meshblock_pack from all leaves, dispatches to <code>ck45_step_mesh_packed</code> or <code>classic_rk4_step_mesh_packed</code>. One kernel per op for all blocks.</td></tr>
+<tr><td><code>rk4_step_mesh_perblock(m, p, rhs_func, dt)</code></td><td>Per-block fallback for debug/comparison. Same algorithm, one kernel per block per stage. Should produce identical results to packed path.</td></tr>
+<tr><td><code>mesh_build_leaf_pack(m, rk_method)</code></td><td>Static. Collects leaf IDs, creates pack, loads fields/metadata/neighbors/coarse_buf.</td></tr>
+<tr><td><code>packed_ghost_exchange_fallback(pack, m)</code></td><td>Static. Commit 1: unpack &rarr; CPU 5-phase exchange &rarr; repack.</td></tr>
 </table>
 
 <p><strong>CK45 coefficients:</strong> Carpenter &amp; Kennedy, NASA TM-109112 (1994), Solution 3.</p>
@@ -497,21 +502,34 @@ Grid indexing:  IDX(g, i, j, k) = k * Ntotal^2 + j * Ntotal + i
 <!-- ========================================== -->
 <h2 id="mod-backend">Module: backend/ <span class="badge badge-yellow">CPU working, GPU needs GCC 15</span></h2>
 
-<p>Abstraction layer that owns the parallel loop structure. Physics code calls <code>backend_compute_rhs()</code> which dispatches to the selected backend.</p>
+<p>Two-tier abstraction layer. <strong>Tier 1 (legacy):</strong> per-grid <code>backend_compute_rhs()</code> for single-grid tests. <strong>Tier 2 (production):</strong> packed batch API &mdash; all leaf blocks in one <code>meshblock_pack_t</code>, one kernel launch per operation. See <a href="gpu_batch_kernels.html">GPU Batch Kernels</a> for full architecture.</p>
 
 <details>
 <summary>backend/backend.h &mdash; Backend interface</summary>
 <div class="detail-body">
-<p>Defines <code>rhs_point_func_t</code> function pointer type and the three backend lifecycle functions.</p>
+<p>Defines <code>rhs_point_func_t</code> function pointer type and both API tiers.</p>
 
 <table class="file-table">
 <tr><th>Function</th><th>Description</th></tr>
+<tr><td colspan="2"><em>Tier 1: Legacy per-grid</em></td></tr>
 <tr><td><code>backend_compute_rhs(rhs, src, g, p, func)</code></td><td>Compute RHS over entire interior grid via selected backend</td></tr>
 <tr><td><code>backend_init()</code></td><td>Initialize backend (no-op for CPU)</td></tr>
 <tr><td><code>backend_cleanup()</code></td><td>Cleanup backend (no-op for CPU)</td></tr>
+<tr><td colspan="2"><em>Tier 2: Packed batch (AMR production path)</em></td></tr>
+<tr><td><code>backend_map_pack(pack, p)</code></td><td>Map pack data to GPU (no-op on CPU)</td></tr>
+<tr><td><code>backend_unmap_pack(pack)</code></td><td>Sync pack data from GPU (no-op on CPU)</td></tr>
+<tr><td><code>backend_compute_rhs_packed(pack, p)</code></td><td>Batched RHS: all blocks in one kernel launch</td></tr>
+<tr><td><code>backend_sommerfeld_packed(pack, p)</code></td><td>Batched Sommerfeld BCs: boundary ghost cells only</td></tr>
+<tr><td><code>backend_update_ck45_packed(pack, A, B, dt)</code></td><td>Fused CK45 update: dU = A*dU + dt*F; U += B*dU</td></tr>
+<tr><td><code>backend_zero_packed(pack, which)</code></td><td>Zero a pack buffer (scratch or accum)</td></tr>
+<tr><td><code>backend_copy_packed(pack, dst, src)</code></td><td>Copy between pack buffers</td></tr>
+<tr><td><code>backend_accum_add_packed(pack, w, dt)</code></td><td>Classic RK4: accum += w * dt * rhs</td></tr>
+<tr><td><code>backend_axpy_packed(pack, a, dt)</code></td><td>Classic RK4: data = scratch + a*dt*rhs</td></tr>
+<tr><td><code>backend_apply_accum_packed(pack)</code></td><td>Classic RK4: data += accum</td></tr>
+<tr><td><code>backend_ghost_exchange_packed(pack)</code></td><td>Device-side ghost exchange (Commit 2, stub)</td></tr>
 </table>
 
-<p><strong>Depends on:</strong> grid.h, params.h<br>
+<p><strong>Depends on:</strong> grid.h, params.h, meshblock_pack.h<br>
 <strong>Depended on by:</strong> rk4.c, main.c, all tests</p>
 </div>
 </details>
@@ -519,9 +537,10 @@ Grid indexing:  IDX(g, i, j, k) = k * Ntotal^2 + j * Ntotal + i
 <details>
 <summary>backend/backend_cpu.c &mdash; CPU backend (OpenMP threads)</summary>
 <div class="detail-body">
-<p>Triple loop with <code>#pragma omp parallel for collapse(2) schedule(static)</code> over z and y. Calls <code>func(rhs, src, g, p, i, j, k)</code> at each interior point via function pointer.</p>
+<p><strong>Legacy path:</strong> Triple loop with <code>#pragma omp parallel for collapse(2)</code> over z,y. Calls RHS via function pointer.</p>
+<p><strong>Packed path:</strong> All packed functions use <code>#pragma omp parallel for</code>. The batched RHS iterates over blocks, building per-field pointer arrays into the pack layout and a stack-local <code>grid_t</code>, then calls <code>ccz4_rhs_point</code> with <code>collapse(2)</code> over k,j. Map/unmap are no-ops. This enables full testing of packed infrastructure on macOS without GPU hardware.</p>
 
-<p><strong>Depends on:</strong> backend.h<br>
+<p><strong>Depends on:</strong> backend.h, ccz4_rhs.h, sommerfeld.h<br>
 <strong>Depended on by:</strong> linked at build time when <code>BACKEND=cpu</code></p>
 </div>
 </details>
@@ -529,11 +548,12 @@ Grid indexing:  IDX(g, i, j, k) = k * Ntotal^2 + j * Ntotal + i
 <details>
 <summary>backend/backend_gpu.c &mdash; GPU backend (OpenMP target offloading)</summary>
 <div class="detail-body">
-<p>Same triple loop but with <code>#pragma omp target teams distribute parallel for collapse(3)</code>. Calls <code>ccz4_rhs_point</code> directly (no function pointers on GPU). Requires GCC 15+ with <code>GOMP_NVPTX_NATIVE_GPU_THREAD_STACK_SIZE=16384</code> environment variable to handle the ~4 KB stack per thread.</p>
+<p><strong>Legacy path:</strong> <code>#pragma omp target teams distribute parallel for collapse(3)</code>. Calls <code>ccz4_rhs_point</code> directly (no function pointers on GPU).</p>
+<p><strong>Packed path:</strong> Batched kernels use <code>collapse(4)</code> over (block, k, j, i). Each GPU thread builds per-field pointer arrays (~400B) and a stack-local <code>grid_t</code> (~872B) on its thread stack, then calls <code>ccz4_rhs_point</code> (~4KB). Total ~5.3KB per thread &lt; 16KB limit. Map/unmap use <code>omp target enter/exit data</code>. Arithmetic kernels (CK45 update, copy, axpy, etc.) are flat loops over the full pack buffer.</p>
 
-<p><strong>Status:</strong> Code is written and compiles. Tested on GCC 13 + Tesla P40 but hit stack overflow (see DEVLOG). Awaiting GCC 15 for runtime stack control.</p>
+<p><strong>Requires:</strong> GCC 15+ with <code>GOMP_NVPTX_NATIVE_GPU_THREAD_STACK_SIZE=16384</code>.</p>
 
-<p><strong>Depends on:</strong> backend.h, ccz4_rhs.h<br>
+<p><strong>Depends on:</strong> backend.h, ccz4_rhs.h, sommerfeld.h<br>
 <strong>Depended on by:</strong> linked at build time when <code>BACKEND=gpu</code></p>
 </div>
 </details>
@@ -597,8 +617,8 @@ Grid indexing:  IDX(g, i, j, k) = k * Ntotal^2 + j * Ntotal + i
 <tr><th>Function</th><th>Description</th></tr>
 <tr><td><code>apply_sommerfeld(rhs, src, g)</code></td><td>Overwrites RHS in all ghost zone points (single-grid)</td></tr>
 <tr><td><code>apply_sommerfeld_block(rhs, src, b)</code></td><td>Block-aware: only applies to domain-boundary ghost points, uses BLOCK_COORD for global coords (AMR Stage 2)</td></tr>
-<tr><td><code>asymptotic_value(field)</code></td><td>Returns far-field value for each field (static)</td></tr>
-<tr><td><code>boundary_d1(f, idx, stride, lo, hi, dx)</code></td><td>One-sided 2nd-order derivative at boundary (static)</td></tr>
+<tr><td><code>asymptotic_value(field)</code></td><td>Returns far-field value for each field. Non-static, <code>omp declare target</code> for GPU.</td></tr>
+<tr><td><code>boundary_d1(f, idx, stride, lo, hi, dx)</code></td><td>One-sided 2nd-order derivative at boundary. Non-static, <code>omp declare target</code> for GPU.</td></tr>
 </table>
 
 <p><strong>Ref:</strong> GRChombo BoundaryConditions.cpp:593-661</p>
@@ -641,8 +661,8 @@ Grid indexing:  IDX(g, i, j, k) = k * Ntotal^2 + j * Ntotal + i
 <tr><td><code>src/amr/block.c</code></td><td>Block allocation (wraps grid_alloc), coarse_buf_alloc() for half-res buffer, 26-neighbor offset table</td><td><span class="badge badge-green">Done</span></td></tr>
 <tr><td><code>src/amr/mesh.h</code></td><td>mesh_t struct + find/add/remove/compact/rebuild_neighbors API</td><td><span class="badge badge-green">Done</span></td></tr>
 <tr><td><code>src/amr/mesh.c</code></td><td>Root grid creation, Morton sort, multi-level neighbor finding with coarse fallback (fixed for cross-level edge/corner lookups via floor division of neighbor coords)</td><td><span class="badge badge-green">Done</span></td></tr>
-<tr><td><code>src/amr/meshblock_pack.h</code></td><td>meshblock_pack_t: contiguous GPU buffer, PACK_IDX macro, load/store API</td><td><span class="badge badge-green">Done</span></td></tr>
-<tr><td><code>src/amr/meshblock_pack.c</code></td><td>Page-aligned allocation, field data copy to/from blocks</td><td><span class="badge badge-green">Done</span></td></tr>
+<tr><td><code>src/amr/meshblock_pack.h</code></td><td>meshblock_pack_t: contiguous GPU buffer (data/rhs/scratch/accum), per-block metadata (origins, dx, boundary, levels, neighbor_table), coarse_data for multilevel, PACK_IDX/PACK_BUF_* macros</td><td><span class="badge badge-green">Done</span></td></tr>
+<tr><td><code>src/amr/meshblock_pack.c</code></td><td>Pack create/free, load/store (block &harr; pack), load_meta, build_neighbors, load/store_coarse</td><td><span class="badge badge-green">Done</span></td></tr>
 <tr><td><code>src/amr/ghost_exchange.h</code></td><td>Ghost exchange API: ghost_exchange(), ghost_exchange_array(), ghost_exchange_multilevel()</td><td><span class="badge badge-green">Done</span></td></tr>
 <tr><td><code>src/amr/ghost_exchange.c</code></td><td>26-neighbor ghost fill + 5-phase coarse-buffer multilevel exchange (same-level &rarr; restrict to coarse_buf &rarr; fill coarse_buf ghosts &rarr; boundary extrapolation (full-width dimension sweep, AthenaK BCHelper pattern) &rarr; prolongate from own coarse_buf)</td><td><span class="badge badge-green">Done</span></td></tr>
 <tr><td><code>src/amr/prolongation.h</code></td><td>4th-order cell-centered Lagrange prolongation API, weight array</td><td><span class="badge badge-green">Done</span></td></tr>
@@ -658,8 +678,11 @@ Grid indexing:  IDX(g, i, j, k) = k * Ntotal^2 + j * Ntotal + i
 <h4>Modified Files (Stages 2&ndash;4.1):</h4>
 <table class="file-table">
 <tr><th>File</th><th>Change</th></tr>
-<tr><td><code>src/boundary/sommerfeld.h/c</code></td><td>Added <code>apply_sommerfeld_block()</code>: domain-boundary-only Sommerfeld using BLOCK_COORD</td></tr>
-<tr><td><code>src/numerics/rk4.h/c</code></td><td>Added <code>rk4_step_mesh()</code>: CK45 + classic RK4 for multi-block. Stage 4: multilevel ghost exchange dispatch + parent restriction after each step</td></tr>
+<tr><td><code>src/boundary/sommerfeld.h/c</code></td><td>Added <code>apply_sommerfeld_block()</code>: domain-boundary-only Sommerfeld. Made <code>asymptotic_value()</code> and <code>boundary_d1()</code> non-static with <code>omp declare target</code> for packed GPU Sommerfeld kernel</td></tr>
+<tr><td><code>src/numerics/rk4.h/c</code></td><td>Added packed mesh steppers (<code>ck45_step_mesh_packed</code>, <code>classic_rk4_step_mesh_packed</code>) using batched backend API. Old per-block steppers kept as <code>rk4_step_mesh_perblock()</code> for debug/comparison</td></tr>
+<tr><td><code>src/backend/backend.h</code></td><td>Added 11 packed batch API functions (map/unmap, RHS, Sommerfeld, CK45 update, classic RK4 ops, ghost exchange stub)</td></tr>
+<tr><td><code>src/backend/backend_cpu.c</code></td><td>Implemented all packed batch functions with OpenMP parallel for</td></tr>
+<tr><td><code>src/backend/backend_gpu.c</code></td><td>Implemented all packed batch functions with OpenMP target teams distribute parallel for collapse(4)</td></tr>
 <tr><td><code>src/initial_data/puncture.h/c</code></td><td>Added <code>set_brill_lindquist_global()</code>: block-aware coords via explicit origin</td></tr>
 <tr><td><code>src/core/params.h</code></td><td>Added <code>noise_params_t</code> (CAKO/CAHD/SSL/per-field sigma params), <code>amr_params_t</code>, <code>double time</code></td></tr>
 <tr><td><code>src/evolution/dissipation.c</code></td><td>CAKO: <code>sigma_eff = sqrt(chi) * sigma_base</code>. Per-field sigma: 0.99 gauge, 0.3 physical</td></tr>

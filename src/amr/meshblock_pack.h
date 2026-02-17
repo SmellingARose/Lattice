@@ -28,10 +28,26 @@
 #include "../core/fields.h"
 #include <stddef.h>
 
+/*
+ * Buffer index constants for backend_zero_packed / backend_copy_packed.
+ *   0 = data (evolved fields U)
+ *   1 = rhs  (right-hand-side F)
+ *   2 = scratch (CK45 dU or classic RK4 backup U^0)
+ *   3 = accum (classic RK4 accumulator, NULL if CK45)
+ */
+#define PACK_BUF_DATA    0
+#define PACK_BUF_RHS     1
+#define PACK_BUF_SCRATCH 2
+#define PACK_BUF_ACCUM   3
+
 typedef struct {
-    double  *data;         /* fields: [n_fields * n_blocks * npts]         */
-    double  *rhs;          /* RHS:    same layout                          */
-    double  *scratch;      /* scratch/dU: same layout                      */
+    /* ---- core field buffers (existing) ----
+     * Layout: [n_fields * n_blocks * npts], field-major, block-minor,
+     * point-innermost (x unit-stride). Matches AthenaK convention. */
+    double  *data;         /* evolved fields U                              */
+    double  *rhs;          /* right-hand-side F                             */
+    double  *scratch;      /* CK45 dU register, or classic RK4 backup U^0  */
+    double  *accum;        /* classic RK4 accumulator (NULL if CK45)        */
 
     int      n_blocks;     /* number of blocks in this pack                */
     size_t   npts;         /* grid points per block = Ntotal^3             */
@@ -39,6 +55,37 @@ typedef struct {
 
     int     *block_ids;    /* which block IDs are packed [n_blocks]         */
     int      level;        /* level of blocks in this pack (-1 = mixed)    */
+
+    /* ---- grid dimensions (same for all blocks in pack) ----
+     * Set by meshblock_pack_load_meta from the first block's grid. */
+    int      N;            /* interior cells per side                       */
+    int      ghost;        /* = GHOST_WIDTH = 4                             */
+    int      Ntotal;       /* N + 2*ghost (may be padded per grid_alloc)    */
+
+    /* ---- per-block metadata (flat GPU-mappable arrays) ----
+     * Filled by meshblock_pack_load_meta and meshblock_pack_build_neighbors.
+     * These arrays are mapped to GPU memory by backend_map_pack. */
+    double  *origins;       /* [n_blocks * 3] — block origin (x,y,z)        */
+    double  *dx_per_block;  /* [n_blocks] — dx varies by refinement level   */
+    int     *on_boundary;   /* [n_blocks * 6] — domain boundary flags       */
+                            /* [b*6+0..5] = {x-,x+,y-,y+,z-,z+}            */
+    int     *levels;        /* [n_blocks] — refinement level per block      */
+    int     *neighbor_table;/* [n_blocks * 26] — pack-local neighbor index   */
+                            /* -1 = no neighbor in pack (boundary or absent) */
+
+    /* ---- coarse_buf data for multilevel ghost exchange (Commit 2) ----
+     * Each leaf block at level > 0 has a half-resolution coarse_buf used
+     * by the 5-phase multilevel ghost exchange. These arrays pack all
+     * coarse_bufs contiguously for GPU kernels.
+     * Ref: AthenaK coarse-buffer architecture */
+    double  *coarse_data;   /* [n_refined * n_fields * coarse_npts]          */
+    int      n_refined;     /* count of level > 0 blocks (have coarse_bufs) */
+    size_t   coarse_npts;   /* points per coarse_buf = coarse_Ntotal^3       */
+    int      coarse_Ntotal; /* N/2 + 2*ghost                                */
+    int      coarse_N;      /* N/2 (half the fine block interior)            */
+    int     *refined_map;   /* [n_blocks] — pack index → coarse_data index   */
+                            /* -1 if level == 0 (no coarse_buf for this blk) */
+    int     *coarse_neighbor_table; /* [n_refined * 26] — coarse_buf nbrs    */
 } meshblock_pack_t;
 
 /* Pack indexing macro:
@@ -50,19 +97,25 @@ typedef struct {
 
 /*
  * Allocate a MeshBlockPack for n_blocks blocks, each with npts grid points.
- * Allocates page-aligned contiguous buffers for data, rhs, scratch.
- * block_ids is caller-allocated and copied in.
+ * Allocates page-aligned contiguous buffers for data, rhs, scratch, and
+ * accum (if rk_method == RK_CLASSIC). Also allocates per-block metadata
+ * arrays (origins, dx_per_block, etc.) — caller fills via load_meta.
+ *
+ * block_ids: array of mesh-level block IDs to include [n_blocks].
+ * level: refinement level (-1 = mixed levels, normal for AMR).
+ * rk_method: determines whether to allocate accum buffer.
  */
 meshblock_pack_t *meshblock_pack_create(int n_blocks, size_t npts,
-                                         const int *block_ids, int level);
+                                         const int *block_ids, int level,
+                                         rk_method_t rk_method);
 
-/* Free pack and all its buffers */
+/* Free pack and all its buffers (data, rhs, scratch, accum, metadata) */
 void meshblock_pack_free(meshblock_pack_t *pack);
 
 /*
  * Copy field data from individual blocks into the pack's contiguous buffer.
  * blocks: array of all blocks (indexed by block_ids[b]).
- * Copies fields -> data, rhs -> rhs, scratch -> scratch.
+ * Copies: fields→data, rhs→rhs, scratch→scratch, accum→accum (if non-NULL).
  */
 void meshblock_pack_load(meshblock_pack_t *pack, block_t **blocks);
 
@@ -71,5 +124,39 @@ void meshblock_pack_load(meshblock_pack_t *pack, block_t **blocks);
  * Inverse of meshblock_pack_load.
  */
 void meshblock_pack_store(const meshblock_pack_t *pack, block_t **blocks);
+
+/*
+ * Fill per-block metadata from block_t structs into flat GPU-mappable arrays.
+ * Sets: origins, dx_per_block, on_boundary, levels, grid dimensions (N,
+ * ghost, Ntotal). Also counts refined blocks and allocates coarse_data
+ * if any blocks are at level > 0.
+ *
+ * Must be called after meshblock_pack_create and before build_neighbors.
+ */
+void meshblock_pack_load_meta(meshblock_pack_t *pack, block_t **blocks);
+
+/*
+ * Build pack-local neighbor table from block_t neighbor_ids.
+ * For each block b and each of 26 directions, maps the mesh-level
+ * neighbor_id to a pack-local index (0..n_blocks-1) or -1 if the
+ * neighbor isn't in the pack (domain boundary or different level).
+ *
+ * Also builds coarse_neighbor_table for refined blocks if n_refined > 0.
+ * Must be called after meshblock_pack_load_meta.
+ */
+void meshblock_pack_build_neighbors(meshblock_pack_t *pack, block_t **blocks);
+
+/*
+ * Copy coarse_buf data from individual blocks into pack->coarse_data.
+ * Only copies for refined blocks (level > 0, refined_map[b] >= 0).
+ * Used to initialize pack coarse data before GPU ghost exchange (Commit 2).
+ */
+void meshblock_pack_load_coarse(meshblock_pack_t *pack, block_t **blocks);
+
+/*
+ * Copy pack->coarse_data back into individual blocks' coarse_bufs.
+ * Inverse of meshblock_pack_load_coarse.
+ */
+void meshblock_pack_store_coarse(const meshblock_pack_t *pack, block_t **blocks);
 
 #endif /* LATTICE_MESHBLOCK_PACK_H */

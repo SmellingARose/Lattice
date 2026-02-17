@@ -1,0 +1,709 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lattice GPU Batch Kernel Architecture</title>
+<style>
+/* ===== Reset & Base ===== */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { font-size: 15px; scroll-behavior: smooth; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  color: #2d333b; background: #f6f8fa; line-height: 1.6;
+  display: flex; min-height: 100vh;
+}
+
+/* ===== Sidebar ===== */
+nav.sidebar {
+  position: fixed; top: 0; left: 0; bottom: 0; width: 260px;
+  background: #1c2128; color: #adbac7; overflow-y: auto;
+  padding: 20px 0; z-index: 100; font-size: 0.87rem;
+}
+nav.sidebar::-webkit-scrollbar { width: 6px; }
+nav.sidebar::-webkit-scrollbar-thumb { background: #444c56; border-radius: 3px; }
+nav.sidebar .logo { padding: 0 20px 18px; border-bottom: 1px solid #373e47; margin-bottom: 12px; }
+nav.sidebar .logo h1 { font-size: 1.25rem; color: #e6edf3; font-weight: 700; letter-spacing: 0.5px; }
+nav.sidebar .logo p { font-size: 0.75rem; color: #768390; margin-top: 2px; }
+nav.sidebar ul { list-style: none; }
+nav.sidebar ul li a {
+  display: block; padding: 6px 20px; color: #adbac7; text-decoration: none;
+  transition: background 0.15s, color 0.15s;
+}
+nav.sidebar ul li a:hover { background: #262c36; color: #e6edf3; }
+nav.sidebar ul li a.section-header {
+  font-size: 0.7rem; text-transform: uppercase; letter-spacing: 1.2px;
+  color: #636e7b; margin-top: 14px; pointer-events: none; font-weight: 600;
+}
+
+/* ===== Main content ===== */
+main {
+  margin-left: 260px; flex: 1; padding: 32px 48px 80px;
+  max-width: 1100px;
+}
+main h2 {
+  font-size: 1.5rem; color: #1c2128; margin-top: 44px; margin-bottom: 12px;
+  padding-bottom: 8px; border-bottom: 2px solid #d0d7de;
+}
+main h2:first-of-type { margin-top: 0; }
+main h3 { font-size: 1.15rem; color: #2d333b; margin-top: 28px; margin-bottom: 8px; }
+main h4 { font-size: 1rem; color: #444c56; margin-top: 18px; margin-bottom: 6px; }
+main p { margin-bottom: 10px; }
+main ul, main ol { margin-left: 22px; margin-bottom: 10px; }
+main li { margin-bottom: 4px; }
+main code {
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', Menlo, Consolas, monospace;
+  font-size: 0.88em; background: #eef1f5; padding: 1px 5px; border-radius: 3px;
+}
+main pre {
+  background: #1c2128; color: #adbac7; padding: 16px 20px; border-radius: 6px;
+  overflow-x: auto; font-size: 0.82rem; line-height: 1.55; margin: 12px 0 16px;
+  font-family: 'SF Mono', 'Fira Code', Menlo, Consolas, monospace;
+}
+main pre code { background: none; padding: 0; color: inherit; font-size: inherit; }
+a { color: #2f81f7; text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ===== Banner ===== */
+.banner {
+  background: #ddf4ff; border: 1px solid #54aeff44; border-radius: 6px;
+  padding: 14px 18px; margin-bottom: 24px; font-size: 0.88rem; color: #1a4b77;
+}
+.banner strong { color: #0550ae; }
+
+/* ===== Diagram ===== */
+.diagram {
+  background: #1c2128; color: #7ee787; padding: 20px 24px; border-radius: 6px;
+  font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 0.78rem;
+  line-height: 1.5; overflow-x: auto; margin: 14px 0 18px; white-space: pre;
+}
+.diagram .comment { color: #636e7b; }
+.diagram .highlight { color: #f0883e; }
+.diagram .type { color: #79c0ff; }
+.diagram .fn { color: #d2a8ff; }
+
+/* ===== Comparison cards ===== */
+.compare-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+  margin: 16px 0 20px;
+}
+.card {
+  border-radius: 8px; padding: 18px 20px; border: 1px solid;
+}
+.card-before {
+  background: #fff1e5; border-color: #f0883e44;
+}
+.card-before h4 { color: #953800; margin-top: 0; margin-bottom: 10px; font-size: 1.05rem; }
+.card-before .card-label {
+  display: inline-block; background: #f0883e22; color: #953800;
+  font-size: 0.72rem; font-weight: 600; padding: 2px 8px;
+  border-radius: 10px; margin-bottom: 10px; letter-spacing: 0.3px;
+}
+.card-after {
+  background: #dafbe1; border-color: #3fb95044;
+}
+.card-after h4 { color: #1a7f37; margin-top: 0; margin-bottom: 10px; font-size: 1.05rem; }
+.card-after .card-label {
+  display: inline-block; background: #2ea04333; color: #1a7f37;
+  font-size: 0.72rem; font-weight: 600; padding: 2px 8px;
+  border-radius: 10px; margin-bottom: 10px; letter-spacing: 0.3px;
+}
+.card ul { margin-left: 18px; margin-bottom: 0; font-size: 0.92rem; }
+.card li { margin-bottom: 3px; }
+
+/* ===== Metric highlight ===== */
+.metric {
+  display: inline-block; font-size: 1.8rem; font-weight: 700;
+  line-height: 1.1; margin: 4px 0 6px;
+}
+.metric-label {
+  display: block; font-size: 0.78rem; font-weight: 400; color: #57606a;
+  margin-top: 2px;
+}
+.card-before .metric { color: #953800; }
+.card-after .metric { color: #1a7f37; }
+
+/* ===== Info box ===== */
+.info-box {
+  background: #f3f6fa; border: 1px solid #d8dee4; border-radius: 6px;
+  padding: 14px 18px; margin: 14px 0 18px; font-size: 0.9rem;
+}
+.info-box strong { color: #1c2128; }
+
+/* ===== File table ===== */
+table.file-table {
+  width: 100%; border-collapse: collapse; margin: 12px 0 20px; font-size: 0.88rem;
+}
+table.file-table th {
+  text-align: left; padding: 8px 10px; background: #eef1f5;
+  border-bottom: 2px solid #d0d7de; font-weight: 600; color: #1c2128;
+}
+table.file-table td {
+  padding: 7px 10px; border-bottom: 1px solid #d8dee4; vertical-align: top;
+}
+table.file-table tr:hover td { background: #f3f6fa; }
+table.file-table td:first-child {
+  font-family: 'SF Mono', Menlo, monospace; font-size: 0.84em; white-space: nowrap;
+}
+
+/* ===== Stack budget table ===== */
+table.stack-table {
+  width: 100%; border-collapse: collapse; margin: 12px 0 20px; font-size: 0.88rem;
+}
+table.stack-table th {
+  text-align: left; padding: 8px 10px; background: #eef1f5;
+  border-bottom: 2px solid #d0d7de; font-weight: 600; color: #1c2128;
+}
+table.stack-table td {
+  padding: 7px 10px; border-bottom: 1px solid #d8dee4;
+}
+table.stack-table tr:hover td { background: #f3f6fa; }
+table.stack-table td:first-child { font-family: 'SF Mono', Menlo, monospace; font-size: 0.84em; }
+table.stack-table tr.total td {
+  font-weight: 700; border-top: 2px solid #d0d7de; background: #f3f6fa;
+}
+
+/* ===== Phase badge ===== */
+.phase {
+  display: inline-block; font-size: 0.72rem; font-weight: 600; padding: 2px 8px;
+  border-radius: 10px; vertical-align: middle; letter-spacing: 0.3px;
+}
+.phase-done { background: #2ea04333; color: #1a7f37; }
+.phase-wip { background: #d299221a; color: #9a6700; }
+
+/* ===== Memory layout visual ===== */
+.mem-row {
+  display: flex; margin: 6px 0; align-items: center; font-size: 0.85rem;
+}
+.mem-label {
+  width: 120px; text-align: right; padding-right: 10px;
+  font-family: 'SF Mono', Menlo, monospace; font-size: 0.8em;
+  color: #57606a; flex-shrink: 0;
+}
+.mem-bar {
+  display: flex; flex: 1; height: 32px; border-radius: 4px;
+  overflow: hidden; border: 1px solid #d0d7de;
+}
+.mem-seg {
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.72rem; font-weight: 600; color: #fff;
+  white-space: nowrap; min-width: 0; overflow: hidden;
+}
+
+/* Segment colors */
+.seg-f0 { background: #2f81f7; }
+.seg-f1 { background: #8250df; }
+.seg-f2 { background: #bf3989; }
+.seg-fdots { background: #57606a; }
+.seg-f24 { background: #0969da; }
+
+.seg-b0 { background: #2f81f7; }
+.seg-b1 { background: #54a3ff; }
+.seg-b2 { background: #80bdff; }
+.seg-bdots { background: #c8d7e6; color: #57606a; }
+
+/* ===== Responsive ===== */
+@media (max-width: 900px) {
+  nav.sidebar { position: static; width: 100%; }
+  main { margin-left: 0; padding: 20px; }
+  .compare-grid { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+
+<!-- ===== SIDEBAR ===== -->
+<nav class="sidebar">
+  <div class="logo">
+    <h1>Lattice</h1>
+    <p>GPU Batch Kernel Architecture</p>
+  </div>
+  <ul>
+    <li><a class="section-header">Overview</a></li>
+    <li><a href="#motivation">Motivation</a></li>
+    <li><a href="#before-after">Before vs After</a></li>
+
+    <li><a class="section-header">Architecture</a></li>
+    <li><a href="#pack-struct">MeshBlockPack Structure</a></li>
+    <li><a href="#memory-layout">Memory Layout</a></li>
+    <li><a href="#backend">Backend Abstraction</a></li>
+
+    <li><a class="section-header">Execution</a></li>
+    <li><a href="#data-flow">CK45 Step Data Flow</a></li>
+    <li><a href="#ghost-exchange">Ghost Exchange Strategy</a></li>
+    <li><a href="#stack-budget">GPU Stack Budget</a></li>
+
+    <li><a class="section-header">Reference</a></li>
+    <li><a href="#file-map">File Map</a></li>
+    <li><a href="#api-summary">API Summary</a></li>
+    <li><a href="#references">References</a></li>
+  </ul>
+</nav>
+
+<!-- ===== MAIN ===== -->
+<main>
+
+<div class="banner">
+  <strong>Living document.</strong> This file describes the GPU batch kernel optimization for AMR mesh evolution.
+  See also: <a href="architecture.html">architecture.html</a> for the full codebase map.<br>
+  <strong>Last updated:</strong> 2026-02-17 &mdash;
+  <span class="phase phase-done">Commit 1: CPU fallback</span>
+  <span class="phase phase-wip">Commit 2: device ghost exchange</span>
+</div>
+
+<!-- ========================================== -->
+<h2 id="motivation">Motivation: Why Batch Kernels?</h2>
+
+<p>AMR divides the computational domain into many small mesh blocks (typically 64+ leaf blocks for a binary black hole simulation). The naive approach launches a separate GPU kernel for every block at every RK stage. With CK45 (5 stages) and 64 blocks, this means <strong>320 kernel launches per timestep</strong> &mdash; each with GPU launch overhead and a CPU&harr;GPU synchronization barrier for ghost exchange.</p>
+
+<p>The batch kernel architecture, inspired by <a href="https://arxiv.org/abs/2409.16053">AthenaK</a> (Grete et al. 2024), packs all leaf blocks into a single contiguous buffer and processes them with <strong>one kernel launch per operation</strong>. This reduces kernel launches by 21x and eliminates per-block synchronization overhead.</p>
+
+<!-- ========================================== -->
+<h2 id="before-after">Before vs After</h2>
+
+<div class="compare-grid">
+  <div class="card card-before">
+    <span class="card-label">BEFORE: Per-Block Architecture</span>
+    <h4>Separate Kernel Per Block</h4>
+    <ul>
+      <li>Each AMR block processed with its own kernel launch</li>
+      <li>CK45: 5 stages &times; N blocks per stage</li>
+      <li>Ghost exchange between stages requires CPU&harr;GPU sync</li>
+      <li>Each block's data mapped/unmapped independently</li>
+    </ul>
+    <div class="metric">320<span class="metric-label">kernel launches per step (64 blocks)</span></div>
+  </div>
+  <div class="card card-after">
+    <span class="card-label">AFTER: Packed Batch Architecture</span>
+    <h4>One Kernel For All Blocks</h4>
+    <ul>
+      <li>All leaf blocks packed into one <code>meshblock_pack_t</code></li>
+      <li>One RHS + one Sommerfeld + one CK45 update per stage</li>
+      <li>Single map/unmap pair brackets the entire step</li>
+      <li>Commit 2: device-side ghost exchange (zero CPU sync)</li>
+    </ul>
+    <div class="metric">15<span class="metric-label">kernel launches per step (any block count)</span></div>
+  </div>
+</div>
+
+<div class="diagram"><span class="highlight">Kernel Launch Comparison (CK45, 64 leaf blocks)</span>
+
+<span class="comment">BEFORE: Per-block (5 stages x 64 blocks)</span>
+<span class="type">Per stage:</span>  64 x RHS  +  64 x Sommerfeld  +  64 x update  =  192 launches
+<span class="type">Per step:</span>   5 x 192  =  <span class="highlight">960 kernel launches</span>  +  CPU sync each stage
+
+<span class="comment">AFTER: Packed batch (5 stages, block count irrelevant)</span>
+<span class="type">Per stage:</span>   1 x RHS  +   1 x Sommerfeld  +   1 x update  =    3 launches
+<span class="type">Per step:</span>   5 x 3    =  <span class="highlight"> 15 kernel launches</span>  +  (Commit 2: zero sync)</div>
+
+<!-- ========================================== -->
+<h2 id="pack-struct">MeshBlockPack Structure</h2>
+
+<p>The <code>meshblock_pack_t</code> (defined in <code>src/amr/meshblock_pack.h</code>) holds all data needed to process every leaf block in a single kernel. It contains:</p>
+
+<h3>Core Field Buffers</h3>
+<p>Four contiguous <code>double*</code> arrays, each sized <code>n_fields &times; n_blocks &times; npts</code>:</p>
+
+<table class="file-table">
+<tr><th>Buffer</th><th>Role</th><th>Allocation</th></tr>
+<tr><td>data</td><td>Evolved fields U (current state)</td><td>Always</td></tr>
+<tr><td>rhs</td><td>Right-hand-side F (RHS output)</td><td>Always</td></tr>
+<tr><td>scratch</td><td>CK45: dU register. Classic RK4: backup U<sup>0</sup></td><td>Always</td></tr>
+<tr><td>accum</td><td>Classic RK4 weighted accumulator</td><td>Classic RK4 only (NULL for CK45)</td></tr>
+</table>
+
+<h3>Per-Block Metadata (GPU-Mappable)</h3>
+<p>Flat arrays carrying block-level information, mapped to GPU as read-only:</p>
+
+<table class="file-table">
+<tr><th>Array</th><th>Layout</th><th>Purpose</th></tr>
+<tr><td>origins</td><td>[n_blocks &times; 3]</td><td>Physical (x,y,z) origin of each block</td></tr>
+<tr><td>dx_per_block</td><td>[n_blocks]</td><td>Grid spacing (varies by refinement level)</td></tr>
+<tr><td>on_boundary</td><td>[n_blocks &times; 6]</td><td>Domain boundary flags per face (x-,x+,y-,y+,z-,z+)</td></tr>
+<tr><td>levels</td><td>[n_blocks]</td><td>Refinement level per block</td></tr>
+<tr><td>neighbor_table</td><td>[n_blocks &times; 26]</td><td>Pack-local neighbor index (-1 if absent)</td></tr>
+</table>
+
+<h3>Coarse Buffer Data (Multi-Level AMR)</h3>
+<p>For blocks at refinement level &gt; 0, additional contiguous storage for coarse-resolution copies used in multi-level ghost exchange:</p>
+
+<table class="file-table">
+<tr><th>Field</th><th>Description</th></tr>
+<tr><td>coarse_data</td><td>Packed coarse_buf fields: [n_refined &times; n_fields &times; coarse_npts]</td></tr>
+<tr><td>n_refined</td><td>Count of blocks at level &gt; 0</td></tr>
+<tr><td>refined_map</td><td>[n_blocks] &mdash; maps pack index to coarse_data slot (-1 if level 0)</td></tr>
+<tr><td>coarse_neighbor_table</td><td>[n_refined &times; 26] &mdash; neighbor indices for coarse_buf exchange</td></tr>
+</table>
+
+<!-- ========================================== -->
+<h2 id="memory-layout">Memory Layout</h2>
+
+<p>The pack uses <strong>field-major, block-minor, point-innermost</strong> ordering. All data for one field across all blocks is contiguous, and within each (field, block) slice, x is the innermost (unit-stride) index.</p>
+
+<h3>Indexing Macro</h3>
+<pre><code>#define PACK_IDX(pack, f, b, idx) \
+    ((size_t)(f) * (pack)->n_blocks * (pack)->npts \
+     + (size_t)(b) * (pack)->npts + (size_t)(idx))</code></pre>
+
+<p>Where <code>f</code> = field index (0..24), <code>b</code> = block index within pack, <code>idx</code> = point index within block (<code>k*Nt*Nt + j*Nt + i</code>).</p>
+
+<h3>Visual Layout</h3>
+
+<p>For a pack with 3 blocks and 25 fields, the <code>data</code> buffer looks like:</p>
+
+<div style="margin: 18px 0;">
+  <div class="mem-row">
+    <span class="mem-label">field 0</span>
+    <div class="mem-bar">
+      <div class="mem-seg seg-b0" style="flex:1">blk 0</div>
+      <div class="mem-seg seg-b1" style="flex:1">blk 1</div>
+      <div class="mem-seg seg-b2" style="flex:1">blk 2</div>
+    </div>
+  </div>
+  <div class="mem-row">
+    <span class="mem-label">field 1</span>
+    <div class="mem-bar">
+      <div class="mem-seg seg-b0" style="flex:1">blk 0</div>
+      <div class="mem-seg seg-b1" style="flex:1">blk 1</div>
+      <div class="mem-seg seg-b2" style="flex:1">blk 2</div>
+    </div>
+  </div>
+  <div class="mem-row">
+    <span class="mem-label" style="color:#aaa;">...</span>
+    <div class="mem-bar" style="border:none;">
+      <div class="mem-seg seg-bdots" style="flex:1; border-radius:4px;">... 23 more fields ...</div>
+    </div>
+  </div>
+  <div class="mem-row">
+    <span class="mem-label">field 24</span>
+    <div class="mem-bar">
+      <div class="mem-seg seg-b0" style="flex:1">blk 0</div>
+      <div class="mem-seg seg-b1" style="flex:1">blk 1</div>
+      <div class="mem-seg seg-b2" style="flex:1">blk 2</div>
+    </div>
+  </div>
+</div>
+
+<div class="diagram"><span class="highlight">Within each (field, block) slice:</span>
+
+                  npts = Ntotal^3 doubles
+  +------------------------------------------------+
+  | k=0,j=0: i=0,1,2,...,Nt-1  <span class="comment">(x unit stride)</span>    |
+  | k=0,j=1: i=0,1,2,...,Nt-1                     |
+  | ...                                            |
+  | k=Nt-1,j=Nt-1: i=0,1,2,...,Nt-1               |
+  +------------------------------------------------+
+
+  <span class="comment">Ntotal = N + 2*ghost (e.g. 16+8=24 for N_block=16)</span>
+  <span class="comment">npts = 24^3 = 13,824 doubles per (field, block) slice</span>
+
+  <span class="type">Total pack buffer size:</span>
+  25 fields &times; n_blocks &times; 13,824 points &times; 8 bytes
+  = 25 &times; 64 &times; 13,824 &times; 8 = <span class="highlight">~168 MB</span> per buffer (64 blocks, N=16)</div>
+
+<h3>Why Field-Major?</h3>
+<p>The RHS kernel computes all 25 fields for a single grid point in one invocation. With field-major ordering, the per-field pointer array <code>src_ptrs[f] = data + f*n_blocks*npts + b*npts</code> gives each field its own contiguous memory region. The GPU kernel&rsquo;s <code>collapse(4)</code> over <code>(b, k, j, i)</code> ensures adjacent threads access adjacent points within each field slice &mdash; coalesced memory access on GPU.</p>
+
+<div class="info-box">
+  <strong>AthenaK comparison:</strong> AthenaK uses (nmb, nvar, nz, ny, nx) with block outermost.
+  Lattice uses field outermost because the OpenMP target loop iterates <code>for (bidx = 0; bidx &lt; n_blocks * npts; bidx++)</code>
+  and we want all fields for one point computed together by a single thread.
+</div>
+
+<!-- ========================================== -->
+<h2 id="backend">Backend Abstraction</h2>
+
+<p>The same C physics kernels run on both CPU and GPU. The backend layer provides two tiers of API:</p>
+
+<div class="diagram"><span class="highlight">Two-Tier Backend API</span>
+
+<span class="type">Tier 1: Legacy Per-Grid</span> (single-grid stepper, test path)
+  <span class="fn">backend_compute_rhs</span>(rhs, src, g, p, func)
+  CPU: <span class="comment">#pragma omp parallel for collapse(2)</span>          func(rhs, src, g, p, i, j, k)
+  GPU: <span class="comment">#pragma omp target teams distribute parallel for collapse(3)</span>  ccz4_rhs_point(...)
+
+<span class="type">Tier 2: Packed Batch</span> (AMR production path)
+  <span class="fn">backend_compute_rhs_packed</span>(pack, p)
+  <span class="fn">backend_sommerfeld_packed</span>(pack, p)
+  <span class="fn">backend_update_ck45_packed</span>(pack, A, B, dt)
+  <span class="fn">backend_zero_packed</span>(pack, which)
+  <span class="fn">backend_copy_packed</span>(pack, dst, src)
+  <span class="fn">backend_accum_add_packed</span>(pack, weight, dt)
+  <span class="fn">backend_axpy_packed</span>(pack, alpha, dt)
+  <span class="fn">backend_apply_accum_packed</span>(pack)
+  CPU: <span class="comment">#pragma omp parallel for</span>                    (loops over blocks then cells)
+  GPU: <span class="comment">#pragma omp target teams distribute parallel for collapse(4)</span>  (b, k, j, i)</div>
+
+<h3>Map / Unmap Pattern</h3>
+
+<p>Data transfer between host and device is explicit and bracketed around the entire timestep:</p>
+
+<table class="file-table">
+<tr><th>Function</th><th>CPU Backend</th><th>GPU Backend</th></tr>
+<tr><td>backend_map_pack(pack, p)</td><td>No-op (data already in host memory)</td><td><code>omp target enter data map(to: ...)</code> for all buffers + metadata</td></tr>
+<tr><td>backend_unmap_pack(pack)</td><td>No-op</td><td><code>omp target exit data map(from: ...)</code> syncs data/rhs/scratch/accum back</td></tr>
+</table>
+
+<div class="info-box">
+  <strong>Key insight:</strong> On CPU, the map/unmap are no-ops because all data is already in host memory.
+  This means the packed stepper code is <em>identical</em> for CPU and GPU &mdash; only the backend implementations differ.
+  Full testing on macOS (CPU only) validates the packed infrastructure before GPU hardware is available.
+</div>
+
+<h3>GPU Kernel Structure</h3>
+
+<p>The batched RHS kernel on GPU uses <code>collapse(4)</code> over block, k, j, i to maximize occupancy. Each GPU thread builds its own per-field pointer arrays and stack-local <code>grid_t</code>, then calls the same <code>ccz4_rhs_point</code> that runs on CPU:</p>
+
+<pre><code>// GPU: one kernel launch for all blocks
+#pragma omp target teams distribute parallel for collapse(4)
+for (int b = 0; b &lt; nb; b++) {
+    for (int k = lo; k &lt; hi; k++) {
+        for (int j = lo; j &lt; hi; j++) {
+            for (int i = lo; i &lt; hi; i++) {
+                // Build per-field pointers into pack layout (~400B stack)
+                double *rhs_ptrs[NUM_FIELDS];
+                const double *src_ptrs[NUM_FIELDS];
+                for (int f = 0; f &lt; NUM_FIELDS; f++) {
+                    size_t base = (size_t)f * nb * npts + (size_t)b * npts;
+                    src_ptrs[f] = data + base;
+                    rhs_ptrs[f] = rhs_data + base;
+                }
+
+                // Minimal grid_t on stack (~872B)
+                grid_t g_local = { .N=N, .ghost=ghost, .Ntotal=Nt,
+                                   .dx=dx_arr[b], .npoints=npts };
+
+                // Same RHS function as CPU path (~4KB stack)
+                ccz4_rhs_point(rhs_ptrs, src_ptrs, &amp;g_local, p, i, j, k);
+            }
+        }
+    }
+}</code></pre>
+
+<!-- ========================================== -->
+<h2 id="data-flow">CK45 Step: Complete Data Flow</h2>
+
+<p>One complete CK45 timestep through the packed stepper (<code>ck45_step_mesh_packed</code> in <code>src/numerics/rk4.c</code>):</p>
+
+<div class="diagram"><span class="highlight">ck45_step_mesh_packed(mesh, params, dt)</span>
+
+ <span class="fn">1. Build pack</span>                                 <span class="comment">// mesh_build_leaf_pack()</span>
+    Collect leaf block IDs
+    meshblock_pack_create(n_leaves, npts, ids, -1, RK_CK45)
+    meshblock_pack_load(pack, blocks)             <span class="comment">// copy fields into contiguous buffer</span>
+    meshblock_pack_load_meta(pack, blocks)         <span class="comment">// origins, dx, boundary flags, levels</span>
+    meshblock_pack_build_neighbors(pack, blocks)   <span class="comment">// pack-local neighbor table</span>
+    meshblock_pack_load_coarse(pack, blocks)       <span class="comment">// coarse_buf data (if AMR)</span>
+
+ <span class="fn">2. Map to GPU</span>                                  <span class="comment">// backend_map_pack(pack, p)</span>
+    <span class="type">[GPU]</span> omp target enter data: data, rhs, scratch, metadata, params
+
+ <span class="fn">3. Zero dU register</span>                            <span class="comment">// backend_zero_packed(pack, PACK_BUF_SCRATCH)</span>
+
+ <span class="fn">4. Five CK45 stages</span> (s = 0..4):
+    +----------------------------------------------------------+
+    | <span class="type">a.</span> <span class="fn">Ghost exchange</span>                                       |
+    |    Commit 1: packed_ghost_exchange_fallback()             |
+    |      store pack &rarr; blocks (CPU)                           |
+    |      mesh_ghost_exchange (5-phase multilevel, CPU)        |
+    |      load blocks &rarr; pack (CPU)                           |
+    |    Commit 2: backend_ghost_exchange_packed() <span class="comment">[device]</span>     |
+    |                                                          |
+    | <span class="type">b.</span> <span class="fn">Batched RHS</span>              <span class="comment">ONE kernel, all blocks</span>     |
+    |    backend_compute_rhs_packed(pack, p)                   |
+    |    GPU: collapse(4) over (b, k, j, i)                    |
+    |    CPU: outer b loop, collapse(2) over (k, j)            |
+    |                                                          |
+    | <span class="type">c.</span> <span class="fn">Batched Sommerfeld BCs</span>   <span class="comment">ONE kernel, all blocks</span>     |
+    |    backend_sommerfeld_packed(pack, p)                     |
+    |    Only touches ghost cells near domain boundaries        |
+    |                                                          |
+    | <span class="type">d.</span> <span class="fn">Fused CK45 update</span>       <span class="comment">ONE kernel, flat loop</span>      |
+    |    backend_update_ck45_packed(pack, A[s], B[s], dt)      |
+    |    dU[i] = A[s]*dU[i] + dt*F[i]                         |
+    |    U[i] += B[s]*dU[i]                                    |
+    +----------------------------------------------------------+
+
+ <span class="fn">5. Unmap from GPU</span>                              <span class="comment">// backend_unmap_pack(pack)</span>
+    <span class="type">[GPU]</span> omp target exit data: sync data/rhs/scratch back to host
+
+ <span class="fn">6. Store to blocks</span>                             <span class="comment">// meshblock_pack_store(pack, blocks)</span>
+    Copy contiguous pack buffer &rarr; individual block grids
+
+ <span class="fn">7. Enforce algebraic constraints</span>               <span class="comment">// mesh_enforce_algebraic(m)</span>
+    det(gambar) = 1 rescaling
+    tr(Abar) = 0 projection
+    chi &gt; 0, lapse &gt; 0 floors
+
+ <span class="fn">8. Restrict to parents</span>                         <span class="comment">// mesh_restrict_to_parents(m)</span>
+    Volume-weighted fine &rarr; coarse averaging for cross-level ghost data
+
+ <span class="fn">9. Free pack</span>                                   <span class="comment">// meshblock_pack_free(pack)</span></div>
+
+<h3>Classic RK4 Variant</h3>
+<p>The classic RK4 packed stepper (<code>classic_rk4_step_mesh_packed</code>) follows the same pattern but uses 4 memory blocks (data, rhs, scratch, accum) instead of 3. The 4 stages use <code>backend_accum_add_packed</code> with weights 1/6, 1/3, 1/3, 1/6 and <code>backend_axpy_packed</code> for intermediate state computation.</p>
+
+<!-- ========================================== -->
+<h2 id="ghost-exchange">Ghost Exchange Strategy</h2>
+
+<p>Ghost exchange is the primary remaining bottleneck. It requires communication between blocks that may be at different refinement levels, involving a 5-phase multilevel protocol:</p>
+
+<div class="compare-grid">
+  <div class="card card-before">
+    <span class="card-label">COMMIT 1 (Current)</span>
+    <h4>CPU Fallback</h4>
+    <ul>
+      <li><code>meshblock_pack_store</code> &mdash; unpack to individual block grids</li>
+      <li><code>mesh_ghost_exchange</code> &mdash; existing 5-phase CPU exchange</li>
+      <li><code>meshblock_pack_load</code> &mdash; repack into contiguous buffer</li>
+    </ul>
+    <p style="margin-top:10px;font-size:0.88rem;color:#953800;">Full memory round-trip each stage. Correct but slow &mdash; data copies dominate on GPU path.</p>
+  </div>
+  <div class="card card-after">
+    <span class="card-label">COMMIT 2 (Planned)</span>
+    <h4>Device-Side Kernels</h4>
+    <ul>
+      <li>Phase 1: same-level face/edge/corner copy (GPU kernel)</li>
+      <li>Phase 2: restrict fine &rarr; coarse_buf (GPU kernel)</li>
+      <li>Phase 3: fill coarse_buf ghosts (GPU kernel)</li>
+      <li>Phase 3.5: boundary extrapolation on coarse_buf</li>
+      <li>Phase 4: prolongate coarse_buf &rarr; fine ghosts</li>
+    </ul>
+    <p style="margin-top:10px;font-size:0.88rem;color:#1a7f37;">Zero CPU sync during step. Uses pack neighbor_table for device-to-device copies.</p>
+  </div>
+</div>
+
+<div class="diagram"><span class="highlight">Ghost Exchange: Commit 1 Fallback (per stage)</span>
+
+  <span class="type">[GPU device memory]</span>               <span class="type">[CPU host memory]</span>
+  +-------------------+              +-------------------+
+  | pack-&gt;data        | <span class="highlight">--- store ---&gt;</span> | block[b]-&gt;fields  |
+  | (contiguous)      |              | (per-block grids) |
+  +-------------------+              +-------------------+
+                                              |
+                                     <span class="fn">mesh_ghost_exchange(m)</span>
+                                     5-phase multilevel protocol
+                                              |
+  +-------------------+              +-------------------+
+  | pack-&gt;data        | <span class="highlight">&lt;--- load ---</span> | block[b]-&gt;fields  |
+  | (updated ghosts)  |              | (ghosts filled)   |
+  +-------------------+              +-------------------+
+
+<span class="comment">This costs ~2 full pack-sized memcpy operations per stage (5 stages = 10 copies).
+Commit 2 eliminates this by using pack-&gt;neighbor_table for device-side copies.</span></div>
+
+<!-- ========================================== -->
+<h2 id="stack-budget">GPU Stack Budget</h2>
+
+<p>Each GPU thread in the batched RHS kernel allocates significant stack space for derivative tensors, Christoffel symbols, and Ricci tensor locals. The total must fit within the GPU thread stack limit.</p>
+
+<table class="stack-table">
+<tr><th>Component</th><th>Size</th><th>Source</th></tr>
+<tr><td>src_ptrs[25] + rhs_ptrs[25]</td><td>~400 B</td><td>Per-field pointer arrays into pack layout</td></tr>
+<tr><td>grid_t g_local</td><td>~872 B</td><td>Stack-local grid struct (N, ghost, Ntotal, dx, npoints, field pointers)</td></tr>
+<tr><td>ccz4_rhs_point locals</td><td>~4,096 B</td><td>Derivative tensors (d1_chi[3], d2_chi[3][3], d1_h[6][3], d2_h[6][3][3], ...),
+Christoffel symbols (chris[3][3][3], chris_contracted[3]),
+Ricci tensor (R_dd[3][3]), gauge terms, etc.</td></tr>
+<tr class="total"><td>Total per thread</td><td>~5.3 KB</td><td></td></tr>
+</table>
+
+<div class="info-box">
+  <strong>GPU stack limit:</strong> Set via <code>GOMP_NVPTX_NATIVE_GPU_THREAD_STACK_SIZE=16384</code> (16 KB).
+  The default GCC 13 stack is too small for the CCZ4 RHS kernel.
+  Our 5.3 KB usage leaves comfortable headroom below the 16 KB limit.
+</div>
+
+<pre><code># Required environment variable for GPU execution
+export GOMP_NVPTX_NATIVE_GPU_THREAD_STACK_SIZE=16384
+
+# Build and run
+make BACKEND=gpu CC=gcc-15
+./build/lattice --amr --N 16 --steps 100 --puncture 1.0,0,0,0</code></pre>
+
+<!-- ========================================== -->
+<h2 id="file-map">File Map</h2>
+
+<table class="file-table">
+<tr><th>File</th><th>Role</th></tr>
+<tr><td>src/amr/meshblock_pack.h</td><td><code>meshblock_pack_t</code> struct definition, <code>PACK_IDX</code> macro, <code>PACK_BUF_*</code> constants</td></tr>
+<tr><td>src/amr/meshblock_pack.c</td><td>Pack creation, load/store (block &harr; pack), metadata loading, neighbor table construction, coarse_buf transfer</td></tr>
+<tr><td>src/backend/backend.h</td><td>Both API tiers: legacy per-grid (<code>backend_compute_rhs</code>) and packed batch (<code>backend_*_packed</code>)</td></tr>
+<tr><td>src/backend/backend_cpu.c</td><td>CPU implementations: OpenMP parallel for, map/unmap are no-ops</td></tr>
+<tr><td>src/backend/backend_gpu.c</td><td>GPU implementations: OpenMP target teams distribute, <code>omp target enter/exit data</code> for map/unmap</td></tr>
+<tr><td>src/numerics/rk4.c</td><td>Packed mesh steppers: <code>ck45_step_mesh_packed</code>, <code>classic_rk4_step_mesh_packed</code>, <code>mesh_build_leaf_pack</code>, <code>packed_ghost_exchange_fallback</code></td></tr>
+<tr><td>src/boundary/sommerfeld.h</td><td><code>asymptotic_value()</code> and <code>boundary_d1()</code> with <code>omp declare target</code> for GPU</td></tr>
+<tr><td>src/boundary/sommerfeld.c</td><td>Sommerfeld BC implementations (per-block and helper functions)</td></tr>
+<tr><td>src/evolution/ccz4_rhs.h</td><td><code>ccz4_rhs_point()</code> declaration with <code>omp declare target</code></td></tr>
+</table>
+
+<h3>Dependency Graph</h3>
+
+<div class="diagram"><span class="highlight">File Dependencies (packed batch path)</span>
+
+<span class="fn">rk4.c</span>  (packed mesh steppers)
+  |
+  +--&gt; <span class="fn">meshblock_pack.h/c</span>  (pack creation, load/store, metadata)
+  |       |
+  |       +--&gt; <span class="fn">block.h/c</span>  (individual block struct)
+  |       +--&gt; <span class="fn">fields.h</span>   (NUM_FIELDS = 25)
+  |
+  +--&gt; <span class="fn">backend.h</span>  (API declarations)
+  |       |
+  |       +--&gt; <span class="fn">backend_cpu.c</span>  OR  <span class="fn">backend_gpu.c</span>  (selected at build time)
+  |              |
+  |              +--&gt; <span class="fn">ccz4_rhs.h</span> / <span class="fn">ccz4_rhs_point()</span>  (physics kernel)
+  |              +--&gt; <span class="fn">sommerfeld.h</span> / helpers          (boundary conditions)
+  |
+  +--&gt; <span class="fn">ghost_exchange.h/c</span>  (5-phase multilevel, used by Commit 1 fallback)
+  +--&gt; <span class="fn">mesh.h/c</span>  (mesh_ghost_exchange, mesh_enforce_algebraic, mesh_restrict_to_parents)</div>
+
+<!-- ========================================== -->
+<h2 id="api-summary">API Summary</h2>
+
+<h3>Pack Lifecycle</h3>
+<div class="diagram"><span class="fn">meshblock_pack_create</span>(n_blocks, npts, ids, level, rk_method)   <span class="comment">Allocate pack + buffers</span>
+<span class="fn">meshblock_pack_load</span>(pack, blocks)                             <span class="comment">Block fields  &rarr; pack buffer</span>
+<span class="fn">meshblock_pack_load_meta</span>(pack, blocks)                        <span class="comment">Fill metadata arrays</span>
+<span class="fn">meshblock_pack_build_neighbors</span>(pack, blocks)                  <span class="comment">Build pack-local neighbor table</span>
+<span class="fn">meshblock_pack_load_coarse</span>(pack, blocks)                      <span class="comment">Load coarse_buf data (AMR)</span>
+<span class="comment">... kernel execution ...</span>
+<span class="fn">meshblock_pack_store</span>(pack, blocks)                            <span class="comment">Pack buffer  &rarr; block fields</span>
+<span class="fn">meshblock_pack_store_coarse</span>(pack, blocks)                     <span class="comment">Pack coarse  &rarr; block coarse_bufs</span>
+<span class="fn">meshblock_pack_free</span>(pack)                                     <span class="comment">Free everything</span></div>
+
+<h3>Backend Kernels</h3>
+<div class="diagram"><span class="type">Data transfer:</span>
+  <span class="fn">backend_map_pack</span>(pack, p)                       <span class="comment">Map to GPU (no-op on CPU)</span>
+  <span class="fn">backend_unmap_pack</span>(pack)                         <span class="comment">Sync back from GPU (no-op on CPU)</span>
+
+<span class="type">Compute kernels:</span>
+  <span class="fn">backend_compute_rhs_packed</span>(pack, p)              <span class="comment">CCZ4 RHS for all interior cells, all blocks</span>
+  <span class="fn">backend_sommerfeld_packed</span>(pack, p)               <span class="comment">Sommerfeld BCs for boundary ghost cells</span>
+
+<span class="type">CK45 update:</span>
+  <span class="fn">backend_update_ck45_packed</span>(pack, A, B, dt)       <span class="comment">dU = A*dU + dt*F; U += B*dU</span>
+  <span class="fn">backend_zero_packed</span>(pack, which)                 <span class="comment">Zero a buffer (dU or accum)</span>
+
+<span class="type">Classic RK4 operations:</span>
+  <span class="fn">backend_copy_packed</span>(pack, dst, src)              <span class="comment">Copy between buffers</span>
+  <span class="fn">backend_accum_add_packed</span>(pack, weight, dt)       <span class="comment">accum += weight * dt * rhs</span>
+  <span class="fn">backend_axpy_packed</span>(pack, alpha, dt)             <span class="comment">data = scratch + alpha*dt*rhs</span>
+  <span class="fn">backend_apply_accum_packed</span>(pack)                 <span class="comment">data += accum</span>
+
+<span class="type">Ghost exchange (Commit 2):</span>
+  <span class="fn">backend_ghost_exchange_packed</span>(pack)               <span class="comment">Device-side 5-phase exchange [stub]</span></div>
+
+<!-- ========================================== -->
+<h2 id="references">References</h2>
+
+<ul>
+  <li><strong>AthenaK:</strong> Grete et al. 2024, <a href="https://arxiv.org/abs/2409.16053">arXiv:2409.16053</a> &mdash; GPU-resident mesh infrastructure using meshblock packs</li>
+  <li><strong>Parthenon-VIBE:</strong> <a href="https://arxiv.org/abs/2509.19701">arXiv:2509.19701</a> &mdash; Block size GPU benchmarks for AMR</li>
+  <li><strong>Carpenter-Kennedy CK45:</strong> NASA TM-109112 (1994), Solution 3 &mdash; 2N low-storage Runge-Kutta scheme</li>
+  <li><strong>CCZ4 formulation:</strong> Alic et al. 2012, <a href="https://arxiv.org/abs/1106.2254">arXiv:1106.2254</a> &mdash; Primary equation source</li>
+  <li><strong>GRChombo:</strong> Andrade et al. 2021 (JOSS) &mdash; Equation cross-reference implementation</li>
+</ul>
+
+</main>
+</body>
+</html>

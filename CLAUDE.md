@@ -82,7 +82,7 @@ Priority order:
 - Spatially varying KO dissipation
 - Full waveform catalog capability
 
-**Current status: Phase 1 — infrastructure + flat spacetime + single BH stable + head-on binary collision complete. AMR fully integrated: `./lattice --amr` runs multi-block mesh evolution with dynamic regridding. All tests passing (8/8 AMR evolution, 72/72 AMR refine, 16/16 AMR ghost, 15/15 AMR prolong).** Update as milestones are reached.
+**Current status: Phase 1 — infrastructure + flat spacetime + single BH stable + head-on binary collision complete. AMR fully integrated: `./lattice --amr` runs multi-block mesh evolution with dynamic regridding. GPU batch kernels (Commit 1): packed mesh stepper with batched RHS/Sommerfeld/update kernels, CPU ghost exchange fallback. All tests passing (8/8 pack evolve, 8/8 AMR evolution, 72/72 AMR refine, 16/16 AMR ghost, 15/15 AMR prolong).** Update as milestones are reached.
 
 ## Project Structure
 
@@ -138,10 +138,12 @@ lattice/
 │   ├── test_head_on.c          # head-on binary collision
 │   ├── test_head_on_output.txt # saved test output (merger diagnostics)
 │   ├── test_amr_refine.c     # oct-tree refinement + multi-level ghost
+│   ├── test_pack_evolve.c    # packed batch kernel validation
 │   └── convergence.sh          # 3-resolution convergence check
 ├── docs/
 │   ├── physics.md              # variable-to-math mapping
-│   └── architecture.html       # interactive codebase map
+│   ├── architecture.html       # interactive codebase map
+│   └── gpu_batch_kernels.html  # GPU batch kernel optimization explainer
 └── tools/
     └── plot_convergence.py
 ```

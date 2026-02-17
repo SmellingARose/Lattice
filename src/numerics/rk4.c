@@ -27,10 +27,13 @@
 #include "rk4.h"
 #include "../amr/mesh.h"
 #include "../amr/ghost_exchange.h"
+#include "../amr/meshblock_pack.h"
 #include "../boundary/sommerfeld.h"
 #include "../core/fields.h"
 #include "../geometry/tensor_utils.h"
 #include "../backend/backend.h"
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <math.h>
 
@@ -276,12 +279,7 @@ void rk4_step(grid_t *g, const sim_params_t *p,
 }
 
 /* ========================================================================
- * Mesh-level RK steps (multi-block with ghost exchange)
- *
- * Same algorithms as single-grid steps, but with:
- *   1. Ghost exchange before each RHS evaluation
- *   2. Block-aware Sommerfeld (domain boundaries only)
- *   3. Loop over all leaf blocks for each operation
+ * Mesh-level helpers (shared by per-block and packed paths)
  * ======================================================================== */
 
 /*
@@ -308,7 +306,7 @@ static void restrict_level_to_parents(mesh_t *m, int level)
 
         /* b is non-leaf parent at level-1: restrict children */
         grid_t *pg = b->grid;
-        const int ghost = pg->ghost;
+        const int ghost_w = pg->ghost;
         const int N = pg->N;
         const int half_N = N / 2;
 
@@ -341,9 +339,9 @@ static void restrict_level_to_parents(mesh_t *m, int level)
                                             }
                                         }
                                     }
-                                    int pii = ghost + p_off_i + pi;
-                                    int pjj = ghost + p_off_j + pj;
-                                    int pkk = ghost + p_off_k + pk;
+                                    int pii = ghost_w + p_off_i + pi;
+                                    int pjj = ghost_w + p_off_j + pj;
+                                    int pkk = ghost_w + p_off_k + pk;
                                     pg->fields[f][IDX(pg, pii, pjj, pkk)] = sum * 0.125;
                                 }
                             }
@@ -391,12 +389,18 @@ static void mesh_restrict_to_parents(mesh_t *m)
         restrict_level_to_parents(m, L);
 }
 
+/* ========================================================================
+ * Per-block mesh steppers (legacy — one kernel launch per block per stage)
+ *
+ * Kept for validation: the packed stepper should produce identical results.
+ * Used by rk4_step_mesh_perblock() for debug/comparison.
+ * ======================================================================== */
+
 /*
- * Classic RK4 for multi-block mesh.
- * Same 4-stage algorithm, with ghost exchange before each stage.
+ * Classic RK4 per-block: loops over leaf blocks, one kernel per block.
  */
-static void classic_rk4_step_mesh(mesh_t *m, const sim_params_t *p,
-                                  rk4_rhs_func_t rhs_func, double dt)
+static void classic_rk4_step_mesh_perblock(mesh_t *m, const sim_params_t *p,
+                                            rk4_rhs_func_t rhs_func, double dt)
 {
     /* Save initial state and zero accumulators */
     for (int bid = 0; bid < m->num_blocks; bid++) {
@@ -465,11 +469,10 @@ static void classic_rk4_step_mesh(mesh_t *m, const sim_params_t *p,
 }
 
 /*
- * CK45 for multi-block mesh.
- * Same 5-stage low-storage algorithm, with ghost exchange before each stage.
+ * CK45 per-block: loops over leaf blocks, one kernel per block.
  */
-static void ck45_step_mesh(mesh_t *m, const sim_params_t *p,
-                           rk4_rhs_func_t rhs_func, double dt)
+static void ck45_step_mesh_perblock(mesh_t *m, const sim_params_t *p,
+                                     rk4_rhs_func_t rhs_func, double dt)
 {
     /* Zero dU (stored in scratch) for all blocks */
     for (int bid = 0; bid < m->num_blocks; bid++) {
@@ -497,12 +500,265 @@ static void ck45_step_mesh(mesh_t *m, const sim_params_t *p,
     mesh_restrict_to_parents(m);
 }
 
-/* Public interface for mesh-level stepping */
+/* ========================================================================
+ * Packed batch mesh steppers (production path)
+ *
+ * All leaf blocks packed into a single meshblock_pack_t. One kernel
+ * launch per operation (RHS, Sommerfeld, update) covers all blocks.
+ *
+ * Ghost exchange: Commit 1 uses CPU fallback (unpack → exchange → repack).
+ * Commit 2 replaces this with device-side ghost exchange kernels.
+ *
+ * Ref: AthenaK task_list/ pattern (meshblock_pack batched kernels)
+ * ======================================================================== */
+
+/*
+ * Build a meshblock_pack_t from the mesh's leaf blocks.
+ *
+ * Collects all leaf block IDs, creates the pack with the appropriate
+ * RK method, loads field data and metadata, and builds neighbor tables.
+ *
+ * The returned pack is ready for backend_map_pack + kernel launches.
+ * Caller must free with meshblock_pack_free.
+ */
+static meshblock_pack_t *mesh_build_leaf_pack(mesh_t *m,
+                                               rk_method_t rk_method)
+{
+    /* Count leaf blocks and collect their IDs */
+    int n_leaves = mesh_num_leaves(m);
+    int *ids = malloc(n_leaves * sizeof(int));
+    if (!ids) {
+        fprintf(stderr, "mesh_build_leaf_pack: malloc failed\n");
+        exit(1);
+    }
+
+    int idx = 0;
+    for (int bid = 0; bid < m->num_blocks; bid++) {
+        block_t *b = m->blocks[bid];
+        if (b && b->is_leaf)
+            ids[idx++] = bid;
+    }
+
+    /* All blocks share the same N_block → same npts */
+    size_t npts = m->blocks[ids[0]]->grid->npoints;
+
+    /* Create pack: allocates field buffers + metadata arrays.
+     * level = -1 (mixed levels, normal for AMR meshes). */
+    meshblock_pack_t *pack = meshblock_pack_create(
+        n_leaves, npts, ids, -1, rk_method);
+
+    /* Load field data from blocks into pack's contiguous buffers */
+    meshblock_pack_load(pack, m->blocks);
+
+    /* Fill per-block metadata (origins, dx, boundary flags, levels).
+     * Also allocates coarse_data if any blocks are refined. */
+    meshblock_pack_load_meta(pack, m->blocks);
+
+    /* Build pack-local neighbor table (mesh block ID → pack index).
+     * Required by Commit 2's device ghost exchange; also useful for
+     * diagnostics and debugging. */
+    meshblock_pack_build_neighbors(pack, m->blocks);
+
+    /* Load coarse_buf data for multilevel ghost exchange */
+    if (m->max_level > 0)
+        meshblock_pack_load_coarse(pack, m->blocks);
+
+    free(ids);
+    return pack;
+}
+
+/*
+ * Ghost exchange fallback for Commit 1: unpack → CPU exchange → repack.
+ *
+ * This is the simplest correct approach: data round-trips through the
+ * individual blocks' grid_t arrays, using the existing 5-phase multilevel
+ * exchange. Correctness-preserving but slow (full memory copy each way).
+ *
+ * Commit 2 replaces this with backend_ghost_exchange_packed() which
+ * performs all 5 phases as device kernels with no host sync.
+ */
+static void packed_ghost_exchange_fallback(meshblock_pack_t *pack, mesh_t *m)
+{
+    /* 1. Store pack data back to individual blocks' grids.
+     *    data → fields, rhs → rhs, scratch → scratch, accum → accum.
+     *    The ghost exchange reads from fields[], so this makes the
+     *    current evolved state available in each block's grid. */
+    meshblock_pack_store(pack, m->blocks);
+
+    /* 2. Run existing ghost exchange on the per-block grids.
+     *    For uniform meshes (max_level == 0): same-level exchange only.
+     *    For AMR meshes: full 5-phase multilevel exchange:
+     *      Phase 0+1: same-level exchange at each level
+     *      Phase 2:   restrict fine → own coarse_buf
+     *      Phase 3:   fill coarse_buf ghosts
+     *      Phase 3.5: boundary extrapolation on coarse_buf
+     *      Phase 4:   prolongate coarse_buf → fine ghosts */
+    mesh_ghost_exchange(m);
+
+    /* 3. Reload updated fields (with ghost zones filled) back into pack.
+     *    rhs and scratch also reload but are unchanged by ghost exchange. */
+    meshblock_pack_load(pack, m->blocks);
+}
+
+/*
+ * CK45 packed mesh stepper: all leaf blocks in one pack, one kernel per op.
+ *
+ * Algorithm (same CK45 as per-block, different execution model):
+ *   dU = 0   (zero scratch)
+ *   For s = 0..4:
+ *     Ghost exchange (Commit 1: CPU fallback)
+ *     F = RHS(U)       (batched: all blocks in one kernel)
+ *     Sommerfeld(F)    (batched: boundary BCs in one kernel)
+ *     dU = A[s]*dU + dt*F;  U += B[s]*dU  (fused update, one kernel)
+ *   Enforce algebraic constraints (CPU, once per step)
+ *   Restrict to parents (CPU, once per step)
+ *
+ * Ref: Carpenter & Kennedy, NASA TM-109112 (1994), Solution 3.
+ * Ref: AthenaK task_list/ batched kernel pattern.
+ */
+static void ck45_step_mesh_packed(mesh_t *m, const sim_params_t *p, double dt)
+{
+    /* Build pack from all leaf blocks */
+    meshblock_pack_t *pack = mesh_build_leaf_pack(m, RK_CK45);
+
+    /* Map to GPU (no-op on CPU) */
+    backend_map_pack(pack, p);
+
+    /* Zero dU register (stored in scratch buffer) */
+    backend_zero_packed(pack, PACK_BUF_SCRATCH);
+
+    /* 5 CK45 stages */
+    for (int s = 0; s < 5; s++) {
+        /* Ghost exchange: Commit 1 fallback (unpack → exchange → repack).
+         * Commit 2 will replace with: backend_ghost_exchange_packed(pack) */
+        packed_ghost_exchange_fallback(pack, m);
+
+        /* Batched RHS + Sommerfeld BCs: one kernel each for all blocks */
+        backend_compute_rhs_packed(pack, p);
+        backend_sommerfeld_packed(pack, p);
+
+        /* Fused CK45 update: dU = A*dU + dt*F; U += B*dU */
+        backend_update_ck45_packed(pack, CK_A[s], CK_B[s], dt);
+    }
+
+    /* Unmap from GPU (syncs data back to host; no-op on CPU) */
+    backend_unmap_pack(pack);
+
+    /* Store final state from pack back to individual blocks */
+    meshblock_pack_store(pack, m->blocks);
+
+    /* Enforce algebraic constraints: det(gambar)=1, tr(Abar)=0.
+     * Done on CPU per block, once per step (not per stage). */
+    mesh_enforce_algebraic(m);
+
+    /* Restrict leaf data into non-leaf parents for next step's
+     * cross-level ghost exchange. */
+    mesh_restrict_to_parents(m);
+
+    meshblock_pack_free(pack);
+}
+
+/*
+ * Classic RK4 packed mesh stepper: all leaf blocks in one pack.
+ *
+ * Algorithm (same classic RK4 as per-block, different execution model):
+ *   scratch = data (backup U^0)
+ *   accum = 0
+ *   Stage 1: F1 = RHS(U); accum += dt/6 * F1; data = scratch + dt/2 * F1
+ *   Stage 2: F2 = RHS(U); accum += dt/3 * F2; data = scratch + dt/2 * F2
+ *   Stage 3: F3 = RHS(U); accum += dt/3 * F3; data = scratch + dt * F3
+ *   Stage 4: F4 = RHS(U); accum += dt/6 * F4; data = scratch; data += accum
+ *   Enforce algebraic; restrict to parents.
+ *
+ * Uses 4 memory blocks per pack (data, rhs, scratch, accum).
+ */
+static void classic_rk4_step_mesh_packed(mesh_t *m, const sim_params_t *p,
+                                          double dt)
+{
+    /* Build pack with accum buffer for classic RK4 */
+    meshblock_pack_t *pack = mesh_build_leaf_pack(m, RK_CLASSIC);
+
+    /* Map to GPU (no-op on CPU) */
+    backend_map_pack(pack, p);
+
+    /* Save initial state: scratch = data (backup U^0) */
+    backend_copy_packed(pack, PACK_BUF_SCRATCH, PACK_BUF_DATA);
+    /* Zero accumulator */
+    backend_zero_packed(pack, PACK_BUF_ACCUM);
+
+    /* Stage 1: F1 = RHS(U^0) */
+    packed_ghost_exchange_fallback(pack, m);
+    backend_compute_rhs_packed(pack, p);
+    backend_sommerfeld_packed(pack, p);
+    backend_accum_add_packed(pack, 1.0/6.0, dt);   /* accum += dt/6 * F1 */
+    backend_axpy_packed(pack, 0.5, dt);             /* data = scratch + dt/2*rhs */
+
+    /* Stage 2: F2 = RHS(U^0 + dt/2 * F1) */
+    packed_ghost_exchange_fallback(pack, m);
+    backend_compute_rhs_packed(pack, p);
+    backend_sommerfeld_packed(pack, p);
+    backend_accum_add_packed(pack, 1.0/3.0, dt);   /* accum += dt/3 * F2 */
+    backend_axpy_packed(pack, 0.5, dt);             /* data = scratch + dt/2*rhs */
+
+    /* Stage 3: F3 = RHS(U^0 + dt/2 * F2) */
+    packed_ghost_exchange_fallback(pack, m);
+    backend_compute_rhs_packed(pack, p);
+    backend_sommerfeld_packed(pack, p);
+    backend_accum_add_packed(pack, 1.0/3.0, dt);   /* accum += dt/3 * F3 */
+    backend_axpy_packed(pack, 1.0, dt);             /* data = scratch + dt*rhs */
+
+    /* Stage 4: F4 = RHS(U^0 + dt * F3) */
+    packed_ghost_exchange_fallback(pack, m);
+    backend_compute_rhs_packed(pack, p);
+    backend_sommerfeld_packed(pack, p);
+    backend_accum_add_packed(pack, 1.0/6.0, dt);   /* accum += dt/6 * F4 */
+    backend_copy_packed(pack, PACK_BUF_DATA, PACK_BUF_SCRATCH); /* data = U^0 */
+    backend_apply_accum_packed(pack);               /* data += accum */
+
+    /* Unmap from GPU (no-op on CPU) */
+    backend_unmap_pack(pack);
+
+    /* Store final state back to blocks */
+    meshblock_pack_store(pack, m->blocks);
+
+    /* Post-step: algebraic constraints + parent restriction */
+    mesh_enforce_algebraic(m);
+    mesh_restrict_to_parents(m);
+
+    meshblock_pack_free(pack);
+}
+
+/* ========================================================================
+ * Public interface — mesh-level stepping
+ * ======================================================================== */
+
+/*
+ * Production path: packed batch kernels.
+ * All leaf blocks packed into one buffer, one kernel per operation.
+ * Ghost exchange via CPU fallback (Commit 1) or device kernels (Commit 2).
+ */
 void rk4_step_mesh(mesh_t *m, const sim_params_t *p,
                    rk4_rhs_func_t rhs_func, double dt)
 {
+    (void)rhs_func;  /* packed kernels call ccz4_rhs_point directly */
+
     if (p->rk_method == RK_CK45)
-        ck45_step_mesh(m, p, rhs_func, dt);
+        ck45_step_mesh_packed(m, p, dt);
     else
-        classic_rk4_step_mesh(m, p, rhs_func, dt);
+        classic_rk4_step_mesh_packed(m, p, dt);
+}
+
+/*
+ * Per-block fallback for debug/comparison.
+ * Same algorithm, one kernel launch per block per stage.
+ * Should produce identical results to rk4_step_mesh — any difference
+ * indicates a bug in the packed infrastructure.
+ */
+void rk4_step_mesh_perblock(mesh_t *m, const sim_params_t *p,
+                             rk4_rhs_func_t rhs_func, double dt)
+{
+    if (p->rk_method == RK_CK45)
+        ck45_step_mesh_perblock(m, p, rhs_func, dt);
+    else
+        classic_rk4_step_mesh_perblock(m, p, rhs_func, dt);
 }
