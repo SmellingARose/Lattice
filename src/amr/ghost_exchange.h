@@ -43,4 +43,15 @@ void ghost_exchange(mesh_t *m);
  */
 void ghost_exchange_array(mesh_t *m, int src_field);
 
+/*
+ * Multi-level ghost exchange for AMR meshes with refinement.
+ * Three phases:
+ *   Phase 1: Restrict fine leaf data → non-leaf parents (top-down)
+ *   Phase 2: Same-level exchange at each level
+ *   Phase 3: Prolongate coarse data → fine ghost zones (cross-level fill)
+ *
+ * Falls back to ghost_exchange() for uniform meshes (max_level == 0).
+ */
+void ghost_exchange_multilevel(mesh_t *m);
+
 #endif /* LATTICE_GHOST_EXCHANGE_H */

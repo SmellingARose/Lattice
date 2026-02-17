@@ -30,7 +30,7 @@ DIAG_SRC      = src/diagnostics/constraints.c
 BOUNDARY_SRC  = src/boundary/sommerfeld.c
 IO_SRC        = src/io/output.c
 AMR_SRC       = src/amr/block.c src/amr/mesh.c src/amr/meshblock_pack.c src/amr/ghost_exchange.c \
-                src/amr/prolongation.c src/amr/restriction.c
+                src/amr/prolongation.c src/amr/restriction.c src/amr/criterion.c src/amr/refine.c
 MAIN_SRC      = src/main.c
 
 # Backend selection
@@ -75,7 +75,7 @@ LDFLAGS = $(BACKEND_LIBS) -lm
 BUILD = build
 
 # Targets
-.PHONY: all debug test test-single-bh test-convergence test-constraints test-head-on test-amr-mesh test-amr-ghost test-amr-prolong clean
+.PHONY: all debug test test-single-bh test-convergence test-constraints test-head-on test-amr-mesh test-amr-ghost test-amr-prolong test-amr-refine clean
 
 all: $(BUILD)/lattice
 
@@ -156,6 +156,14 @@ $(BUILD)/test_amr_prolong: tests/test_amr_prolong.c $(ALL_SRC)
 test-amr-prolong: $(BUILD)/test_amr_prolong
 	@echo "=== Running AMR prolongation + noise reduction test ==="
 	$(BUILD)/test_amr_prolong
+
+$(BUILD)/test_amr_refine: tests/test_amr_refine.c $(ALL_SRC)
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS_OPT) -o $@ tests/test_amr_refine.c $(ALL_SRC) $(LDFLAGS)
+
+test-amr-refine: $(BUILD)/test_amr_refine
+	@echo "=== Running AMR refinement + multi-level ghost test ==="
+	$(BUILD)/test_amr_refine
 
 clean:
 	rm -rf $(BUILD)

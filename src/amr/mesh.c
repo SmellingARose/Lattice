@@ -209,7 +209,8 @@ void mesh_free(mesh_t *m)
 {
     if (!m) return;
     for (int i = 0; i < m->num_blocks; i++) {
-        block_free(m->blocks[i]);
+        if (m->blocks[i])
+            block_free(m->blocks[i]);
     }
     free(m->blocks);
     free(m);
@@ -219,8 +220,246 @@ int mesh_num_leaves(const mesh_t *m)
 {
     int count = 0;
     for (int i = 0; i < m->num_blocks; i++) {
-        if (m->blocks[i]->is_leaf)
+        if (m->blocks[i] && m->blocks[i]->is_leaf)
             count++;
     }
     return count;
+}
+
+block_t *mesh_find_block(const mesh_t *m, int level, int lx1, int lx2, int lx3)
+{
+    for (int i = 0; i < m->num_blocks; i++) {
+        block_t *b = m->blocks[i];
+        if (!b) continue;
+        if (b->loc.level == level &&
+            b->loc.lx1 == lx1 &&
+            b->loc.lx2 == lx2 &&
+            b->loc.lx3 == lx3)
+            return b;
+    }
+    return NULL;
+}
+
+int mesh_add_block(mesh_t *m, block_t *b)
+{
+    /* Try to find an empty (NULL) slot first */
+    for (int i = 0; i < m->num_blocks; i++) {
+        if (!m->blocks[i]) {
+            b->id = i;
+            m->blocks[i] = b;
+            return i;
+        }
+    }
+
+    /* No empty slot — append */
+    if (m->num_blocks >= m->max_blocks) {
+        m->max_blocks *= 2;
+        m->blocks = realloc(m->blocks, m->max_blocks * sizeof(block_t *));
+        if (!m->blocks) {
+            fprintf(stderr, "mesh_add_block: realloc failed\n");
+            exit(1);
+        }
+        /* Zero new slots */
+        for (int i = m->num_blocks; i < m->max_blocks; i++)
+            m->blocks[i] = NULL;
+    }
+
+    int slot = m->num_blocks;
+    b->id = slot;
+    m->blocks[slot] = b;
+    m->num_blocks++;
+    return slot;
+}
+
+void mesh_remove_block(mesh_t *m, int id)
+{
+    if (id < 0 || id >= m->num_blocks) return;
+    m->blocks[id] = NULL;  /* caller frees */
+}
+
+void mesh_compact(mesh_t *m)
+{
+    /* Build old_id -> new_id mapping */
+    int *id_map = calloc(m->num_blocks, sizeof(int));
+    if (!id_map) {
+        fprintf(stderr, "mesh_compact: calloc failed\n");
+        exit(1);
+    }
+    for (int i = 0; i < m->num_blocks; i++)
+        id_map[i] = -1;
+
+    /* Compact: move non-NULL blocks to front */
+    int write = 0;
+    for (int read = 0; read < m->num_blocks; read++) {
+        if (m->blocks[read]) {
+            id_map[read] = write;
+            if (write != read) {
+                m->blocks[write] = m->blocks[read];
+                m->blocks[read] = NULL;
+            }
+            m->blocks[write]->id = write;
+            write++;
+        }
+    }
+    m->num_blocks = write;
+
+    /* Update all internal ID references */
+    for (int i = 0; i < m->num_blocks; i++) {
+        block_t *b = m->blocks[i];
+        if (!b) continue;
+
+        if (b->parent_id >= 0)
+            b->parent_id = id_map[b->parent_id];
+
+        for (int c = 0; c < 8; c++) {
+            if (b->child_ids[c] >= 0)
+                b->child_ids[c] = id_map[b->child_ids[c]];
+        }
+
+        for (int n = 0; n < NUM_NEIGHBORS; n++) {
+            if (b->neighbor_ids[n] >= 0)
+                b->neighbor_ids[n] = id_map[b->neighbor_ids[n]];
+        }
+    }
+
+    free(id_map);
+}
+
+/*
+ * Helper: compute the number of blocks per side at a given level.
+ * At level L with N_root root blocks, there are N_root * 2^L blocks per side.
+ */
+static int blocks_per_side(const mesh_t *m, int level)
+{
+    return m->N_root * (1 << level);
+}
+
+void mesh_rebuild_neighbors(mesh_t *m)
+{
+    /* First pass: update max_level */
+    m->max_level = 0;
+    for (int i = 0; i < m->num_blocks; i++) {
+        block_t *b = m->blocks[i];
+        if (!b) continue;
+        if (b->loc.level > m->max_level)
+            m->max_level = b->loc.level;
+    }
+
+    /* Second pass: rebuild neighbors for every block */
+    for (int i = 0; i < m->num_blocks; i++) {
+        block_t *b = m->blocks[i];
+        if (!b) continue;
+
+        int level = b->loc.level;
+        int bps = blocks_per_side(m, level);
+
+        /* Reset neighbor arrays */
+        for (int n = 0; n < NUM_NEIGHBORS; n++)
+            b->neighbor_ids[n] = -1;
+        memset(b->nblevel, -1, sizeof(b->nblevel));
+        b->nblevel[1][1][1] = level;
+
+        /* Boundary flags */
+        b->on_boundary[0] = (b->loc.lx1 == 0)       ? 1 : 0;
+        b->on_boundary[1] = (b->loc.lx1 == bps - 1) ? 1 : 0;
+        b->on_boundary[2] = (b->loc.lx2 == 0)       ? 1 : 0;
+        b->on_boundary[3] = (b->loc.lx2 == bps - 1) ? 1 : 0;
+        b->on_boundary[4] = (b->loc.lx3 == 0)       ? 1 : 0;
+        b->on_boundary[5] = (b->loc.lx3 == bps - 1) ? 1 : 0;
+
+        /* 26 neighbors */
+        for (int n = 0; n < NUM_NEIGHBORS; n++) {
+            int ox = nbr_offset[n][0];
+            int oy = nbr_offset[n][1];
+            int oz = nbr_offset[n][2];
+
+            int nx = b->loc.lx1 + ox;
+            int ny = b->loc.lx2 + oy;
+            int nz = b->loc.lx3 + oz;
+
+            /* Check domain boundary at this level */
+            if (nx < 0 || nx >= bps ||
+                ny < 0 || ny >= bps ||
+                nz < 0 || nz >= bps) {
+                /* Physical boundary: check if coarser level neighbor exists.
+                 * At the domain boundary of root level, no neighbor. */
+                /* Map to parent level coordinates */
+                int cur_lx1 = b->loc.lx1, cur_lx2 = b->loc.lx2, cur_lx3 = b->loc.lx3;
+                int cur_level = level;
+                int found = 0;
+
+                while (cur_level > 0 && !found) {
+                    /* Map to parent level */
+                    cur_lx1 = cur_lx1 / 2;
+                    cur_lx2 = cur_lx2 / 2;
+                    cur_lx3 = cur_lx3 / 2;
+                    cur_level--;
+
+                    int cbps = blocks_per_side(m, cur_level);
+                    int cnx = cur_lx1 + ox;
+                    int cny = cur_lx2 + oy;
+                    int cnz = cur_lx3 + oz;
+
+                    if (cnx < 0 || cnx >= cbps ||
+                        cny < 0 || cny >= cbps ||
+                        cnz < 0 || cnz >= cbps)
+                        continue;  /* still boundary, try coarser */
+
+                    block_t *nbr = mesh_find_block(m, cur_level, cnx, cny, cnz);
+                    if (nbr) {
+                        b->neighbor_ids[n] = nbr->id;
+                        b->nblevel[oz + 1][oy + 1][ox + 1] = cur_level;
+                        found = 1;
+                    }
+                }
+                /* If not found, remains -1 (physical boundary) */
+                continue;
+            }
+
+            /* Try same-level neighbor */
+            block_t *nbr = mesh_find_block(m, level, nx, ny, nz);
+            if (nbr) {
+                /* Same-level neighbor found */
+                b->neighbor_ids[n] = nbr->id;
+                b->nblevel[oz + 1][oy + 1][ox + 1] = level;
+
+                /* If neighbor is non-leaf (refined), we still point to it.
+                 * The ghost exchange will handle finding the correct child. */
+                continue;
+            }
+
+            /* Try coarser level: map coords to parent level */
+            {
+                int cur_lx1 = b->loc.lx1;
+                int cur_lx2 = b->loc.lx2;
+                int cur_lx3 = b->loc.lx3;
+                int cur_level = level;
+                int found = 0;
+
+                while (cur_level > 0 && !found) {
+                    cur_lx1 = cur_lx1 / 2;
+                    cur_lx2 = cur_lx2 / 2;
+                    cur_lx3 = cur_lx3 / 2;
+                    cur_level--;
+
+                    int cbps = blocks_per_side(m, cur_level);
+                    int cnx = cur_lx1 + ox;
+                    int cny = cur_lx2 + oy;
+                    int cnz = cur_lx3 + oz;
+
+                    if (cnx < 0 || cnx >= cbps ||
+                        cny < 0 || cny >= cbps ||
+                        cnz < 0 || cnz >= cbps)
+                        continue;
+
+                    nbr = mesh_find_block(m, cur_level, cnx, cny, cnz);
+                    if (nbr) {
+                        b->neighbor_ids[n] = nbr->id;
+                        b->nblevel[oz + 1][oy + 1][ox + 1] = cur_level;
+                        found = 1;
+                    }
+                }
+            }
+        }
+    }
 }

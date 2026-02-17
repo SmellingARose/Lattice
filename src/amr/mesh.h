@@ -68,4 +68,41 @@ static inline block_t *mesh_get_block(const mesh_t *m, int id)
 /* Number of leaf (active) blocks */
 int mesh_num_leaves(const mesh_t *m);
 
+/*
+ * Find a block by logical location. Linear scan of blocks[].
+ * Returns NULL if not found. Fine for <1000 blocks.
+ * Ref: Athena++ MeshBlockTree::FindNeighbor (tree walk variant)
+ */
+block_t *mesh_find_block(const mesh_t *m, int level, int lx1, int lx2, int lx3);
+
+/*
+ * Append a block to the mesh. Grows blocks[] if needed.
+ * Returns the slot index where the block was placed.
+ * The block's id is set to the slot index.
+ */
+int mesh_add_block(mesh_t *m, block_t *b);
+
+/*
+ * Remove a block by slot index: sets blocks[id] to NULL.
+ * Does not free the block — caller must do that.
+ */
+void mesh_remove_block(mesh_t *m, int id);
+
+/*
+ * Compact the blocks array: remove NULL slots, reassign IDs.
+ * Updates parent_id, child_ids, neighbor_ids to reflect new IDs.
+ * Sorts remaining blocks by Morton code within each level.
+ */
+void mesh_compact(mesh_t *m);
+
+/*
+ * Rebuild neighbor_ids and nblevel tables for all blocks.
+ * Handles multi-level meshes: for each block, searches all 26 directions
+ * for same-level neighbors, falls back to coarser-level blocks.
+ * Also recomputes on_boundary flags and updates max_level.
+ *
+ * Ref: Athena++ bvals_base.cpp SearchAndSetNeighbors
+ */
+void mesh_rebuild_neighbors(mesh_t *m);
+
 #endif /* LATTICE_MESH_H */

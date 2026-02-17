@@ -285,6 +285,77 @@ void rk4_step(grid_t *g, const sim_params_t *p,
  * ======================================================================== */
 
 /*
+ * Helper: perform ghost exchange, choosing multilevel variant when
+ * the mesh has refinement (max_level > 0).
+ */
+static void mesh_ghost_exchange(mesh_t *m)
+{
+    if (m->max_level > 0)
+        ghost_exchange_multilevel(m);
+    else
+        ghost_exchange(m);
+}
+
+/*
+ * Restrict fine leaf data into non-leaf parents after a full RK step.
+ * Keeps parent data synchronized for cross-level ghost exchange.
+ */
+static void restrict_level_to_parents(mesh_t *m, int level)
+{
+    for (int bid = 0; bid < m->num_blocks; bid++) {
+        block_t *b = m->blocks[bid];
+        if (!b || b->loc.level != level - 1 || b->is_leaf) continue;
+
+        /* b is non-leaf parent at level-1: restrict children */
+        grid_t *pg = b->grid;
+        const int ghost = pg->ghost;
+        const int N = pg->N;
+        const int half_N = N / 2;
+
+        for (int cz = 0; cz < 2; cz++) {
+            for (int cy = 0; cy < 2; cy++) {
+                for (int cx = 0; cx < 2; cx++) {
+                    int octant = cx + (cy << 1) + (cz << 2);
+                    int cid = b->child_ids[octant];
+                    if (cid < 0 || !m->blocks[cid]) continue;
+
+                    const block_t *child = m->blocks[cid];
+                    const grid_t *cg = child->grid;
+
+                    int p_off_i = cx * half_N;
+                    int p_off_j = cy * half_N;
+                    int p_off_k = cz * half_N;
+
+                    for (int f = 0; f < NUM_FIELDS; f++) {
+                        for (int pk = 0; pk < half_N; pk++) {
+                            for (int pj = 0; pj < half_N; pj++) {
+                                for (int pi = 0; pi < half_N; pi++) {
+                                    double sum = 0.0;
+                                    for (int ok = 0; ok < 2; ok++) {
+                                        for (int oj = 0; oj < 2; oj++) {
+                                            for (int oi = 0; oi < 2; oi++) {
+                                                int fi = cg->ghost + 2 * pi + oi;
+                                                int fj = cg->ghost + 2 * pj + oj;
+                                                int fk = cg->ghost + 2 * pk + ok;
+                                                sum += cg->fields[f][IDX(cg, fi, fj, fk)];
+                                            }
+                                        }
+                                    }
+                                    int pii = ghost + p_off_i + pi;
+                                    int pjj = ghost + p_off_j + pj;
+                                    int pkk = ghost + p_off_k + pk;
+                                    pg->fields[f][IDX(pg, pii, pjj, pkk)] = sum * 0.125;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/*
  * Compute RHS + apply Sommerfeld BCs for all blocks in the mesh.
  * Ghost exchange must have been called before this.
  */
@@ -293,7 +364,7 @@ static void mesh_compute_rhs_and_bc(mesh_t *m, const sim_params_t *p,
 {
     for (int bid = 0; bid < m->num_blocks; bid++) {
         block_t *b = m->blocks[bid];
-        if (!b->is_leaf) continue;
+        if (!b || !b->is_leaf) continue;
 
         grid_t *g = b->grid;
         backend_compute_rhs(g->rhs, (const double *const *)g->fields,
@@ -307,9 +378,17 @@ static void mesh_enforce_algebraic(mesh_t *m)
 {
     for (int bid = 0; bid < m->num_blocks; bid++) {
         block_t *b = m->blocks[bid];
-        if (!b->is_leaf) continue;
+        if (!b || !b->is_leaf) continue;
         enforce_algebraic(b->grid);
     }
+}
+
+/* Synchronize non-leaf parent data after a full RK step */
+static void mesh_restrict_to_parents(mesh_t *m)
+{
+    if (m->max_level == 0) return;
+    for (int L = m->max_level; L >= 1; L--)
+        restrict_level_to_parents(m, L);
 }
 
 /*
@@ -322,7 +401,7 @@ static void classic_rk4_step_mesh(mesh_t *m, const sim_params_t *p,
     /* Save initial state and zero accumulators */
     for (int bid = 0; bid < m->num_blocks; bid++) {
         block_t *b = m->blocks[bid];
-        if (!b->is_leaf) continue;
+        if (!b || !b->is_leaf) continue;
         grid_t *g = b->grid;
         size_t n = g->npoints;
         copy_fields(g->scratch, (const double *const *)g->fields, n);
@@ -330,11 +409,11 @@ static void classic_rk4_step_mesh(mesh_t *m, const sim_params_t *p,
     }
 
     /* Stage 1 */
-    ghost_exchange(m);
+    mesh_ghost_exchange(m);
     mesh_compute_rhs_and_bc(m, p, rhs_func);
     for (int bid = 0; bid < m->num_blocks; bid++) {
         block_t *b = m->blocks[bid];
-        if (!b->is_leaf) continue;
+        if (!b || !b->is_leaf) continue;
         grid_t *g = b->grid;
         size_t n = g->npoints;
         accum_add(g->accum, (const double *const *)g->rhs, dt / 6.0, n);
@@ -343,11 +422,11 @@ static void classic_rk4_step_mesh(mesh_t *m, const sim_params_t *p,
     }
 
     /* Stage 2 */
-    ghost_exchange(m);
+    mesh_ghost_exchange(m);
     mesh_compute_rhs_and_bc(m, p, rhs_func);
     for (int bid = 0; bid < m->num_blocks; bid++) {
         block_t *b = m->blocks[bid];
-        if (!b->is_leaf) continue;
+        if (!b || !b->is_leaf) continue;
         grid_t *g = b->grid;
         size_t n = g->npoints;
         accum_add(g->accum, (const double *const *)g->rhs, dt / 3.0, n);
@@ -356,11 +435,11 @@ static void classic_rk4_step_mesh(mesh_t *m, const sim_params_t *p,
     }
 
     /* Stage 3 */
-    ghost_exchange(m);
+    mesh_ghost_exchange(m);
     mesh_compute_rhs_and_bc(m, p, rhs_func);
     for (int bid = 0; bid < m->num_blocks; bid++) {
         block_t *b = m->blocks[bid];
-        if (!b->is_leaf) continue;
+        if (!b || !b->is_leaf) continue;
         grid_t *g = b->grid;
         size_t n = g->npoints;
         accum_add(g->accum, (const double *const *)g->rhs, dt / 3.0, n);
@@ -369,11 +448,11 @@ static void classic_rk4_step_mesh(mesh_t *m, const sim_params_t *p,
     }
 
     /* Stage 4 */
-    ghost_exchange(m);
+    mesh_ghost_exchange(m);
     mesh_compute_rhs_and_bc(m, p, rhs_func);
     for (int bid = 0; bid < m->num_blocks; bid++) {
         block_t *b = m->blocks[bid];
-        if (!b->is_leaf) continue;
+        if (!b || !b->is_leaf) continue;
         grid_t *g = b->grid;
         size_t n = g->npoints;
         accum_add(g->accum, (const double *const *)g->rhs, dt / 6.0, n);
@@ -382,6 +461,7 @@ static void classic_rk4_step_mesh(mesh_t *m, const sim_params_t *p,
     }
 
     mesh_enforce_algebraic(m);
+    mesh_restrict_to_parents(m);
 }
 
 /*
@@ -394,18 +474,18 @@ static void ck45_step_mesh(mesh_t *m, const sim_params_t *p,
     /* Zero dU (stored in scratch) for all blocks */
     for (int bid = 0; bid < m->num_blocks; bid++) {
         block_t *b = m->blocks[bid];
-        if (!b->is_leaf) continue;
+        if (!b || !b->is_leaf) continue;
         zero_fields(b->grid->scratch, b->grid->npoints);
     }
 
     /* 5 CK45 stages */
     for (int s = 0; s < 5; s++) {
-        ghost_exchange(m);
+        mesh_ghost_exchange(m);
         mesh_compute_rhs_and_bc(m, p, rhs_func);
 
         for (int bid = 0; bid < m->num_blocks; bid++) {
             block_t *b = m->blocks[bid];
-            if (!b->is_leaf) continue;
+            if (!b || !b->is_leaf) continue;
             grid_t *g = b->grid;
             ck45_update(g->fields, g->scratch,
                         (const double *const *)g->rhs,
@@ -414,6 +494,7 @@ static void ck45_step_mesh(mesh_t *m, const sim_params_t *p,
     }
 
     mesh_enforce_algebraic(m);
+    mesh_restrict_to_parents(m);
 }
 
 /* Public interface for mesh-level stepping */

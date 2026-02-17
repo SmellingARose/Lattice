@@ -24,6 +24,7 @@
  */
 
 #include "ghost_exchange.h"
+#include "prolongation.h"
 #include "../core/fields.h"
 #include <string.h>
 
@@ -125,7 +126,7 @@ void ghost_exchange(mesh_t *m)
     /* Loop over all leaf blocks */
     for (int bid = 0; bid < m->num_blocks; bid++) {
         block_t *b = m->blocks[bid];
-        if (!b->is_leaf) continue;
+        if (!b || !b->is_leaf) continue;
 
         /* Exchange with each of 26 neighbors */
         for (int n = 0; n < NUM_NEIGHBORS; n++) {
@@ -133,6 +134,7 @@ void ghost_exchange(mesh_t *m)
             if (nbr_id < 0) continue;  /* physical boundary — skip */
 
             block_t *nbr = m->blocks[nbr_id];
+            if (!nbr) continue;
             exchange_neighbor(b, nbr,
                               nbr_offset[n][0],
                               nbr_offset[n][1],
@@ -146,18 +148,262 @@ void ghost_exchange_array(mesh_t *m, int src_field)
 {
     for (int bid = 0; bid < m->num_blocks; bid++) {
         block_t *b = m->blocks[bid];
-        if (!b->is_leaf) continue;
+        if (!b || !b->is_leaf) continue;
 
         for (int n = 0; n < NUM_NEIGHBORS; n++) {
             int nbr_id = b->neighbor_ids[n];
             if (nbr_id < 0) continue;
 
             block_t *nbr = m->blocks[nbr_id];
+            if (!nbr) continue;
             exchange_neighbor(b, nbr,
                               nbr_offset[n][0],
                               nbr_offset[n][1],
                               nbr_offset[n][2],
                               src_field);
+        }
+    }
+}
+
+/* ========================================================================
+ * Multi-level ghost exchange (Stage 4)
+ *
+ * Phase 1: Restriction — fine leaf data → non-leaf parents
+ * Phase 2: Same-level exchange at each level (including non-leaf)
+ * Phase 3: Prolongation — coarse parent data → fine ghost zones
+ *
+ * Ref: GRChombo GRAMRLevel.cpp:1029-1043 (FillPatch pattern)
+ * ======================================================================== */
+
+/*
+ * Restrict all children's interior data into a non-leaf parent.
+ * Each child covers one octant of the parent's interior.
+ */
+static void restrict_children_into_parent(const mesh_t *m, block_t *parent)
+{
+    grid_t *pg = parent->grid;
+    const int ghost = pg->ghost;
+    const int N = pg->N;
+    const int half_N = N / 2;
+
+    for (int cz = 0; cz < 2; cz++) {
+        for (int cy = 0; cy < 2; cy++) {
+            for (int cx = 0; cx < 2; cx++) {
+                int octant = cx + (cy << 1) + (cz << 2);
+                int cid = parent->child_ids[octant];
+                if (cid < 0 || !m->blocks[cid]) continue;
+
+                const block_t *child = m->blocks[cid];
+                const grid_t *cg = child->grid;
+
+                int p_off_i = cx * half_N;
+                int p_off_j = cy * half_N;
+                int p_off_k = cz * half_N;
+
+                for (int f = 0; f < NUM_FIELDS; f++) {
+                    for (int pk = 0; pk < half_N; pk++) {
+                        for (int pj = 0; pj < half_N; pj++) {
+                            for (int pi = 0; pi < half_N; pi++) {
+                                double sum = 0.0;
+                                for (int ok = 0; ok < 2; ok++) {
+                                    for (int oj = 0; oj < 2; oj++) {
+                                        for (int oi = 0; oi < 2; oi++) {
+                                            int fi = cg->ghost + 2 * pi + oi;
+                                            int fj = cg->ghost + 2 * pj + oj;
+                                            int fk = cg->ghost + 2 * pk + ok;
+                                            sum += cg->fields[f][IDX(cg, fi, fj, fk)];
+                                        }
+                                    }
+                                }
+                                int pii = ghost + p_off_i + pi;
+                                int pjj = ghost + p_off_j + pj;
+                                int pkk = ghost + p_off_k + pk;
+                                pg->fields[f][IDX(pg, pii, pjj, pkk)] = sum * 0.125;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/*
+ * Prolongate parent block's data into a fine child's ghost zones.
+ * The parent has valid data in both interior (from restriction) and ghost
+ * zones (from same-level exchange at the coarser level). This covers all
+ * ghost cells of the child uniformly — faces, edges, and corners — without
+ * needing per-direction neighbor lookups.
+ *
+ * For each fine ghost cell:
+ *   1. Compute physical coordinate
+ *   2. Map to parent grid index space
+ *   3. If within parent's valid stencil range, apply 5-point interpolation
+ *   4. Skip cells outside parent's range (domain boundary)
+ */
+static void prolongate_from_parent(const block_t *parent, block_t *child)
+{
+    grid_t *fg = child->grid;
+    const grid_t *cg = parent->grid;
+    const int ghost = fg->ghost;
+    const int N = fg->N;
+    const int Nt = fg->Ntotal;
+    const double fdx = fg->dx;
+    const double cdx = cg->dx;
+    const int half = PROLONG_STENCIL / 2;  /* = 2 */
+
+    for (int f = 0; f < NUM_FIELDS; f++) {
+        for (int fk = 0; fk < Nt; fk++) {
+            for (int fj = 0; fj < Nt; fj++) {
+                for (int fi = 0; fi < Nt; fi++) {
+                    /* Skip interior cells — only fill ghost zones */
+                    if (fi >= ghost && fi < ghost + N &&
+                        fj >= ghost && fj < ghost + N &&
+                        fk >= ghost && fk < ghost + N)
+                        continue;
+
+                    /* Physical coordinate of this fine ghost cell */
+                    double px = child->origin[0] + (fi - ghost + 0.5) * fdx;
+                    double py = child->origin[1] + (fj - ghost + 0.5) * fdx;
+                    double pz = child->origin[2] + (fk - ghost + 0.5) * fdx;
+
+                    /* Map to parent grid index space (continuous).
+                     * parent cell i has center at:
+                     *   origin + (i - ghost + 0.5) * cdx
+                     * So: i = (px - origin) / cdx + ghost - 0.5 */
+                    double ci_cont = (px - parent->origin[0]) / cdx + cg->ghost - 0.5;
+                    double cj_cont = (py - parent->origin[1]) / cdx + cg->ghost - 0.5;
+                    double ck_cont = (pz - parent->origin[2]) / cdx + cg->ghost - 0.5;
+
+                    /* Nearest coarse cell center */
+                    int ci0 = (int)(ci_cont + 0.5);
+                    int cj0 = (int)(cj_cont + 0.5);
+                    int ck0 = (int)(ck_cont + 0.5);
+
+                    /* Skip cells outside parent's valid stencil range.
+                     * These are at the domain boundary (no data). */
+                    if (ci0 < half || ci0 >= cg->Ntotal - half ||
+                        cj0 < half || cj0 >= cg->Ntotal - half ||
+                        ck0 < half || ck0 >= cg->Ntotal - half)
+                        continue;
+
+                    /* Which child of the coarse cell: left (0) or right (1) */
+                    int oi = (ci_cont >= ci0) ? 1 : 0;
+                    int oj = (cj_cont >= cj0) ? 1 : 0;
+                    int ok = (ck_cont >= ck0) ? 1 : 0;
+
+                    /* 5×5×5 tensor product interpolation */
+                    double val = 0.0;
+                    for (int sk = 0; sk < PROLONG_STENCIL; sk++) {
+                        int wk = ok ? (PROLONG_STENCIL - 1 - sk) : sk;
+                        for (int sj = 0; sj < PROLONG_STENCIL; sj++) {
+                            int wj = oj ? (PROLONG_STENCIL - 1 - sj) : sj;
+                            double wkj = prolong_w[wk] * prolong_w[wj];
+                            for (int si = 0; si < PROLONG_STENCIL; si++) {
+                                int wi = oi ? (PROLONG_STENCIL - 1 - si) : si;
+                                int src_idx = IDX(cg,
+                                                  ci0 - half + si,
+                                                  cj0 - half + sj,
+                                                  ck0 - half + sk);
+                                val += wkj * prolong_w[wi] *
+                                       cg->fields[f][src_idx];
+                            }
+                        }
+                    }
+
+                    fg->fields[f][IDX(fg, fi, fj, fk)] = val;
+                }
+            }
+        }
+    }
+}
+
+void ghost_exchange_multilevel(mesh_t *m)
+{
+    /* Fast path for uniform grids */
+    if (m->max_level == 0) {
+        ghost_exchange(m);
+        return;
+    }
+
+    /* Phase 1: Restriction — fine leaf data → non-leaf parents.
+     * Process from finest to coarsest so parents at each level have
+     * up-to-date data from their children. */
+    for (int L = m->max_level; L >= 1; L--) {
+        for (int bid = 0; bid < m->num_blocks; bid++) {
+            block_t *b = m->blocks[bid];
+            if (!b || b->loc.level != L - 1 || b->is_leaf) continue;
+            /* b is non-leaf at level L-1: restrict children into b */
+            restrict_children_into_parent(m, b);
+        }
+    }
+
+    /* Phase 2: Same-level exchange at each level (coarsest-first).
+     * Exchange between all blocks at the same level, including non-leaf
+     * blocks (which now have valid data from restriction). */
+    for (int L = 0; L <= m->max_level; L++) {
+        for (int bid = 0; bid < m->num_blocks; bid++) {
+            block_t *b = m->blocks[bid];
+            if (!b || b->loc.level != L) continue;
+
+            for (int n = 0; n < NUM_NEIGHBORS; n++) {
+                int nbr_id = b->neighbor_ids[n];
+                if (nbr_id < 0) continue;
+
+                block_t *nbr = m->blocks[nbr_id];
+                if (!nbr || nbr->loc.level != L) continue;
+
+                exchange_neighbor(b, nbr,
+                                  nbr_offset[n][0],
+                                  nbr_offset[n][1],
+                                  nbr_offset[n][2],
+                                  0);
+            }
+        }
+    }
+
+    /* Phase 3: Prolongation — parent data → fine ghost zones.
+     * For each fine leaf block with a parent, prolongate from the parent's
+     * grid (which has valid interior from restriction + valid ghost from
+     * same-level exchange) to fill all ghost cells of the child.
+     * This handles faces, edges, and corners uniformly.
+     *
+     * Ref: GRChombo FillPatch — coarse data fills fine ghost zones */
+    for (int L = 1; L <= m->max_level; L++) {
+        for (int bid = 0; bid < m->num_blocks; bid++) {
+            block_t *b = m->blocks[bid];
+            if (!b || !b->is_leaf || b->loc.level != L) continue;
+            if (b->parent_id < 0) continue;
+
+            block_t *parent = m->blocks[b->parent_id];
+            if (!parent || !parent->grid) continue;
+
+            prolongate_from_parent(parent, b);
+        }
+    }
+
+    /* Phase 4: Same-level exchange again for fine blocks.
+     * After prolongation filled ghost zones from coarse data, exchange
+     * between same-level siblings to get high-resolution ghost data where
+     * available (overwriting the prolongated data with exact same-level data). */
+    for (int L = 1; L <= m->max_level; L++) {
+        for (int bid = 0; bid < m->num_blocks; bid++) {
+            block_t *b = m->blocks[bid];
+            if (!b || !b->is_leaf || b->loc.level != L) continue;
+
+            for (int n = 0; n < NUM_NEIGHBORS; n++) {
+                int nbr_id = b->neighbor_ids[n];
+                if (nbr_id < 0) continue;
+
+                block_t *nbr = m->blocks[nbr_id];
+                if (!nbr || nbr->loc.level != L) continue;
+
+                exchange_neighbor(b, nbr,
+                                  nbr_offset[n][0],
+                                  nbr_offset[n][1],
+                                  nbr_offset[n][2],
+                                  0);
+            }
         }
     }
 }

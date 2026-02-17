@@ -162,7 +162,7 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
     <li><a href="#mod-diagnostics"><span class="status-dot dot-green"></span>diagnostics/</a></li>
     <li><a href="#mod-boundary"><span class="status-dot dot-green"></span>boundary/</a></li>
     <li><a href="#mod-io"><span class="status-dot dot-green"></span>io/</a></li>
-    <li><a href="#mod-amr"><span class="status-dot dot-yellow"></span>amr/ (Stage 3)</a></li>
+    <li><a href="#mod-amr"><span class="status-dot dot-yellow"></span>amr/ (Stage 4)</a></li>
 
     <li><a class="section-header">Tests &amp; Build</a></li>
     <li><a href="#tests">Test Infrastructure</a></li>
@@ -450,7 +450,7 @@ Grid indexing:  IDX(g, i, j, k) = k * Ntotal^2 + j * Ntotal + i
 <tr><td><code>enforce_algebraic(g)</code></td><td>det(h)=1, tr(A)=0, chi>0, lapse>0. OpenMP collapse(2).</td></tr>
 <tr><td><code>ck45_update(...)</code></td><td>Fused dU/U update kernel. OpenMP parallel for.</td></tr>
 <tr><td><code>copy_fields, axpy_fields, accum_add, apply_accum, zero_fields</code></td><td>Helper array operations (all OpenMP parallelized)</td></tr>
-<tr><td><code>rk4_step_mesh(m, p, rhs_func, dt)</code></td><td>Multi-block mesh stepping: ghost exchange before each RK stage, per-block RHS + Sommerfeld (AMR Stage 2)</td></tr>
+<tr><td><code>rk4_step_mesh(m, p, rhs_func, dt)</code></td><td>Multi-block mesh stepping: ghost exchange before each RK stage, per-block RHS + Sommerfeld. Stage 4: dispatches to multilevel ghost exchange when max_level &gt; 0, restricts to parents after each step</td></tr>
 </table>
 
 <p><strong>CK45 coefficients:</strong> Carpenter &amp; Kennedy, NASA TM-109112 (1994), Solution 3.</p>
@@ -625,46 +625,48 @@ Grid indexing:  IDX(g, i, j, k) = k * Ntotal^2 + j * Ntotal + i
 </details>
 
 <!-- ========================================== -->
-<h2 id="mod-amr">Module: amr/ <span class="badge badge-yellow">Stage 3 Complete (6 stages total)</span></h2>
+<h2 id="mod-amr">Module: amr/ <span class="badge badge-yellow">Stage 4 Complete (6 stages total)</span></h2>
 
-<p>Oct-tree block AMR implemented in 6 stages (see <code>plan1.md</code>). The architecture wraps each <code>grid_t</code> in a <code>block_t</code> with tree metadata, managed by a <code>mesh_t</code>. A <code>meshblock_pack_t</code> packs block data into contiguous GPU-friendly buffers. The physics code (<code>ccz4_rhs_point</code>) runs unchanged on each block.</p>
+<p>Oct-tree block AMR implemented in 6 stages (see <code>plan1.md</code>). The architecture wraps each <code>grid_t</code> in a <code>block_t</code> with tree metadata, managed by a <code>mesh_t</code>. A <code>meshblock_pack_t</code> packs block data into contiguous GPU-friendly buffers. The physics code (<code>ccz4_rhs_point</code>) runs unchanged on each block. Stage 4 adds dynamic oct-tree refinement/coarsening with chi-gradient criterion and cross-level ghost exchange.</p>
 
 <p>Key patterns copied from <strong>Athena++</strong> (Stone et al. 2020) and <strong>AthenaK</strong> (Grete et al. 2024): <code>LogicalLocation</code> tree addressing, <code>nblevel[3][3][3]</code> neighbor level tables, child octant indexing <code>n = ox1 + (ox2&lt;&lt;1) + (ox3&lt;&lt;2)</code>, Morton Z-order block sorting, MeshBlockPack GPU batching.</p>
 
-<h4>Implemented Files (Stages 1&ndash;3):</h4>
+<h4>Implemented Files (Stages 1&ndash;4):</h4>
 <table class="file-table">
 <tr><th>File</th><th>Purpose</th><th>Status</th></tr>
 <tr><td><code>src/amr/morton.h</code></td><td>Header-only Morton Z-order encoding/decoding (bit-interleave, child/parent ops)</td><td><span class="badge badge-green">Done</span></td></tr>
 <tr><td><code>src/amr/block.h</code></td><td>block_t: grid_t* + LogicalLocation + nblevel[3][3][3] + 26 neighbors + tree links</td><td><span class="badge badge-green">Done</span></td></tr>
 <tr><td><code>src/amr/block.c</code></td><td>Block allocation (wraps grid_alloc), 26-neighbor offset table</td><td><span class="badge badge-green">Done</span></td></tr>
-<tr><td><code>src/amr/mesh.h</code></td><td>mesh_t struct (struct mesh_s tag), mesh_create/free API</td><td><span class="badge badge-green">Done</span></td></tr>
-<tr><td><code>src/amr/mesh.c</code></td><td>Uniform root grid creation, Morton sort, neighbor finding, nblevel + boundary flags</td><td><span class="badge badge-green">Done</span></td></tr>
+<tr><td><code>src/amr/mesh.h</code></td><td>mesh_t struct + find/add/remove/compact/rebuild_neighbors API</td><td><span class="badge badge-green">Done</span></td></tr>
+<tr><td><code>src/amr/mesh.c</code></td><td>Root grid creation, Morton sort, multi-level neighbor finding with coarse fallback</td><td><span class="badge badge-green">Done</span></td></tr>
 <tr><td><code>src/amr/meshblock_pack.h</code></td><td>meshblock_pack_t: contiguous GPU buffer, PACK_IDX macro, load/store API</td><td><span class="badge badge-green">Done</span></td></tr>
 <tr><td><code>src/amr/meshblock_pack.c</code></td><td>Page-aligned allocation, field data copy to/from blocks</td><td><span class="badge badge-green">Done</span></td></tr>
-<tr><td><code>src/amr/ghost_exchange.h</code></td><td>Ghost exchange API: ghost_exchange() and ghost_exchange_array()</td><td><span class="badge badge-green">Done</span></td></tr>
-<tr><td><code>src/amr/ghost_exchange.c</code></td><td>26-neighbor ghost fill: unified ghost_range() for faces/edges/corners, memcpy x-strips</td><td><span class="badge badge-green">Done</span></td></tr>
+<tr><td><code>src/amr/ghost_exchange.h</code></td><td>Ghost exchange API: ghost_exchange(), ghost_exchange_array(), ghost_exchange_multilevel()</td><td><span class="badge badge-green">Done</span></td></tr>
+<tr><td><code>src/amr/ghost_exchange.c</code></td><td>26-neighbor ghost fill + 4-phase multilevel exchange (restrict &rarr; same-level &rarr; prolongate from parent &rarr; same-level)</td><td><span class="badge badge-green">Done</span></td></tr>
 <tr><td><code>src/amr/prolongation.h</code></td><td>4th-order cell-centered Lagrange prolongation API, weight array</td><td><span class="badge badge-green">Done</span></td></tr>
 <tr><td><code>src/amr/prolongation.c</code></td><td>5-point 1D stencil, 3D tensor product (125 coarse cells per fine child). Ref: AthenaK</td><td><span class="badge badge-green">Done</span></td></tr>
 <tr><td><code>src/amr/restriction.h</code></td><td>Volume-weighted restriction API (fine &rarr; coarse)</td><td><span class="badge badge-green">Done</span></td></tr>
 <tr><td><code>src/amr/restriction.c</code></td><td>U_coarse = (1/8) &times; sum of 8 fine children. Ref: GRChombo CoarseAverage</td><td><span class="badge badge-green">Done</span></td></tr>
+<tr><td><code>src/amr/criterion.h</code></td><td>Chi-gradient refinement criterion API: chi_gradient_max, criterion_check_block/mesh</td><td><span class="badge badge-green">Done</span></td></tr>
+<tr><td><code>src/amr/criterion.c</code></td><td>(dx/chi&sup2;)|&nabla;chi| criterion with hysteresis thresholds. Ref: GRChombo ChiTaggingCriterion</td><td><span class="badge badge-green">Done</span></td></tr>
+<tr><td><code>src/amr/refine.h</code></td><td>Oct-tree refinement API: mesh_refine_block, mesh_coarsen_siblings, mesh_enforce_2to1, mesh_regrid</td><td><span class="badge badge-green">Done</span></td></tr>
+<tr><td><code>src/amr/refine.c</code></td><td>Block split 1&rarr;8, merge 8&rarr;1, 2:1 cascade, full regrid cycle. Ref: Athena++ meshblock_tree</td><td><span class="badge badge-green">Done</span></td></tr>
 </table>
 
-<h4>Modified Files (Stages 2&ndash;3):</h4>
+<h4>Modified Files (Stages 2&ndash;4):</h4>
 <table class="file-table">
 <tr><th>File</th><th>Change</th></tr>
 <tr><td><code>src/boundary/sommerfeld.h/c</code></td><td>Added <code>apply_sommerfeld_block()</code>: domain-boundary-only Sommerfeld using BLOCK_COORD</td></tr>
-<tr><td><code>src/numerics/rk4.h/c</code></td><td>Added <code>rk4_step_mesh()</code>: CK45 + classic RK4 for multi-block (ghost exchange + per-block RHS)</td></tr>
+<tr><td><code>src/numerics/rk4.h/c</code></td><td>Added <code>rk4_step_mesh()</code>: CK45 + classic RK4 for multi-block. Stage 4: multilevel ghost exchange dispatch + parent restriction after each step</td></tr>
 <tr><td><code>src/initial_data/puncture.h/c</code></td><td>Added <code>set_brill_lindquist_global()</code>: block-aware coords via explicit origin</td></tr>
-<tr><td><code>src/core/params.h</code></td><td>Added <code>noise_params_t</code> (CAKO/CAHD/SSL/per-field sigma params), <code>double time</code></td></tr>
+<tr><td><code>src/core/params.h</code></td><td>Added <code>noise_params_t</code> (CAKO/CAHD/SSL/per-field sigma params), <code>amr_params_t</code>, <code>double time</code></td></tr>
 <tr><td><code>src/evolution/dissipation.c</code></td><td>CAKO: <code>sigma_eff = sqrt(chi) * sigma_base</code>. Per-field sigma: 0.99 gauge, 0.3 physical</td></tr>
 <tr><td><code>src/evolution/ccz4_rhs.c</code></td><td>CAHD: <code>rhs_chi += 4*chi*C*CFL*dx*H</code>. SSL: Gaussian lapse damping toward trumpet</td></tr>
 </table>
 
-<h4>Remaining Files (Stages 4&ndash;6):</h4>
+<h4>Remaining Files (Stages 5&ndash;6):</h4>
 <table class="file-table">
 <tr><th>File</th><th>Stage</th><th>Purpose</th></tr>
-<tr><td><code>src/amr/refine.h / .c</code></td><td>4</td><td>Oct-tree split/merge + 2:1 constraint enforcement</td></tr>
-<tr><td><code>src/amr/criterion.h / .c</code></td><td>4</td><td>Chi-gradient refinement criterion with hysteresis</td></tr>
 <tr><td><code>src/amr/subcycling.h / .c</code></td><td>5</td><td>Level-by-level time advance with restriction</td></tr>
 </table>
 
@@ -731,6 +733,12 @@ Grid indexing:  IDX(g, i, j, k) = k * Ntotal^2 + j * Ntotal + i
   <td>15 sub-tests pass, prolongation order &gt; 3.5, CAHD reduces Ham L2 by 34%</td>
   <td><span class="badge badge-green">Passing</span></td>
 </tr>
+<tr>
+  <td><code>tests/test_amr_refine.c</code></td>
+  <td>AMR Stage 4: oct-tree refine/coarsen, 2:1 constraint, chi-gradient criterion, multilevel ghost exchange, mesh management, regrid cycle</td>
+  <td>72 sub-tests pass, multilevel ghost error &lt; 0.001*dx&sup2;, no NaN/Inf after regrid</td>
+  <td><span class="badge badge-green">Passing</span></td>
+</tr>
 </table>
 
 <h3>How to Run Tests</h3>
@@ -741,7 +749,8 @@ make test-constraints    # Hamiltonian + momentum constraint tests
 make test-head-on        # head-on binary collision (~6 hrs at N=128)
 make test-amr-mesh       # AMR Stage 1 infrastructure (33 tests, ~30 sec)
 make test-amr-ghost      # AMR Stage 2 ghost exchange + multi-block (13 tests, ~60 sec)
-make test-amr-prolong    # AMR Stage 3 prolongation + noise reduction (15 tests, ~30 sec)</code></pre>
+make test-amr-prolong    # AMR Stage 3 prolongation + noise reduction (15 tests, ~30 sec)
+make test-amr-refine     # AMR Stage 4 refinement + multilevel ghost (72 tests, ~60 sec)</code></pre>
 
 <!-- ========================================== -->
 <h2 id="build">Build System</h2>
@@ -764,7 +773,7 @@ make clean                    # rm -rf build/</code></pre>
 <tr><td><code>DIAG_SRC</code></td><td>src/diagnostics/constraints.c</td></tr>
 <tr><td><code>BOUNDARY_SRC</code></td><td>src/boundary/sommerfeld.c</td></tr>
 <tr><td><code>IO_SRC</code></td><td>src/io/output.c</td></tr>
-<tr><td><code>AMR_SRC</code></td><td>src/amr/block.c src/amr/mesh.c src/amr/meshblock_pack.c src/amr/ghost_exchange.c src/amr/prolongation.c src/amr/restriction.c</td></tr>
+<tr><td><code>AMR_SRC</code></td><td>src/amr/block.c src/amr/mesh.c src/amr/meshblock_pack.c src/amr/ghost_exchange.c src/amr/prolongation.c src/amr/restriction.c src/amr/criterion.c src/amr/refine.c</td></tr>
 <tr><td><code>BACKEND_SRC</code></td><td>src/backend/backend_cpu.c <em>or</em> backend_gpu.c (selected by BACKEND flag)</td></tr>
 <tr><td><code>MAIN_SRC</code></td><td>src/main.c</td></tr>
 </table>
@@ -832,7 +841,7 @@ make clean                    # rm -rf build/</code></pre>
 <tr><td>Einstein-Maxwell (charge)</td><td><span class="badge badge-gray">Future</span></td><td>+6 fields (E_i, B_i)</td></tr>
 <tr><td>Spin (Bowen-York)</td><td><span class="badge badge-gray">Future</span></td><td>Spinning puncture initial data</td></tr>
 <tr><td>Apparent horizon finder</td><td><span class="badge badge-gray">Future</span></td><td>Remnant properties</td></tr>
-<tr><td>AMR (oct-tree)</td><td><span class="badge badge-yellow">Planned</span></td><td>Detailed 6-stage plan in plan.md, 14 new files</td></tr>
+<tr><td>AMR (oct-tree)</td><td><span class="badge badge-yellow">Stage 4/6</span></td><td>Stages 1&ndash;4 done (blocks, ghost exchange, prolongation, refinement). Stage 5: subcycling</td></tr>
 </table>
 
 <h3>Phase 3: Production (Future)</h3>

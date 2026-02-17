@@ -688,3 +688,99 @@ run physics unchanged. Test gate: multi-block = single-grid to roundoff.
 Stage 4: Oct-tree refinement + multi-level ghost exchange. Refine and coarsen
 blocks based on chi-gradient. Support multiple refinement levels with cross-
 level ghost exchange using prolongation and restriction from Stage 3.
+
+## 2026-02-16: AMR Stage 4 — Oct-tree Refinement + Multi-level Ghost Exchange
+
+### Overview
+
+Implemented dynamic oct-tree refinement and coarsening with full cross-level
+ghost zone exchange. Blocks can now be refined (split 1→8 children) or
+coarsened (merge 8→1 parent) based on the chi-gradient criterion.
+
+### New files
+
+- `src/amr/criterion.h/c` — Chi-gradient refinement criterion
+  - `chi_gradient_max()`: max of (dx/chi²)|∇chi| over block interior
+  - `criterion_check_block()`: flag refine/coarsen per block
+  - `criterion_check_mesh()`: evaluate all leaf blocks
+  - Ref: GRChombo ChiTaggingCriterion.hpp:31
+
+- `src/amr/refine.h/c` — Block split/merge + regrid
+  - `mesh_refine_block()`: split 1→8, prolongate parent data into children
+  - `mesh_coarsen_siblings()`: restrict 8→1, merge back to parent
+  - `mesh_enforce_2to1()`: cascade 2:1 level constraint iteratively
+  - `mesh_regrid()`: full cycle (criterion + 2:1 + refine + coarsen + rebuild)
+  - Ref: Athena++ mesh.cpp AdaptiveMeshRefinement(), meshblock_tree.cpp
+
+- `tests/test_amr_refine.c` — 72 checks across 9 tests
+
+### Modified files
+
+- `src/amr/mesh.h/c` — Added block management functions:
+  - `mesh_find_block()`: linear scan by (level, lx1, lx2, lx3)
+  - `mesh_add_block()`: append with automatic grow
+  - `mesh_remove_block()`: set slot to NULL
+  - `mesh_compact()`: remove NULL slots, update all ID references
+  - `mesh_rebuild_neighbors()`: multi-level neighbor finding with
+    fallback to coarser-level blocks
+
+- `src/amr/ghost_exchange.h/c` — Added multi-level ghost exchange:
+  - `ghost_exchange_multilevel()` with 4 phases:
+    1. Restrict fine leaf data → non-leaf parents (finest to coarsest)
+    2. Same-level exchange at each level (including non-leaf blocks)
+    3. Prolongate from parent → fine child ghost zones (all faces/edges/corners)
+    4. Same-level exchange at fine levels (overwrites prolongated data
+       with exact same-level data where available)
+  - `prolongate_from_parent()`: coordinate-based interpolation using
+    parent's grid data (interior + ghost zones) for uniform coverage
+
+- `src/numerics/rk4.c` — Mesh stepping uses multilevel ghost exchange
+  when max_level > 0, restricts to parents after each full step
+
+- `Makefile` — Added criterion.c, refine.c to AMR_SRC, test-amr-refine target
+
+### Key design decisions
+
+1. **Non-leaf parents keep grid data.** When refined, parent becomes non-leaf
+   but retains `grid_t*`. Data updated via restriction from children. Provides
+   coarse ghost data for fine blocks. Memory cost: ~12% (1 parent per 8 children).
+
+2. **Parent-based ghost fill (not neighbor-based).** Edge and corner ghost
+   cells on fine blocks can extend to physical regions not covered by a single
+   coarse neighbor. The parent block always covers all child ghost cells
+   (its domain + ghost zones encompass children's domains + ghost zones).
+   This avoids per-cell block lookups for edge/corner directions.
+
+3. **Phase 4 same-level exchange.** After prolongation fills ghost zones from
+   coarse parent data, a second same-level exchange pass among siblings
+   overwrites prolongated values with exact fine-resolution data where available.
+   This ensures maximum accuracy at fine-fine interfaces.
+
+4. **Global dt (no subcycling).** All leaf blocks advance with the same
+   dt = CFL * dx_finest. Stage 5 will add subcycling.
+
+### Test results
+
+test_amr_refine: 72/72 passed:
+- Refine single block: parent non-leaf, 8 children at level 1, correct origins/dx
+- Prolongation into children: exact for quadratic (0 error)
+- Coarsen round-trip: error < 10 * dx² (restriction accuracy)
+- 2:1 constraint: all 8 neighbors cascade correctly in 2×2×2 mesh
+- Chi-gradient criterion: all blocks near BH flagged for refinement
+- Multi-level ghost exchange: error < 0.001 * dx_c² (restriction-limited)
+- Mesh find/add/remove/compact: correct slot management
+- Neighbor rebuild: fine blocks see coarser neighbors, boundary flags correct
+- Full regrid: 8→64 leaves near BH, no NaN, 2:1 constraint satisfied
+
+### No regressions
+
+- test_flat: Ham L2 = 5.29e-14 (unchanged)
+- test_convergence: order 5.43/5.47 (unchanged)
+- test_amr_mesh: 33/33 (unchanged)
+- test_amr_ghost: 16/16 (unchanged)
+- test_amr_prolong: 15/15 (unchanged)
+
+### What's next
+
+Stage 5: Subcycling — fine levels advance with smaller dt for computational
+efficiency. Berger-Oliger time stepping with coarse-fine synchronization.

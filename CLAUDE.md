@@ -82,7 +82,7 @@ Priority order:
 - Spatially varying KO dissipation
 - Full waveform catalog capability
 
-**Current status: Phase 1 — infrastructure + flat spacetime + single BH stable. AMR Stage 3 complete (prolongation + noise reduction).** Update as milestones are reached.
+**Current status: Phase 1 — infrastructure + flat spacetime + single BH stable. AMR Stage 4 complete (oct-tree refinement + multi-level ghost exchange).** Update as milestones are reached.
 
 ## Project Structure
 
@@ -120,9 +120,11 @@ lattice/
 │   │   ├── morton.h             # Morton (Z-order) encoding for SFC
 │   │   ├── block.h / block.c   # block_t: single mesh block with metadata
 │   │   ├── mesh.h / mesh.c     # mesh_t: collection of blocks forming domain
-│   │   ├── ghost_exchange.h/c  # 26-neighbor ghost zone exchange
+│   │   ├── ghost_exchange.h/c  # 26-neighbor + multi-level ghost exchange
 │   │   ├── prolongation.h/c    # 4th-order Lagrange coarse→fine (AthenaK)
 │   │   ├── restriction.h/c     # volume-weighted fine→coarse averaging
+│   │   ├── criterion.h/c       # chi-gradient refinement criterion
+│   │   ├── refine.h/c          # oct-tree split/merge/regrid
 │   │   └── meshblock_pack.h/c  # GPU batch packing (AthenaK-style)
 │   └── io/
 │       └── output.c            # data output
@@ -133,6 +135,7 @@ lattice/
 │   ├── test_amr_mesh.c         # AMR mesh creation + Morton ordering
 │   ├── test_amr_ghost.c        # ghost exchange + multi-block evolution
 │   ├── test_amr_prolong.c     # prolongation + noise reduction
+│   ├── test_amr_refine.c     # oct-tree refinement + multi-level ghost
 │   └── convergence.sh          # 3-resolution convergence check
 ├── docs/
 │   ├── physics.md              # variable-to-math mapping
@@ -152,6 +155,7 @@ make test-convergence   # 3-resolution convergence verification
 make test-amr-mesh      # AMR mesh creation + Morton ordering
 make test-amr-ghost     # ghost exchange + multi-block evolution
 make test-amr-prolong   # prolongation + noise reduction (CAKO/CAHD/SSL)
+make test-amr-refine    # oct-tree refinement + multi-level ghost exchange
 make clean
 ```
 
