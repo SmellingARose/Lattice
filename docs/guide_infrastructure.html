@@ -1,0 +1,585 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lattice &mdash; Infrastructure Learning Guide</title>
+<style>
+/* ===== Reset & Base ===== */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { font-size: 15px; scroll-behavior: smooth; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  color: #2d333b; background: #f6f8fa; line-height: 1.6;
+  display: flex; min-height: 100vh;
+}
+
+/* ===== Sidebar ===== */
+nav.sidebar {
+  position: fixed; top: 0; left: 0; bottom: 0; width: 260px;
+  background: #1c2128; color: #adbac7; overflow-y: auto;
+  padding: 20px 0; z-index: 100; font-size: 0.87rem;
+}
+nav.sidebar::-webkit-scrollbar { width: 6px; }
+nav.sidebar::-webkit-scrollbar-thumb { background: #444c56; border-radius: 3px; }
+nav.sidebar .logo { padding: 0 20px 18px; border-bottom: 1px solid #373e47; margin-bottom: 12px; }
+nav.sidebar .logo h1 { font-size: 1.25rem; color: #e6edf3; font-weight: 700; letter-spacing: 0.5px; }
+nav.sidebar .logo p { font-size: 0.75rem; color: #768390; margin-top: 2px; }
+nav.sidebar ul { list-style: none; }
+nav.sidebar ul li a {
+  display: block; padding: 6px 20px; color: #adbac7; text-decoration: none;
+  transition: background 0.15s, color 0.15s;
+}
+nav.sidebar ul li a:hover { background: #262c36; color: #e6edf3; }
+nav.sidebar ul li a.section-header {
+  font-size: 0.7rem; text-transform: uppercase; letter-spacing: 1.2px;
+  color: #636e7b; margin-top: 14px; pointer-events: none; font-weight: 600;
+}
+
+/* ===== Main content ===== */
+main {
+  margin-left: 260px; flex: 1; padding: 32px 48px 80px;
+  max-width: 1100px;
+}
+main h2 {
+  font-size: 1.5rem; color: #1c2128; margin-top: 44px; margin-bottom: 12px;
+  padding-bottom: 8px; border-bottom: 2px solid #d0d7de;
+}
+main h2:first-of-type { margin-top: 0; }
+main h3 { font-size: 1.15rem; color: #2d333b; margin-top: 28px; margin-bottom: 8px; }
+main h4 { font-size: 1rem; color: #444c56; margin-top: 18px; margin-bottom: 6px; }
+main p { margin-bottom: 10px; }
+main ul, main ol { margin-left: 22px; margin-bottom: 10px; }
+main li { margin-bottom: 4px; }
+main code {
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', Menlo, Consolas, monospace;
+  font-size: 0.88em; background: #eef1f5; padding: 1px 5px; border-radius: 3px;
+}
+main pre {
+  background: #1c2128; color: #adbac7; padding: 16px 20px; border-radius: 6px;
+  overflow-x: auto; font-size: 0.82rem; line-height: 1.55; margin: 12px 0 16px;
+  font-family: 'SF Mono', 'Fira Code', Menlo, Consolas, monospace;
+}
+main pre code { background: none; padding: 0; color: inherit; font-size: inherit; }
+a { color: #2f81f7; text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ===== Banner ===== */
+.banner {
+  background: #ddf4ff; border: 1px solid #54aeff44; border-radius: 6px;
+  padding: 14px 18px; margin-bottom: 24px; font-size: 0.88rem; color: #1a4b77;
+}
+.banner strong { color: #0550ae; }
+
+/* ===== Warning banner ===== */
+.warn-banner {
+  background: #fff8c5; border: 1px solid #d4a72c66; border-radius: 6px;
+  padding: 14px 18px; margin: 14px 0 18px; font-size: 0.88rem; color: #6a4e00;
+}
+.warn-banner strong { color: #7c4d12; }
+
+/* ===== File table ===== */
+table.file-table {
+  width: 100%; border-collapse: collapse; margin: 12px 0 20px; font-size: 0.88rem;
+}
+table.file-table th {
+  text-align: left; padding: 8px 10px; background: #eef1f5;
+  border-bottom: 2px solid #d0d7de; font-weight: 600; color: #1c2128;
+}
+table.file-table td {
+  padding: 7px 10px; border-bottom: 1px solid #d8dee4; vertical-align: top;
+}
+table.file-table tr:hover td { background: #f3f6fa; }
+table.file-table td:first-child { font-family: 'SF Mono', Menlo, monospace; font-size: 0.84em; white-space: nowrap; }
+
+/* ===== Collapsible sections ===== */
+details { margin: 10px 0; }
+details > summary {
+  cursor: pointer; font-weight: 600; color: #1c2128; padding: 10px 14px;
+  background: #f3f6fa; border: 1px solid #d8dee4; border-radius: 6px;
+  list-style: none; user-select: none; transition: background 0.15s;
+}
+details > summary::-webkit-details-marker { display: none; }
+details > summary::before {
+  content: '\25B6'; display: inline-block; margin-right: 8px; font-size: 0.7em;
+  transition: transform 0.2s; color: #636e7b;
+}
+details[open] > summary::before { transform: rotate(90deg); }
+details > summary:hover { background: #eaeff4; }
+details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-top: none; border-radius: 0 0 6px 6px; }
+
+/* ===== Diagram ===== */
+.diagram {
+  background: #1c2128; color: #7ee787; padding: 20px 24px; border-radius: 6px;
+  font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 0.78rem;
+  line-height: 1.5; overflow-x: auto; margin: 14px 0 18px; white-space: pre;
+}
+.diagram .comment { color: #636e7b; }
+.diagram .highlight { color: #f0883e; }
+.diagram .type { color: #79c0ff; }
+.diagram .fn { color: #d2a8ff; }
+.diagram .err { color: #f85149; font-weight: 700; }
+.diagram .ok { color: #3fb950; font-weight: 700; }
+
+/* ===== Responsive ===== */
+@media (max-width: 900px) {
+  nav.sidebar { position: static; width: 100%; }
+  main { margin-left: 0; padding: 20px; }
+}
+</style>
+</head>
+<body>
+
+<!-- ===== SIDEBAR ===== -->
+<nav class="sidebar">
+  <div class="logo">
+    <h1>Lattice</h1>
+    <p>Infrastructure Learning Guide</p>
+  </div>
+  <ul>
+    <li><a class="section-header">Guide Sections</a></li>
+    <li><a href="#overview">Overview</a></li>
+    <li><a href="#grid">The 3D Grid</a></li>
+    <li><a href="#memory">Memory Layout (SoA vs AoS)</a></li>
+    <li><a href="#fields">The 25 Evolved Fields</a></li>
+    <li><a href="#ghosts">Ghost Zones</a></li>
+    <li><a href="#backend">Backend Abstraction</a></li>
+    <li><a href="#together">Putting It Together</a></li>
+    <li><a href="#summary">Summary Table</a></li>
+
+    <li><a class="section-header">Other Docs</a></li>
+    <li><a href="architecture.html">Architecture Reference</a></li>
+    <li><a href="phase3_ghost_exchange.html">Ghost Exchange Deep-Dive</a></li>
+    <li><a href="physics.md">Physics Variable Map</a></li>
+  </ul>
+</nav>
+
+<!-- ===== MAIN ===== -->
+<main>
+
+<div class="banner">
+  <strong>Learning guide.</strong> Explains the foundational data structures and abstractions in Lattice: the grid, field layout, memory model, ghost zones, and backend dispatch. Read this before diving into the evolution equations or AMR code.<br>
+  <strong>Source files:</strong> <code>src/core/grid.h</code>, <code>src/core/grid.c</code>, <code>src/core/fields.h</code>, <code>src/core/params.h</code>, <code>src/backend/backend.h</code>
+</div>
+
+<!-- ========================================== -->
+<h2 id="overview">1. Overview</h2>
+
+<p>Lattice solves Einstein's field equations in the CCZ4 formulation to simulate black hole spacetimes. The infrastructure layer handles a single job: give the physics code a fast, portable way to read and write 25 three-dimensional arrays of doubles. Everything else &mdash; the grid, field layout, memory allocation, ghost zones, and CPU/GPU dispatch &mdash; exists to support that.</p>
+
+<h3>The Simulation Loop</h3>
+
+<div class="diagram"><span class="highlight">One time step (RK4 integration):</span>
+
+  <span class="fn">rk4_step</span>()                         <span class="comment">// numerics/rk4.c</span>
+    |
+    +-- for each RK sub-stage:
+    |     |
+    |     +-- <span class="fn">backend_compute_rhs</span>()     <span class="comment">// backend dispatches to CPU or GPU</span>
+    |     |     |
+    |     |     +-- for each interior point (i,j,k):
+    |     |           |
+    |     |           +-- <span class="fn">ccz4_rhs_point</span>()  <span class="comment">// reads fields[], writes rhs[]</span>
+    |     |                 |
+    |     |                 +-- <span class="type">FD_D1/FD_D2</span>   <span class="comment">// 4th-order finite differences</span>
+    |     |                 +-- <span class="type">Christoffels</span>  <span class="comment">// from metric + derivatives</span>
+    |     |                 +-- <span class="type">Ricci tensor</span>  <span class="comment">// from Christoffels + 2nd derivs</span>
+    |     |                 +-- <span class="type">CCZ4 RHS</span>      <span class="comment">// 25 evolution equations</span>
+    |     |
+    |     +-- <span class="fn">apply_dissipation</span>()       <span class="comment">// 6th-order Kreiss-Oliger</span>
+    |     +-- <span class="fn">sommerfeld_bc</span>()            <span class="comment">// radiative boundary conditions</span>
+    |     +-- combine: U += dt * c_s * rhs  <span class="comment">// RK stage update</span>
+    |
+    +-- <span class="fn">enforce_algebraic</span>()          <span class="comment">// det(gambar)=1, tr(Abar)=0</span></div>
+
+<p>The physics kernel (<code>ccz4_rhs_point</code>) runs once per grid point per RK sub-stage. With N=128 and RK4, that is 128^3 * 4 = ~8.4 million kernel calls per time step. The infrastructure must make each call cheap: no allocation, no branching, just pointer arithmetic and floating-point math.</p>
+
+
+<!-- ========================================== -->
+<h2 id="grid">2. The 3D Grid</h2>
+
+<p>The <code>grid_t</code> struct in <code>src/core/grid.h</code> represents a uniform three-dimensional Cartesian grid. The physical domain is a cube of side length <code>L</code>, centered at the origin, divided into <code>N</code> cells per side, with <code>ghost</code> layers of extra cells on each face for finite difference stencils.</p>
+
+<h3>Key grid parameters</h3>
+
+<table class="file-table">
+<tr><th>Field</th><th>Formula</th><th>Example (N=64, L=10)</th></tr>
+<tr><td>N</td><td>Interior cells per side (padded to multiple of 16)</td><td>64</td></tr>
+<tr><td>ghost</td><td>GHOST_WIDTH = 4</td><td>4</td></tr>
+<tr><td>Ntotal</td><td>N + 2 * ghost</td><td>72</td></tr>
+<tr><td>dx</td><td>L / N</td><td>0.15625</td></tr>
+<tr><td>npoints</td><td>Ntotal^3</td><td>373,248</td></tr>
+</table>
+
+<h3>IDX: flat 3D indexing</h3>
+
+<p>Every field is stored as a flat 1D array of <code>npoints</code> doubles. The <code>IDX</code> macro converts (i, j, k) to a linear index, with x as the innermost (unit-stride) dimension:</p>
+
+<pre><code>#define IDX(g, i, j, k)  ((k) * (g)->Ntotal * (g)->Ntotal + (j) * (g)->Ntotal + (i))</code></pre>
+
+<p>The <code>STRIDE</code> macros give the index offset for moving one cell in each direction. Finite difference stencils use these to step through memory without recomputing <code>IDX</code>:</p>
+
+<pre><code>#define STRIDE_X          1                          // x is unit stride
+#define STRIDE_Y(g)       ((g)->Ntotal)              // one full row
+#define STRIDE_Z(g)       ((g)->Ntotal * (g)->Ntotal) // one full plane</code></pre>
+
+<h3>COORD: cell-centered physical coordinates</h3>
+
+<p>Grid points are cell-centered: the coordinate of cell <code>i</code> sits at the center of that cell, not at its edge. The domain runs from <code>-L/2</code> to <code>+L/2</code>:</p>
+
+<pre><code>#define COORD(g, i)  (((i) - (g)->ghost + 0.5) * (g)->dx - (g)->L * 0.5)</code></pre>
+
+<p>For N=64, L=10: cell <code>i=4</code> (first interior cell) maps to <code>x = (0 + 0.5) * 0.15625 - 5.0 = -4.921875</code>.</p>
+
+<h3>Loop ordering: z (outer) to x (inner)</h3>
+
+<div class="diagram"><span class="highlight">Standard triple loop over interior points:</span>
+
+for (int k = ghost; k &lt; ghost + N; k++)       <span class="comment">// z: outermost</span>
+    for (int j = ghost; j &lt; ghost + N; j++)   <span class="comment">// y: middle</span>
+        for (int i = ghost; i &lt; ghost + N; i++) <span class="comment">// x: innermost (unit stride!)</span>
+            idx = <span class="fn">IDX</span>(g, i, j, k);
+            <span class="comment">// fields[f][idx], fields[f][idx+1], fields[f][idx+2]...</span>
+            <span class="comment">// ^ consecutive x cells are adjacent in memory</span>
+
+<span class="type">Why x innermost?</span>
+When the inner loop increments i, it advances by STRIDE_X = 1.
+Consecutive iterations read <span class="ok">adjacent memory addresses</span>.
+The CPU prefetcher loads entire cache lines (64 bytes = 8 doubles),
+so each cache fetch serves 8 consecutive x-loop iterations.
+
+If z were innermost, each iteration would jump by Ntotal^2 = 5184 doubles
+= 41,472 bytes. Every single access would be a <span class="err">cache miss</span>.</div>
+
+
+<!-- ========================================== -->
+<h2 id="memory">3. Memory Layout: SoA vs AoS</h2>
+
+<p>Lattice uses <strong>Struct-of-Arrays (SoA)</strong> layout. Each of the 25 fields gets its own contiguous array of <code>npoints</code> doubles. The alternative, Array-of-Structs (AoS), would interleave all 25 field values at each grid point.</p>
+
+<h3>Side-by-side comparison</h3>
+
+<div class="diagram"><span class="highlight">Array-of-Structs (AoS) &mdash; NOT used</span>
+
+Memory: [chi_0 h11_0 h12_0 ... B3_0] [chi_1 h11_1 h12_1 ... B3_1] [chi_2 ...]
+         |&lt;--- 25 doubles (pt 0) ---&gt;| |&lt;--- 25 doubles (pt 1) ---&gt;|
+
+Stencil for chi at point i needs: chi at i-2, i-1, i, i+1, i+2
+Memory offsets:  ...(i-2)*25, (i-1)*25, i*25, (i+1)*25, (i+2)*25...
+Stride = <span class="err">25 doubles = 200 bytes between stencil neighbors</span>
+One cache line (64 bytes) covers &lt; 1 stencil point.
+
+
+<span class="highlight">Struct-of-Arrays (SoA) &mdash; what Lattice uses</span>
+
+Memory: [chi_0 chi_1 chi_2 chi_3 chi_4 chi_5 chi_6 chi_7 ...]   <span class="comment">&lt;-- chi array</span>
+        [h11_0 h11_1 h11_2 h11_3 h11_4 h11_5 h11_6 h11_7 ...]   <span class="comment">&lt;-- h11 array</span>
+        ...25 separate arrays...
+
+Stencil for chi at point i needs: chi at i-2, i-1, i, i+1, i+2
+Memory offsets:  ...i-2, i-1, i, i+1, i+2...
+Stride = <span class="ok">1 double = 8 bytes between stencil neighbors</span>
+One cache line (64 bytes) covers <span class="ok">8 stencil points</span>.</div>
+
+<p>For stencil-heavy PDE solvers, SoA is the clear winner. Every finite difference operation reads consecutive memory addresses in the x-direction, and the prefetcher can serve the entire stencil from one or two cache lines.</p>
+
+<h3>Page-aligned contiguous blocks</h3>
+
+<p>Rather than allocating 25 separate arrays per group, Lattice allocates one large contiguous block per group, then slices it into per-field pointers:</p>
+
+<pre><code>// One allocation: 25 fields * npoints doubles, page-aligned
+g->fields_block = posix_memalign(4096, NUM_FIELDS * npoints * sizeof(double));
+
+// Per-field pointers are offsets into the block
+for (int f = 0; f < NUM_FIELDS; f++)
+    g->fields[f] = g->fields_block + f * npoints;</code></pre>
+
+<p>Page alignment (4096 bytes) enables zero-copy GPU buffer mapping &mdash; the OS can map these pages directly into GPU address space without copying.</p>
+
+<h3>Memory budget</h3>
+
+<table class="file-table">
+<tr><th>Method</th><th>Blocks</th><th>Formula</th><th>N=64</th><th>N=128</th><th>N=256</th></tr>
+<tr><td>CK45 (default)</td><td>3 (fields, rhs, scratch)</td><td>3 * 25 * Ntotal^3 * 8B</td><td>215 MB</td><td>1.5 GB</td><td>10.3 GB</td></tr>
+<tr><td>Classic RK4</td><td>4 (+ accum)</td><td>4 * 25 * Ntotal^3 * 8B</td><td>287 MB</td><td>2.0 GB</td><td>13.7 GB</td></tr>
+</table>
+
+<div class="banner">
+<strong>Why CK45 saves memory.</strong> The Carpenter-Kennedy low-storage RK method needs only 3 working arrays (fields, rhs, scratch) instead of 4. At N=256, this saves 3.4 GB &mdash; the difference between fitting in 16 GB (Apple M4) and not.
+</div>
+
+
+<!-- ========================================== -->
+<h2 id="fields">4. The 25 Evolved Fields</h2>
+
+<p>Lattice evolves 25 scalar fields on the grid. These encode the geometry of curved spacetime in the CCZ4 formulation. Here is what each group represents in plain language:</p>
+
+<table class="file-table">
+<tr><th>Field</th><th>Count</th><th>Plain English</th></tr>
+<tr><td>chi</td><td>1</td><td>How much space is stretched or compressed. Near a black hole, chi approaches zero &mdash; space is infinitely stretched.</td></tr>
+<tr><td>h_ij</td><td>6</td><td>The shape of space. A symmetric 3x3 matrix encoding distances in the x, y, z directions and their cross-terms. Flat space: identity matrix.</td></tr>
+<tr><td>K</td><td>1</td><td>Is space expanding or contracting? The trace of extrinsic curvature. Positive K means space is shrinking; negative means expanding.</td></tr>
+<tr><td>A_ij</td><td>6</td><td>How space is being sheared. The traceless part of the extrinsic curvature &mdash; measures shape change without volume change.</td></tr>
+<tr><td>Theta</td><td>1</td><td>CCZ4 error tracker. Should be zero in exact solutions. Non-zero values indicate constraint violations that the damping terms will suppress.</td></tr>
+<tr><td>Gamma^i</td><td>3</td><td>Connection functions encoding how the coordinate grid bends through space. Evolved independently to improve numerical stability.</td></tr>
+<tr><td>lapse (alpha)</td><td>1</td><td>How fast does time pass here? The lapse is ~1 far from a black hole, and drops toward ~0.3 at the puncture (the "trumpet" shape).</td></tr>
+<tr><td>shift (beta^i)</td><td>3</td><td>How do coordinates slide? The shift vector moves grid points to prevent them from falling into the black hole (the "moving puncture" trick).</td></tr>
+<tr><td>B^i</td><td>3</td><td>Auxiliary field for the Gamma-driver shift condition. Damps oscillations in the shift to keep the coordinates smooth.</td></tr>
+</table>
+
+<h3>The field enum</h3>
+
+<pre><code>enum {
+    FIELD_CHI = 0,                    // 1 scalar
+    FIELD_H11, FIELD_H12, FIELD_H13,  // 6 components of symmetric h_ij
+    FIELD_H22, FIELD_H23, FIELD_H33,
+    FIELD_K,                          // 1 scalar
+    FIELD_A11, FIELD_A12, FIELD_A13,  // 6 components of symmetric A_ij
+    FIELD_A22, FIELD_A23, FIELD_A33,
+    FIELD_THETA,                      // 1 scalar
+    FIELD_GAMMA1, FIELD_GAMMA2, FIELD_GAMMA3,  // 3-vector
+    FIELD_LAPSE,                      // 1 scalar
+    FIELD_SHIFT1, FIELD_SHIFT2, FIELD_SHIFT3,  // 3-vector
+    FIELD_B1, FIELD_B2, FIELD_B3,     // 3-vector
+    NUM_FIELDS                        // = 25
+};</code></pre>
+
+<details>
+<summary>Deep dive: symmetric tensor storage</summary>
+<div class="detail-body">
+<p>A symmetric 3x3 matrix has only 6 independent components (the diagonal plus the upper triangle). Both <code>h_ij</code> and <code>A_ij</code> are stored as 6 consecutive field slots. The <code>sym_table</code> maps 2D indices to flat indices:</p>
+
+<pre><code>static const int sym_table[3][3] = {
+    {0, 1, 2},   // (0,0)=0  (0,1)=1  (0,2)=2
+    {1, 3, 4},   // (1,0)=1  (1,1)=3  (1,2)=4
+    {2, 4, 5}    // (2,0)=2  (2,1)=4  (2,2)=5
+};
+#define SYM_INDEX(i, j) (sym_table[(i)][(j)])</code></pre>
+
+<p>In physics code, you access <code>h_ij</code> component (i,j) via <code>fields[FIELD_H_START + SYM_INDEX(i,j)]</code>. The symmetry <code>SYM_INDEX(i,j) == SYM_INDEX(j,i)</code> is automatic from the table.</p>
+
+<p>In the RHS evaluation, the metric and extrinsic curvature are loaded into local <code>double[3][3]</code> arrays for clarity. This duplicates the 3 off-diagonal values but makes the tensor algebra readable &mdash; the compiler optimizes it away.</p>
+</div>
+</details>
+
+<details>
+<summary>Deep dive: the append-only invariant</summary>
+<div class="detail-body">
+<p>The field enum is <strong>append-only</strong>: new fields may only be added at the end, before <code>NUM_FIELDS</code>. Existing entries must never be reordered or removed. This invariant exists because:</p>
+
+<ul>
+<li>Output files record field indices. Changing the enum breaks backward compatibility with saved data.</li>
+<li>The GPU backend may pack field pointers into device arrays. Stable indices prevent synchronization bugs.</li>
+<li>Phase 2 will add 6 Maxwell fields (<code>E_i</code>, <code>B_i</code>) at indices 25&ndash;30. All existing Phase 1 code continues to work unchanged because <code>NUM_FIELDS</code> simply increases from 25 to 31.</li>
+</ul>
+</div>
+</details>
+
+
+<!-- ========================================== -->
+<h2 id="ghosts">5. Ghost Zones</h2>
+
+<p>Ghost zones are extra cells surrounding the physical (interior) domain. They hold copies of data from neighboring blocks or boundary conditions, so that finite difference stencils at interior edges have valid data to read.</p>
+
+<h3>1D slice of the grid</h3>
+
+<div class="diagram"><span class="highlight">1D view: Ntotal = N + 2*ghost  (ghost = 4)</span>
+
+index:    0   1   2   3 | 4   5   6   7   ...  67 | 68  69  70  71
+          |&lt;-- ghost --&gt;| |&lt;------ interior ------&gt;| |&lt;-- ghost --&gt;|
+          g   g   g   g   I   I   I   I        I     g   g   g   g
+
+<span class="type">ghost cells</span> = filled by boundary conditions or neighbor exchange
+<span class="type">interior cells</span> = computed by the physics kernel
+
+Cell 4 (first interior) uses stencil reaching left to cell 0:
+  FD_D1:  cells 2,3,4,5,6       <span class="comment">(4th-order, 5-point)</span>
+  FD_D2:  cells 2,3,4,5,6       <span class="comment">(4th-order, 5-point)</span>
+  KO:     cells 1,2,3,4,5,6,7   <span class="comment">(6th-order, 7-point)</span>
+
+Cell 67 (last interior) uses stencil reaching right to cell 71:
+  FD_D1:  cells 65,66,67,68,69
+  FD_D2:  cells 65,66,67,68,69
+  KO:     cells 64,65,66,67,68,69,70</div>
+
+<h3>Stencil widths</h3>
+
+<table class="file-table">
+<tr><th>Operation</th><th>Order</th><th>Points</th><th>Reach (cells from center)</th></tr>
+<tr><td>FD_D1 (first derivative)</td><td>4th</td><td>5</td><td>2 left, 2 right</td></tr>
+<tr><td>FD_D2 (second derivative)</td><td>4th</td><td>5</td><td>2 left, 2 right</td></tr>
+<tr><td>Kreiss-Oliger dissipation</td><td>6th</td><td>7</td><td>3 left, 3 right</td></tr>
+<tr><td>Advection (upwind)</td><td>4th</td><td>6</td><td>3 left, 2 right (or 2,3)</td></tr>
+</table>
+
+<div class="banner">
+<strong>Why ghost width = 4.</strong> The widest stencil (KO dissipation + advection) reaches 3 cells from center. With width 4, even the last interior cell's stencil stays within bounds &mdash; no special-case boundary code needed. The extra cell of padding provides safety margin for future stencil extensions.
+</div>
+
+<h3>Ghost zones in 3D</h3>
+
+<div class="diagram"><span class="highlight">Cross-section of a 3D grid (y-z plane at fixed x):</span>
+
+          +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+          |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  z = Ntotal-1
+          |  <span class="comment">ghost</span>  |  |  |  |  |  |  |  |  |  |  <span class="comment">ghost</span>  |
+          |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+          +--+--+--+--+==+==+==+==+==+==+==+==+--+--+--+--+
+          |  |  |  |  || <span class="ok"> interior domain    </span> ||  |  |  |  |
+          |  <span class="comment">ghost</span>  |  ||                      ||  <span class="comment">ghost</span>  |
+          |  |  |  |  ||  Computed by the     ||  |  |  |  |
+          |  |  |  |  ||  physics kernel      ||  |  |  |  |
+          |  |  |  |  ||  (N x N x N cells)   ||  |  |  |  |
+          +--+--+--+--+==+==+==+==+==+==+==+==+--+--+--+--+
+          |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+          |  <span class="comment">ghost</span>  |  |  |  |  |  |  |  |  |  |  <span class="comment">ghost</span>  |
+          |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  z = 0
+          +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+          y=0         y=ghost                  y=ghost+N    y=Ntotal-1
+
+<span class="comment">Corner ghost cells (e.g., z=0,y=0) need data from diagonal neighbors.</span>
+<span class="comment">In AMR, this is the "26-neighbor" exchange (6 faces + 12 edges + 8 corners).</span></div>
+
+
+<!-- ========================================== -->
+<h2 id="backend">6. Backend Abstraction</h2>
+
+<p>The backend layer in <code>src/backend/</code> provides a single entry point for computing the RHS over the entire grid. Physics code never knows whether it is running on CPU threads or GPU teams.</p>
+
+<h3>The 3-function interface</h3>
+
+<pre><code>// backend.h &mdash; the complete backend API
+void backend_init(void);                    // setup (no-op for CPU)
+void backend_compute_rhs(rhs, src, g, p, func); // dispatch RHS computation
+void backend_cleanup(void);                 // teardown (no-op for CPU)</code></pre>
+
+<p>The <code>rhs_point_func_t</code> is a function pointer to the per-point RHS evaluator. The CPU backend calls it through the pointer; the GPU backend calls <code>ccz4_rhs_point</code> directly (GPU offloading cannot use function pointers).</p>
+
+<h3>CPU implementation</h3>
+
+<pre><code>// backend_cpu.c
+void backend_compute_rhs(rhs, src, g, p, func) {
+    #pragma omp parallel for collapse(2) schedule(static)
+    for (int k = lo; k < hi; k++)
+        for (int j = lo; j < hi; j++)
+            for (int i = lo; i < hi; i++)
+                func(rhs, src, g, p, i, j, k);  // function pointer call
+}</code></pre>
+
+<h3>GPU implementation</h3>
+
+<pre><code>// backend_gpu.c
+void backend_compute_rhs(rhs, src, g, p, func) {
+    (void)func;  // GPU calls ccz4_rhs_point directly
+    #pragma omp target teams distribute parallel for collapse(3)
+    for (int k = lo; k < hi; k++)
+        for (int j = lo; j < hi; j++)
+            for (int i = lo; i < hi; i++)
+                ccz4_rhs_point(rhs, src, g, p, i, j, k);
+}</code></pre>
+
+<details>
+<summary>Why OpenMP target instead of CUDA or Metal?</summary>
+<div class="detail-body">
+<p>The physics kernels are pure C &mdash; no platform-specific intrinsics, no shared memory management, no warp-level operations. OpenMP target offloading lets the same source code compile for CPU (threads) and GPU (teams) with only a pragma change. Benefits:</p>
+<ul>
+<li><strong>Single codebase.</strong> No .cu files, no .metal shaders, no HIP translation. One C file compiles for all targets.</li>
+<li><strong>Vendor-neutral.</strong> GCC 15 targets both NVIDIA (nvptx) and AMD (amdgcn) GPUs from the same source.</li>
+<li><strong>Simpler debugging.</strong> Build with <code>BACKEND=cpu</code> and debug with standard tools. The GPU build is the same code with different pragmas.</li>
+</ul>
+<p>The tradeoff: OpenMP target offloading generates less optimized GPU code than hand-tuned CUDA. For Lattice, this is acceptable &mdash; the CCZ4 kernel is compute-bound (not memory-bound), and the 20-100x speedup over CPU is sufficient for production runs.</p>
+</div>
+</details>
+
+<details>
+<summary>GPU limitations and build system</summary>
+<div class="detail-body">
+<p><strong>Function pointers:</strong> OpenMP target regions cannot use function pointers. The GPU backend hardcodes the call to <code>ccz4_rhs_point</code>. If a second RHS function is needed (e.g., Maxwell), a new backend dispatch function would be added.</p>
+<p><strong>Stack size:</strong> The CCZ4 kernel declares large local arrays (derivative tensors, Christoffel symbols, Ricci components &mdash; ~4 KB per thread). GCC's default GPU stack is too small, requiring <code>GOMP_NVPTX_NATIVE_GPU_THREAD_STACK_SIZE=16384</code>.</p>
+<p><strong>FP64 requirement:</strong> Numerical relativity requires 64-bit floating point for stability. Consumer GPUs (RTX 4090, etc.) have 1:32 FP64:FP32 ratio, making them impractical. HPC GPUs (V100/A100/H100) have 1:2 ratio.</p>
+<p><strong>Build selection:</strong> The Makefile compiles either <code>backend_cpu.c</code> or <code>backend_gpu.c</code> based on the <code>BACKEND=cpu|gpu</code> flag. Both produce the same <code>backend_compute_rhs</code> symbol. No runtime dispatch &mdash; the backend is chosen at compile time.</p>
+</div>
+</details>
+
+
+<!-- ========================================== -->
+<h2 id="together">7. Putting It Together</h2>
+
+<p>Here is the data flow for one RHS evaluation at a single grid point, showing how the infrastructure pieces connect.</p>
+
+<div class="diagram"><span class="highlight">Data flow: one RHS evaluation at point (i, j, k)</span>
+
+<span class="fn">backend_compute_rhs</span>() dispatches to <span class="fn">ccz4_rhs_point</span>(rhs, src, g, p, i, j, k)
+    |
+    |  <span class="type">1. Compute flat index</span>
+    |  idx = IDX(g, i, j, k)  =  k*Ntotal^2 + j*Ntotal + i
+    |
+    |  <span class="type">2. Read field values at this point</span>
+    |  chi   = src[FIELD_CHI][idx]
+    |  h[a][b] = src[FIELD_H_START + SYM_INDEX(a,b)][idx]   <span class="comment">// 6 reads</span>
+    |  K     = src[FIELD_K][idx]
+    |  ...   <span class="comment">// 25 field reads total</span>
+    |
+    |  <span class="type">3. Compute derivatives via stencil macros</span>
+    |  d1_chi[dir] = FD_D1(src[FIELD_CHI], idx, STRIDE)     <span class="comment">// 5-pt stencil</span>
+    |  d2_chi[d1][d2] = FD_D2(src[FIELD_CHI], idx, S1, S2)  <span class="comment">// 5-pt stencil</span>
+    |  <span class="comment">// ~225 derivative evaluations (25 fields * 3 first + 6 second derivs)</span>
+    |
+    |  <span class="type">4. Build geometric quantities</span>
+    |  Christoffel[i][j][k] = f(h, dh)          <span class="comment">// 27 components</span>
+    |  Ricci[i][j]          = f(Christoffel, d2h) <span class="comment">// 6 components</span>
+    |
+    |  <span class="type">5. Evaluate 25 CCZ4 evolution equations</span>
+    |  rhs[FIELD_CHI][idx]   = ...               <span class="comment">// dt(chi)</span>
+    |  rhs[FIELD_H11][idx]   = ...               <span class="comment">// dt(h_11)</span>
+    |  ...                                        <span class="comment">// 25 writes total</span></div>
+
+<h3>The grid_t struct: pointers into blocks</h3>
+
+<div class="diagram"><span class="highlight">grid_t memory layout</span>
+
+grid_t {
+    N=64, ghost=4, Ntotal=72, dx=0.15625, npoints=373248
+
+    fields[25]  ----+    <span class="comment">25 pointers, each into fields_block</span>
+    rhs[25]     ----|    <span class="comment">25 pointers, each into rhs_block</span>
+    scratch[25] ----|    <span class="comment">25 pointers, each into scratch_block</span>
+    accum[25]   ----|    <span class="comment">25 pointers (NULL if CK45)</span>
+                    |
+                    v
+    <span class="type">fields_block</span>  [=====chi=====|=====h11=====|....|=====B3=====]
+                   ^             ^                      ^
+                   |             |                      |
+              fields[0]     fields[1]             fields[24]
+              (npoints       (npoints              (npoints
+               doubles)       doubles)              doubles)
+
+    <span class="type">rhs_block</span>     [=====chi=====|=====h11=====|....|=====B3=====]
+    <span class="type">scratch_block</span> [=====chi=====|=====h11=====|....|=====B3=====]
+
+    Each block = 25 * 373,248 * 8 bytes = <span class="fn">~71 MB</span>
+    Total (CK45) = 3 blocks = <span class="fn">~213 MB</span>
+    <span class="comment">All blocks are page-aligned (4096 bytes) via posix_memalign</span></div>
+
+
+<!-- ========================================== -->
+<h2 id="summary">8. Summary: Key Design Decisions</h2>
+
+<table class="file-table">
+<tr><th>#</th><th>Decision</th><th>Rationale</th></tr>
+<tr><td>1</td><td>SoA memory layout</td><td>Stencil operations stride through one field at a time. SoA makes consecutive x-cells adjacent in memory, enabling cache-line prefetching.</td></tr>
+<tr><td>2</td><td>x innermost, z outermost</td><td>Unit-stride x access gives optimal cache behavior. OpenMP parallelizes over z-planes (collapse(2) for z,y), keeping x sequential for prefetching.</td></tr>
+<tr><td>3</td><td>Ghost width = 4</td><td>Covers the widest stencil (6th-order KO: reach 3) with one cell of margin. Avoids special-case boundary logic inside the physics kernel.</td></tr>
+<tr><td>4</td><td>Contiguous block allocation</td><td>One posix_memalign per group instead of 25 separate mallocs. Enables zero-copy GPU mapping and reduces TLB misses.</td></tr>
+<tr><td>5</td><td>Page alignment (4096B)</td><td>Required for zero-copy GPU buffer mapping. Also avoids false sharing on cache-line boundaries between fields.</td></tr>
+<tr><td>6</td><td>N padded to multiple of 16</td><td>Ensures Ntotal aligns to 128-byte boundaries (16 doubles). Optimal for AVX-512 vector loads and GPU warp-width access patterns.</td></tr>
+<tr><td>7</td><td>Append-only field enum</td><td>Stable field indices across code changes and output files. Phase 2 adds fields without breaking Phase 1 code or saved data.</td></tr>
+<tr><td>8</td><td>Compile-time backend selection</td><td>No runtime dispatch overhead. The Makefile links exactly one backend .o file. Physics code sees only backend.h.</td></tr>
+<tr><td>9</td><td>CK45 default (3 blocks, not 4)</td><td>Saves 25% memory at no accuracy cost. Critical for fitting N=128 simulations in 16 GB (Apple M4).</td></tr>
+</table>
+
+<p style="margin-top: 32px;"><a href="architecture.html">&larr; Back to Architecture Reference</a></p>
+
+</main>
+</body>
+</html>

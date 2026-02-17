@@ -1,0 +1,737 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lattice &mdash; CCZ4 Physics Guide</title>
+<style>
+/* ===== Reset & Base ===== */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { font-size: 15px; scroll-behavior: smooth; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  color: #2d333b; background: #f6f8fa; line-height: 1.6;
+  display: flex; min-height: 100vh;
+}
+
+/* ===== Sidebar ===== */
+nav.sidebar {
+  position: fixed; top: 0; left: 0; bottom: 0; width: 260px;
+  background: #1c2128; color: #adbac7; overflow-y: auto;
+  padding: 20px 0; z-index: 100; font-size: 0.87rem;
+}
+nav.sidebar::-webkit-scrollbar { width: 6px; }
+nav.sidebar::-webkit-scrollbar-thumb { background: #444c56; border-radius: 3px; }
+nav.sidebar .logo { padding: 0 20px 18px; border-bottom: 1px solid #373e47; margin-bottom: 12px; }
+nav.sidebar .logo h1 { font-size: 1.25rem; color: #e6edf3; font-weight: 700; letter-spacing: 0.5px; }
+nav.sidebar .logo p { font-size: 0.75rem; color: #768390; margin-top: 2px; }
+nav.sidebar ul { list-style: none; }
+nav.sidebar ul li a {
+  display: block; padding: 6px 20px; color: #adbac7; text-decoration: none;
+  transition: background 0.15s, color 0.15s;
+}
+nav.sidebar ul li a:hover { background: #262c36; color: #e6edf3; }
+nav.sidebar ul li a.section-header {
+  font-size: 0.7rem; text-transform: uppercase; letter-spacing: 1.2px;
+  color: #636e7b; margin-top: 14px; pointer-events: none; font-weight: 600;
+}
+nav.sidebar ul li a .status-dot {
+  display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle;
+}
+.dot-green { background: #3fb950; }
+.dot-yellow { background: #d29922; }
+.dot-red { background: #f85149; }
+.dot-gray { background: #636e7b; }
+
+/* ===== Main content ===== */
+main {
+  margin-left: 260px; flex: 1; padding: 32px 48px 80px;
+  max-width: 1100px;
+}
+main h2 {
+  font-size: 1.5rem; color: #1c2128; margin-top: 44px; margin-bottom: 12px;
+  padding-bottom: 8px; border-bottom: 2px solid #d0d7de;
+}
+main h2:first-of-type { margin-top: 0; }
+main h3 { font-size: 1.15rem; color: #2d333b; margin-top: 28px; margin-bottom: 8px; }
+main h4 { font-size: 1rem; color: #444c56; margin-top: 18px; margin-bottom: 6px; }
+main p { margin-bottom: 10px; }
+main ul, main ol { margin-left: 22px; margin-bottom: 10px; }
+main li { margin-bottom: 4px; }
+main code {
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', Menlo, Consolas, monospace;
+  font-size: 0.88em; background: #eef1f5; padding: 1px 5px; border-radius: 3px;
+}
+main pre {
+  background: #1c2128; color: #adbac7; padding: 16px 20px; border-radius: 6px;
+  overflow-x: auto; font-size: 0.82rem; line-height: 1.55; margin: 12px 0 16px;
+  font-family: 'SF Mono', 'Fira Code', Menlo, Consolas, monospace;
+}
+main pre code { background: none; padding: 0; color: inherit; font-size: inherit; }
+a { color: #2f81f7; text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ===== Banner ===== */
+.banner {
+  background: #ddf4ff; border: 1px solid #54aeff44; border-radius: 6px;
+  padding: 14px 18px; margin-bottom: 24px; font-size: 0.88rem; color: #1a4b77;
+}
+.banner strong { color: #0550ae; }
+
+/* ===== Warning banner ===== */
+.warn-banner {
+  background: #fff8c5; border: 1px solid #d4a72c66; border-radius: 6px;
+  padding: 14px 18px; margin: 14px 0 18px; font-size: 0.88rem; color: #6a4e00;
+}
+.warn-banner strong { color: #7c4d12; }
+
+/* ===== Status badges ===== */
+.badge {
+  display: inline-block; font-size: 0.72rem; font-weight: 600; padding: 2px 8px;
+  border-radius: 10px; vertical-align: middle; letter-spacing: 0.3px;
+}
+.badge-green { background: #2ea04333; color: #1a7f37; }
+.badge-yellow { background: #d299221a; color: #9a6700; }
+.badge-red { background: #f8514933; color: #cf222e; }
+.badge-gray { background: #636e7b22; color: #57606a; }
+
+/* ===== File table ===== */
+table.file-table {
+  width: 100%; border-collapse: collapse; margin: 12px 0 20px; font-size: 0.88rem;
+}
+table.file-table th {
+  text-align: left; padding: 8px 10px; background: #eef1f5;
+  border-bottom: 2px solid #d0d7de; font-weight: 600; color: #1c2128;
+}
+table.file-table td {
+  padding: 7px 10px; border-bottom: 1px solid #d8dee4; vertical-align: top;
+}
+table.file-table tr:hover td { background: #f3f6fa; }
+table.file-table td:first-child { font-family: 'SF Mono', Menlo, monospace; font-size: 0.84em; white-space: nowrap; }
+
+/* ===== Collapsible sections ===== */
+details { margin: 10px 0; }
+details > summary {
+  cursor: pointer; font-weight: 600; color: #1c2128; padding: 10px 14px;
+  background: #f3f6fa; border: 1px solid #d8dee4; border-radius: 6px;
+  list-style: none; user-select: none; transition: background 0.15s;
+}
+details > summary::-webkit-details-marker { display: none; }
+details > summary::before {
+  content: '\25B6'; display: inline-block; margin-right: 8px; font-size: 0.7em;
+  transition: transform 0.2s; color: #636e7b;
+}
+details[open] > summary::before { transform: rotate(90deg); }
+details > summary:hover { background: #eaeff4; }
+details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-top: none; border-radius: 0 0 6px 6px; }
+
+/* ===== Diagram ===== */
+.diagram {
+  background: #1c2128; color: #7ee787; padding: 20px 24px; border-radius: 6px;
+  font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 0.78rem;
+  line-height: 1.5; overflow-x: auto; margin: 14px 0 18px; white-space: pre;
+}
+.diagram .comment { color: #636e7b; }
+.diagram .highlight { color: #f0883e; }
+.diagram .type { color: #79c0ff; }
+.diagram .fn { color: #d2a8ff; }
+.diagram .err { color: #f85149; font-weight: 700; }
+.diagram .ok { color: #3fb950; font-weight: 700; }
+
+/* ===== Responsive ===== */
+@media (max-width: 900px) {
+  nav.sidebar { position: static; width: 100%; }
+  main { margin-left: 0; padding: 20px; }
+}
+</style>
+</head>
+<body>
+
+<!-- ===== SIDEBAR ===== -->
+<nav class="sidebar">
+  <div class="logo">
+    <h1>Lattice</h1>
+    <p>CCZ4 Physics Guide</p>
+  </div>
+  <ul>
+    <li><a class="section-header">Formulation</a></li>
+    <li><a href="#what-is-ccz4">What is CCZ4?</a></li>
+    <li><a href="#variables">The 25 Variables</a></li>
+    <li><a href="#evolution">Evolution Equations</a></li>
+
+    <li><a class="section-header">Numerical Methods</a></li>
+    <li><a href="#finite-diff">Finite Differences</a></li>
+    <li><a href="#rk4">RK4 Time Integration</a></li>
+    <li><a href="#dissipation">Kreiss-Oliger Dissipation</a></li>
+    <li><a href="#sommerfeld">Sommerfeld BCs</a></li>
+
+    <li><a class="section-header">Physics</a></li>
+    <li><a href="#gauge">Moving Puncture Gauge</a></li>
+    <li><a href="#puncture-id">Puncture Initial Data</a></li>
+    <li><a href="#constraints">Constraints</a></li>
+    <li><a href="#psi4">Psi4 / Gravitational Waves</a></li>
+
+    <li><a class="section-header">Reference</a></li>
+    <li><a href="#source-map">Source File Map</a></li>
+    <li><a href="#parameters">CCZ4 Parameters</a></li>
+
+    <li><a class="section-header">Other Docs</a></li>
+    <li><a href="architecture.html">Architecture Map</a></li>
+    <li><a href="phase3_ghost_exchange.html">Ghost Exchange</a></li>
+  </ul>
+</nav>
+
+<!-- ===== MAIN ===== -->
+<main>
+
+<div class="banner">
+  <strong>Learning guide.</strong> Walks through the CCZ4 physics implemented in Lattice &mdash; from Einstein's equations down to source-level details. Start here if you want to understand what the code computes and why.<br>
+  <strong>Last updated:</strong> 2026-02-17 &nbsp;|&nbsp; <strong>Primary source:</strong> <code>src/evolution/ccz4_rhs.c</code>
+</div>
+
+<!-- ========================================== -->
+<h2 id="what-is-ccz4">1. What is CCZ4?</h2>
+
+<h3>Einstein's equations in one sentence</h3>
+<p>General relativity says spacetime curvature equals energy-momentum content: <strong>G = 8 pi T</strong>. For vacuum (no matter), this simplifies to R = 0 &mdash; the Ricci tensor vanishes. The problem: these are 10 coupled nonlinear PDEs in 4 dimensions. You cannot evolve them forward in time directly because time and space are tangled together.</p>
+
+<h3>The 3+1 split</h3>
+<p>The first step is to separate time from space. Slice 4D spacetime into a stack of 3D spatial "snapshots" (hypersurfaces). Between slices, you need two pieces of information: the <strong>lapse</strong> (how much proper time elapses between slices) and the <strong>shift</strong> (how spatial coordinates slide sideways between slices). The 3D geometry of each slice is described by the spatial metric gamma and the extrinsic curvature K (how the slice bends in 4D). This is the <strong>ADM formalism</strong> (Arnowitt, Deser, Misner).</p>
+
+<h3>Why ADM is unstable</h3>
+<p>The ADM equations are only <em>weakly hyperbolic</em>. In practice, small numerical errors grow exponentially and crash the simulation within tens of timesteps. Every modern NR code uses a reformulation that is <em>strongly hyperbolic</em>.</p>
+
+<h3>BSSN: "split how big from what shape"</h3>
+<p>The BSSN (Baumgarte-Shapiro-Shibata-Nakamura) formulation factors the spatial metric into an overall scale factor <code>chi</code> and a unit-determinant "conformal" metric <code>h_ij</code>. Think of it as separating <em>how big</em> the geometry is (chi) from <em>what shape</em> it has (h_ij). Similarly, the extrinsic curvature is split into its trace K and a traceless conformal part A_ij. Three extra evolved variables (the conformal connection functions Gamma^i) are introduced to make the system strongly hyperbolic. This stabilizes the simulation dramatically.</p>
+
+<h3>CCZ4: cruise control for constraints</h3>
+<p>Even BSSN has a problem: Einstein's equations include <strong>constraint equations</strong> (the Hamiltonian and momentum constraints) that must hold on every time slice. Analytically they are preserved, but numerically they drift. BSSN does nothing to correct this drift.</p>
+
+<p>CCZ4 (Conformal Covariant Z4) adds a <strong>constraint damping</strong> mechanism. An extra scalar variable Theta and a vector Z_i are introduced, and terms proportional to kappa1 and kappa2 actively push constraint violations back toward zero. The analogy: BSSN is a car rolling downhill with no brakes; CCZ4 is the same car with cruise control that corrects speed deviations. Lattice implements CCZ4 following arXiv:1106.2254.</p>
+
+<!-- ========================================== -->
+<h2 id="variables">2. The 25 Variables</h2>
+
+<p>Lattice evolves 25 field variables at every grid point, organized into three groups: geometry (how space is shaped), curvature (how space is bending), and gauge (coordinate freedom).</p>
+
+<h3>Group 1: Geometry (7 fields)</h3>
+<table class="file-table">
+<tr><th>Variable</th><th>Count</th><th>Math</th><th>Meaning</th></tr>
+<tr><td>FIELD_CHI</td><td>1</td><td>chi</td><td>Conformal factor. chi = 1 in flat space; chi approaches 0 at a puncture.</td></tr>
+<tr><td>FIELD_H11..H33</td><td>6</td><td>h_ij</td><td>Conformal metric (symmetric 3x3, unit determinant). Identity matrix in flat space.</td></tr>
+</table>
+
+<h3>Group 2: Curvature (11 fields)</h3>
+<table class="file-table">
+<tr><th>Variable</th><th>Count</th><th>Math</th><th>Meaning</th></tr>
+<tr><td>FIELD_K</td><td>1</td><td>K</td><td>Trace of extrinsic curvature. Measures overall expansion/contraction of a slice.</td></tr>
+<tr><td>FIELD_A11..A33</td><td>6</td><td>A_ij</td><td>Traceless conformal extrinsic curvature (symmetric, trace-free). Encodes tidal distortion.</td></tr>
+<tr><td>FIELD_THETA</td><td>1</td><td>Theta</td><td>CCZ4 constraint damping scalar. Should be zero if constraints are satisfied.</td></tr>
+<tr><td>FIELD_GAMMA1..3</td><td>3</td><td>Gamma^i</td><td>Conformal connection functions. Encode derivatives of the conformal metric.</td></tr>
+</table>
+
+<h3>Group 3: Gauge (7 fields)</h3>
+<table class="file-table">
+<tr><th>Variable</th><th>Count</th><th>Math</th><th>Meaning</th></tr>
+<tr><td>FIELD_LAPSE</td><td>1</td><td>alpha</td><td>Lapse function. Controls how fast proper time advances. Collapses to ~0.3 at a puncture.</td></tr>
+<tr><td>FIELD_SHIFT1..3</td><td>3</td><td>beta^i</td><td>Shift vector. Controls how coordinates slide between time slices.</td></tr>
+<tr><td>FIELD_B1..3</td><td>3</td><td>B^i</td><td>Gamma-driver auxiliary. Provides damping for the shift evolution.</td></tr>
+</table>
+
+<h3>Memory layout</h3>
+
+<div class="diagram"><span class="highlight">Struct-of-Arrays (SoA) layout</span>  &mdash;  each field is a contiguous double* array
+
+fields[0]  = FIELD_CHI    : [<span class="type">chi_000</span>, chi_100, chi_200, ... ]   <span class="comment">x is unit-stride</span>
+fields[1]  = FIELD_H11    : [h11_000, h11_100, h11_200, ... ]
+fields[2]  = FIELD_H12    : [h12_000, h12_100, h12_200, ... ]
+  ...
+fields[24] = FIELD_B3     : [B3_000,  B3_100,  B3_200,  ... ]
+
+Index: <span class="fn">IDX(g, i, j, k)</span> = i + Ntotal * (j + Ntotal * k)
+       where Ntotal = N + 2 * ghost,  ghost = 4
+
+<span class="comment">Loop order: k (outer) -> j -> i (inner, unit-stride in x)</span>
+<span class="comment">Allocations: page-aligned (4096 bytes) for GPU zero-copy</span></div>
+
+<p>The field enum in <code>src/core/fields.h</code> is <strong>append-only</strong> &mdash; existing indices must never be reordered. Phase 2 will append E_i and B_i fields (6 more) for Einstein-Maxwell coupling.</p>
+
+<!-- ========================================== -->
+<h2 id="evolution">3. The Evolution Equations</h2>
+
+<p>The core physics kernel is <code>ccz4_rhs_point()</code> in <code>src/evolution/ccz4_rhs.c</code>. It computes the time derivative of all 25 fields at a single grid point. The function proceeds through 11 computation steps.</p>
+
+<div class="diagram"><span class="highlight">ccz4_rhs_point()</span> &mdash; 11 computation steps
+
+ <span class="fn">Step 1</span>   Load fields into locals           <span class="comment">chi, h[3][3], K, A[3][3], Theta, Gamma[3], lapse, shift[3], B[3]</span>
+ <span class="fn">Step 2</span>   First derivatives (d1)             <span class="comment">d1_chi, d1_h, d1_A, d1_K, d1_Theta, d1_lapse, d1_Gamma, d1_shift</span>
+ <span class="fn">Step 3</span>   Second derivatives (d2)            <span class="comment">d2_chi, d2_h, d2_lapse, d2_shift  (diagonal + mixed)</span>
+ <span class="fn">Step 4</span>   Advection derivatives               <span class="comment">beta^a * d_a(f) for every field, using upwind stencil</span>
+    |
+ <span class="fn">Step 5</span>   Inverse metric + Christoffel       <span class="comment">h_UU[3][3], chris.ULL, chris.LLL, chris.contracted</span>
+ <span class="fn">Step 6</span>   Z vector                            <span class="comment">Z_over_chi[i] = 0.5*(Gamma[i] - chris_contracted[i])</span>
+ <span class="fn">Step 7</span>   Ricci tensor with Z terms           <span class="comment">ricci_hat + ricci_chi + z_terms --> ricci.LL, ricci.scalar</span>
+ <span class="fn">Step 8</span>   Covariant derivatives of lapse      <span class="comment">covd2lapse[3][3], tr_covd2lapse, A_UU, tr_A2</span>
+    |
+ <span class="fn">Step 9</span>   <span class="ok">CCZ4 RHS: chi, h, K, A, Theta, Gamma</span>
+ <span class="fn">Step 10</span>  <span class="ok">Moving puncture gauge: lapse, shift, B</span>
+ <span class="fn">Step 11</span>  Store RHS + Kreiss-Oliger dissipation</div>
+
+<details>
+<summary>dt(chi) &mdash; conformal factor evolution</summary>
+<div class="detail-body">
+<p><strong>Conceptual formula:</strong> The conformal factor changes due to the overall expansion rate of the slice (K) minus the coordinate stretching (div shift).</p>
+<pre><code>dt(chi) = advection + (2/3) * chi * (alpha * K - div(shift))</code></pre>
+<p>When CAHD (Coarse-grid-Adjusted Hamiltonian Damping) is enabled, an additional term proportional to the Hamiltonian constraint H is added. This damps constraint violations near punctures on coarse grids.</p>
+<p><strong>Source:</strong> <code>ccz4_rhs.c:288-302</code> &nbsp;|&nbsp; <strong>Ref:</strong> GRChombo CCZ4RHS.impl.hpp:118-119</p>
+</div>
+</details>
+
+<details>
+<summary>dt(h_ij) &mdash; conformal metric evolution</summary>
+<div class="detail-body">
+<p><strong>Conceptual formula:</strong> The shape of space evolves due to tidal distortion (A_ij) plus coordinate deformations (shift derivatives).</p>
+<pre><code>dt(h_ij) = advection - 2*alpha*A_ij - (2/3)*h_ij*div(shift)
+         + h_{ki}*d_j(shift^k) + h_{kj}*d_i(shift^k)</code></pre>
+<p>The last two terms are the Lie derivative of the metric along the shift vector, accounting for coordinate motion.</p>
+<p><strong>Source:</strong> <code>ccz4_rhs.c:307-316</code> &nbsp;|&nbsp; <strong>Ref:</strong> GRChombo CCZ4RHS.impl.hpp:120-129</p>
+</div>
+</details>
+
+<details>
+<summary>dt(K) &mdash; trace of extrinsic curvature</summary>
+<div class="detail-body">
+<p><strong>Conceptual formula:</strong> K evolves due to Ricci curvature, self-interaction (K squared), constraint damping (Theta), and the Laplacian of the lapse.</p>
+<pre><code>dt(K) = advection + alpha*(R + K*(K - 2*Theta))
+      - kappa1*(1 + kappa2)*3*Theta - Laplacian(alpha)</code></pre>
+<p>The kappa1 * Theta term is the CCZ4 constraint damping: it pushes K back toward the constraint surface when Theta is nonzero.</p>
+<p><strong>Source:</strong> <code>ccz4_rhs.c:359-363</code> &nbsp;|&nbsp; <strong>Ref:</strong> GRChombo CCZ4RHS.impl.hpp:183-191</p>
+</div>
+</details>
+
+<details>
+<summary>dt(A_ij) &mdash; traceless conformal extrinsic curvature</summary>
+<div class="detail-body">
+<p><strong>Conceptual formula:</strong> A_ij evolves due to the trace-free part of (Ricci - lapse Hessian), plus nonlinear A-squared terms and shift Lie derivative.</p>
+<pre><code>dt(A_ij) = advection + [-D_i D_j alpha + chi*alpha*R_ij]^TF
+         + A_ij * alpha*(K - 2*Theta) - (2/3)*A_ij*div(shift)
+         + Lie_shift(A_ij) - 2*alpha*A_{ik}*A^k_j</code></pre>
+<p>The TF superscript means "trace-free part" &mdash; the trace is removed using <code>make_trace_free()</code>. This keeps A_ij consistent with its definition as the traceless part of the extrinsic curvature.</p>
+<p><strong>Source:</strong> <code>ccz4_rhs.c:321-340</code> &nbsp;|&nbsp; <strong>Ref:</strong> GRChombo CCZ4RHS.impl.hpp:131-154</p>
+</div>
+</details>
+
+<details>
+<summary>dt(Theta) &mdash; CCZ4 constraint damping scalar</summary>
+<div class="detail-body">
+<p><strong>Conceptual formula:</strong> Theta is driven toward zero by the kappa1 damping term. It also responds to the Hamiltonian constraint (R - A^2 + 2/3 K^2).</p>
+<pre><code>dt(Theta) = advection + 0.5*alpha*(R - A^2 + (2/3)*K^2 - 2*Theta*K)
+          - 0.5*Theta*kappa1*(4 + kappa2*2) - Z . grad(alpha)</code></pre>
+<p>In a well-converged simulation, Theta stays close to zero. Large Theta values indicate constraint violation (a "code smell" for physics bugs).</p>
+<p><strong>Source:</strong> <code>ccz4_rhs.c:344-356</code> &nbsp;|&nbsp; <strong>Ref:</strong> GRChombo CCZ4RHS.impl.hpp:172-180</p>
+</div>
+</details>
+
+<details>
+<summary>dt(Gamma^i) &mdash; conformal connection functions</summary>
+<div class="detail-body">
+<p><strong>Conceptual formula:</strong> The most complex equation. Gamma^i evolves due to shift second derivatives, A_ij gradients, chi gradients, Z vector damping, and interactions with Christoffel symbols.</p>
+<pre><code>dt(Gamma^i) = advection
+  + (2/3)*div(shift)*(Gamma^i_contracted + 2*kappa3*Z/chi^i)
+  - 2*alpha*K*Z/chi^i - 2*kappa1*alpha*Z/chi^i
+  + 2*h^ij*(alpha*d_j Theta - Theta*d_j alpha)
+  - 2*A^ij * d_j alpha
+  - alpha*((4/3)*h^ij*d_j K + 3*A^ij*d_j chi / chi)
+  + 2*alpha*Gamma^i_{jk}*A^{jk}
+  + h^{jk}*d2_shift^i_{jk} + (1/3)*h^{ij}*d2_shift^k_{jk}
+  - (Gamma^j_contracted + 2*kappa3*Z/chi^j)*d_j shift^i</code></pre>
+<p>This equation provides the strong hyperbolicity that makes the system stable. The Gamma^i variables track the contracted Christoffel symbols, and the Z vector correction ensures constraint damping propagates through the connection functions.</p>
+<p><strong>Source:</strong> <code>ccz4_rhs.c:367-395</code> &nbsp;|&nbsp; <strong>Ref:</strong> GRChombo CCZ4RHS.impl.hpp:193-222</p>
+</div>
+</details>
+
+<!-- ========================================== -->
+<h2 id="finite-diff">4. Finite Differences</h2>
+
+<p>All spatial derivatives go through four inline functions in <code>src/numerics/finite_diff.h</code>. No hand-coded stencils are allowed anywhere else in the codebase.</p>
+
+<h3>fd_d1 &mdash; 4th-order first derivative</h3>
+
+<div class="diagram"><span class="highlight">4th-order centered first derivative:  d f / d x</span>
+
+Stencil (5 points, 4 nonzero weights):
+
+    i-2       i-1        i        i+1       i+2
+     |         |         |         |         |
+  <span class="fn">+1/12</span>     <span class="fn">-2/3</span>       0      <span class="fn">+2/3</span>     <span class="fn">-1/12</span>
+     |         |         |         |         |
+
+fd_d1(f, idx, stride, dx) = (<span class="fn">+1/12</span>*f[i-2] <span class="fn">-2/3</span>*f[i-1] <span class="fn">+2/3</span>*f[i+1] <span class="fn">-1/12</span>*f[i+2]) / dx
+
+<span class="comment">Truncation error: O(dx^4).  Doubling resolution cuts error by 16x.</span>
+<span class="comment">Source: finite_diff.h:24-31  |  Ref: GRChombo FourthOrderDerivatives.hpp:36-46</span></div>
+
+<h3>fd_d2 &mdash; 4th-order second derivative</h3>
+
+<div class="diagram"><span class="highlight">4th-order centered second derivative:  d^2 f / d x^2</span>
+
+Stencil (5 points, all nonzero):
+
+    i-2       i-1        i        i+1       i+2
+     |         |         |         |         |
+  <span class="fn">-1/12</span>     <span class="fn">+4/3</span>    <span class="fn">-5/2</span>     <span class="fn">+4/3</span>     <span class="fn">-1/12</span>
+     |         |         |         |         |
+
+fd_d2(f, idx, stride, dx) = (<span class="fn">-1/12</span>*f[i-2] <span class="fn">+4/3</span>*f[i-1] <span class="fn">-5/2</span>*f[i] <span class="fn">+4/3</span>*f[i+1] <span class="fn">-1/12</span>*f[i+2]) / dx^2
+
+<span class="comment">Source: finite_diff.h:37-45  |  Ref: GRChombo FourthOrderDerivatives.hpp:114-128</span></div>
+
+<h3>fd_adv &mdash; 4th-order upwind advection</h3>
+
+<div class="diagram"><span class="highlight">4th-order upwind advection:  beta * d f / d x</span>
+
+Stencil depends on sign of velocity <span class="type">beta</span>:
+
+When beta &gt; 0 (flow to the right), <span class="ok">bias stencil left</span>:
+  i-1       i        i+1       i+2       i+3
+   |        |         |         |         |
+ <span class="fn">-1/4</span>    <span class="fn">-5/6</span>     <span class="fn">+3/2</span>     <span class="fn">-1/2</span>     <span class="fn">+1/12</span>
+
+When beta &lt; 0 (flow to the left), <span class="ok">bias stencil right</span> (mirror):
+  i-3       i-2       i-1        i        i+1
+   |         |         |         |         |
+ <span class="fn">-1/12</span>    <span class="fn">+1/2</span>     <span class="fn">-3/2</span>     <span class="fn">+5/6</span>     <span class="fn">+1/4</span>
+
+<span class="comment">Upwinding prevents numerical oscillations at sharp features (e.g., near punctures).</span>
+<span class="comment">Stencil reaches 3 cells in the upwind direction -- requires ghost width >= 3.</span>
+<span class="comment">Source: finite_diff.h:90-112  |  Ref: GRChombo FourthOrderDerivatives.hpp:269-301</span></div>
+
+<h3>Convergence: why 4th-order matters</h3>
+
+<p>With 4th-order finite differences, doubling the grid resolution (halving dx) reduces the truncation error by a factor of 2^4 = <strong>16</strong>. This is verified by the convergence test (<code>make test-convergence</code>), which runs three resolutions and checks that the error ratio is ~16. If the ratio is significantly different, there is a code bug. This is the single most important diagnostic in the project.</p>
+
+<h3>Stride design</h3>
+
+<p>All stencil functions take a <code>stride</code> parameter instead of a direction index. This allows the same function to compute derivatives in x, y, or z by passing the appropriate stride:</p>
+
+<div class="diagram"><span class="highlight">Stride values for direction selection</span>
+
+STRIDE_X  = 1              <span class="comment">x is unit-stride (innermost loop)</span>
+STRIDE_Y  = Ntotal         <span class="comment">one full row</span>
+STRIDE_Z  = Ntotal^2       <span class="comment">one full slice</span>
+
+<span class="comment">f[idx + stride]  steps one grid point in the chosen direction.</span>
+<span class="comment">f[idx + 2*stride]  steps two grid points.  And so on.</span></div>
+
+<!-- ========================================== -->
+<h2 id="rk4">5. RK4 Time Integration</h2>
+
+<p>Lattice supports two Runge-Kutta methods, selected by <code>--rk classic|ck45</code>. Both are implemented in <code>src/numerics/rk4.c</code>.</p>
+
+<h3>Classic RK4 (4 stages, 4 memory blocks)</h3>
+
+<div class="diagram"><span class="highlight">Classic RK4</span>  &mdash;  4 RHS evaluations per step
+
+Memory blocks: <span class="type">fields</span> (U), <span class="type">scratch</span> (backup), <span class="type">rhs</span> (k), <span class="type">accum</span> (weighted sum)
+
+  scratch = fields                           <span class="comment">save initial state</span>
+  accum   = 0
+
+  <span class="fn">Stage 1:</span> rhs = RHS(fields)
+           accum += (dt/6) * rhs
+           fields = scratch + (dt/2) * rhs   <span class="comment">half-step trial</span>
+
+  <span class="fn">Stage 2:</span> rhs = RHS(fields)
+           accum += (dt/3) * rhs
+           fields = scratch + (dt/2) * rhs   <span class="comment">half-step trial (using k2)</span>
+
+  <span class="fn">Stage 3:</span> rhs = RHS(fields)
+           accum += (dt/3) * rhs
+           fields = scratch + dt * rhs       <span class="comment">full-step trial</span>
+
+  <span class="fn">Stage 4:</span> rhs = RHS(fields)
+           accum += (dt/6) * rhs
+           fields = scratch + accum          <span class="comment">final answer</span>
+
+  <span class="ok">Enforce algebraic constraints</span>               <span class="comment">det(h)=1, tr(A)=0, chi>0, alpha>0</span></div>
+
+<h3>CK45 (5 stages, 3 memory blocks)</h3>
+
+<div class="diagram"><span class="highlight">Carpenter-Kennedy 2N low-storage RK4</span>  &mdash;  5 RHS evaluations per step
+
+Memory blocks: <span class="type">fields</span> (U), <span class="type">scratch</span> (dU), <span class="type">rhs</span> (F)
+<span class="comment">No accum needed -- saves 25% memory!</span>
+
+  dU = 0
+
+  For s = 0, 1, 2, 3, 4:
+    F  = RHS(U)
+    dU = <span class="fn">A[s]</span> * dU + dt * F     <span class="comment">blend old dU with new RHS</span>
+    U += <span class="fn">B[s]</span> * dU              <span class="comment">advance solution</span>
+
+  <span class="ok">Enforce algebraic constraints</span>
+
+CK45 coefficients (exact rational fractions):
+  A[0] =  0.000000    B[0] = 0.149659     <span class="comment">Carpenter & Kennedy, NASA TM-109112</span>
+  A[1] = -0.417890    B[1] = 0.379210     <span class="comment">Solution 3</span>
+  A[2] = -1.192151    B[2] = 0.822955
+  A[3] = -1.697784    B[3] = 0.699450
+  A[4] = -1.514184    B[4] = 0.153057</div>
+
+<h3>Memory comparison</h3>
+
+<table class="file-table">
+<tr><th>Method</th><th>Stages</th><th>Memory blocks</th><th>Memory (N=128, 25 fields)</th></tr>
+<tr><td>Classic RK4</td><td>4</td><td>4 (fields, scratch, rhs, accum)</td><td>~6.7 GB</td></tr>
+<tr><td>CK45</td><td>5</td><td>3 (fields, scratch, rhs)</td><td>~5.0 GB</td></tr>
+</table>
+
+<p>CK45 is the default. It trades 25% more compute (5 vs 4 RHS evaluations) for 25% less memory &mdash; critical when N=128 already uses ~5 GB on a 16 GB Apple M4.</p>
+
+<h3>Algebraic enforcement</h3>
+
+<p>After every complete RK step, two algebraic constraints are enforced at every grid point:</p>
+<ol>
+<li><strong>det(h) = 1:</strong> Rescale h_ij by <code>1/cbrt(det(h))</code> to maintain unit determinant.</li>
+<li><strong>tr(A) = 0:</strong> Subtract <code>(1/3) * h_ij * h^{kl} * A_{kl}</code> from A_ij to remove any accumulated trace.</li>
+</ol>
+<p>Additionally, chi and lapse are floored at 1e-12 to prevent division by zero near punctures.</p>
+
+<!-- ========================================== -->
+<h2 id="dissipation">6. Kreiss-Oliger Dissipation</h2>
+
+<p>Numerical evolution generates high-frequency noise (grid-scale oscillations) that can destabilize the simulation. Kreiss-Oliger (KO) dissipation adds a small amount of artificial viscosity that damps these oscillations without affecting the physically meaningful lower frequencies. Implemented in <code>src/evolution/dissipation.c</code>.</p>
+
+<h3>The 7-point KO stencil (6th-order)</h3>
+
+<div class="diagram"><span class="highlight">6th-order Kreiss-Oliger dissipation stencil</span>
+
+   i-3      i-2      i-1       i       i+1      i+2      i+3
+    |        |        |        |        |        |        |
+ <span class="fn">+1/64</span>   <span class="fn">-6/64</span>  <span class="fn">+15/64</span>  <span class="fn">-20/64</span>  <span class="fn">+15/64</span>  <span class="fn">-6/64</span>   <span class="fn">+1/64</span>
+
+fd_ko(f, idx, stride, dx) = (weights . stencil) / dx
+
+<span class="comment">Applied to all 3 directions and summed: KO = sigma * (ko_x + ko_y + ko_z)</span>
+<span class="comment">This stencil approximates a 6th derivative, so it targets frequencies near dx.</span>
+<span class="comment">Source: finite_diff.h:122-136  |  Ref: GRChombo FourthOrderDerivatives.hpp:361-378</span></div>
+
+<p>The stencil reaches 3 cells in each direction, which is why the ghost zone width must be at least 3 (Lattice uses 4 to also accommodate the upwind advection stencil).</p>
+
+<h3>CAKO: Chi-Adjusted KO</h3>
+
+<p>Near a black hole puncture, chi approaches zero. Standard KO dissipation at full strength in this region can interfere with the puncture dynamics. CAKO (Chi-Adjusted Kreiss-Oliger) scales the dissipation by W = sqrt(chi), which naturally suppresses it near punctures:</p>
+
+<pre><code>sigma_eff = W * sigma_base      where W = sqrt(max(chi, 1e-10))</code></pre>
+
+<p>At the puncture center (chi ~ 0), dissipation vanishes. Far from the puncture (chi ~ 1), dissipation operates at full strength. Ref: arXiv:2404.01137, Eq. (20).</p>
+
+<h3>Per-field sigma</h3>
+
+<p>Gauge fields (lapse, shift, B) benefit from stronger dissipation than physical fields (chi, h, K, A, Theta, Gamma). When per-field sigma is enabled:</p>
+
+<table class="file-table">
+<tr><th>Field type</th><th>Fields</th><th>Default sigma</th></tr>
+<tr><td>Gauge</td><td>lapse, shift^i, B^i</td><td>0.99</td></tr>
+<tr><td>Physical</td><td>chi, h_ij, K, A_ij, Theta, Gamma^i</td><td>0.3</td></tr>
+</table>
+
+<!-- ========================================== -->
+<h2 id="sommerfeld">7. Sommerfeld Boundary Conditions</h2>
+
+<h3>The wave reflection problem</h3>
+
+<p>A finite computational domain has boundaries. If you simply set boundary values to their initial data, outgoing gravitational waves hit the boundary and reflect back into the domain, corrupting the simulation. You need boundary conditions that let waves leave cleanly.</p>
+
+<h3>Radiative (Sommerfeld) boundary conditions</h3>
+
+<p>The Sommerfeld condition assumes all fields near the boundary behave like outgoing spherical waves plus a static asymptotic value:</p>
+
+<div class="diagram"><span class="highlight">Sommerfeld outgoing wave equation</span>
+
+  dt(f) = <span class="fn">-(x^i / r) * d_i f</span>  +  <span class="fn">(f_asymptotic - f) / r</span>
+           ~~~~~~~~~~~~~~~~~~~      ~~~~~~~~~~~~~~~~~~~~~~~~~
+           outgoing wave term       decay-to-asymptotic term
+
+<span class="comment">The first term propagates the field outward at the speed of light.</span>
+<span class="comment">The second term gently pushes the field toward its flat-space value at large r.</span></div>
+
+<h3>Asymptotic values</h3>
+
+<table class="file-table">
+<tr><th>Field</th><th>Asymptotic value</th><th>Reason</th></tr>
+<tr><td>chi</td><td>1.0</td><td>Flat space has unit conformal factor</td></tr>
+<tr><td>h11, h22, h33</td><td>1.0</td><td>Flat conformal metric = identity</td></tr>
+<tr><td>lapse</td><td>1.0</td><td>Flat space has unit lapse</td></tr>
+<tr><td>All others</td><td>0.0</td><td>K, A_ij, Theta, Gamma, shift, B, off-diag h all vanish in flat space</td></tr>
+</table>
+
+<h3>Block-aware variant</h3>
+
+<p>For AMR multi-block meshes, <code>apply_sommerfeld_block()</code> only applies Sommerfeld BCs to ghost points adjacent to actual domain boundaries (where <code>on_boundary[face] == 1</code>). Ghost zones shared with neighboring blocks are filled by the ghost exchange instead. Physical coordinates use <code>BLOCK_COORD()</code> to account for the block's position in the global domain.</p>
+
+<p><strong>Source:</strong> <code>src/boundary/sommerfeld.c</code> &nbsp;|&nbsp; <strong>Ref:</strong> GRChombo BoundaryConditions.cpp:593-661</p>
+
+<!-- ========================================== -->
+<h2 id="gauge">8. Moving Puncture Gauge</h2>
+
+<p>The lapse and shift are not determined by Einstein's equations &mdash; they represent coordinate freedom. The "moving puncture" gauge choice is the standard for black hole simulations.</p>
+
+<h3>Bona-Masso lapse (1+log slicing)</h3>
+
+<pre><code>dt(alpha) = advec_coeff * beta^i d_i alpha
+          - c * alpha^p * (K - 2*Theta)</code></pre>
+
+<p>With defaults <code>c = 2.0</code> and <code>p = 1.0</code>, this gives "1+log" slicing. The lapse collapses (alpha approaches 0) in regions of strong curvature, naturally avoiding the singularity inside a black hole. Near a Schwarzschild puncture, the lapse settles to the "trumpet" profile with alpha ~ 0.3 at the puncture center.</p>
+
+<h3>Gamma-driver shift</h3>
+
+<pre><code>dt(beta^i) = advec_coeff * beta^j d_j beta^i + F * B^i
+dt(B^i)    = advec_coeff * (beta^j d_j B^i - beta^j d_j Gamma^i) + dt(Gamma^i) - eta * B^i</code></pre>
+
+<p>The Gamma-driver shift makes the coordinates co-move with the puncture, preventing the coordinate singularity from running away. The damping parameter <code>eta = 1.0</code> prevents the shift from oscillating. The auxiliary variable B^i provides the necessary memory for this second-order-in-time evolution.</p>
+
+<h3>SSL: Slow-Start Lapse</h3>
+
+<p>At the start of a simulation, the initial lapse (alpha = sqrt(chi)) is not the true trumpet solution. The gauge dynamics produce a large initial pulse as the lapse adjusts. SSL adds a temporary Gaussian damping term that drives the lapse toward W = sqrt(chi) during early evolution, then decays to zero:</p>
+
+<pre><code>rhs_lapse += -W * h_ssl * exp(-t^2 / (2*sigma_t^2)) * (alpha - W)</code></pre>
+
+<p>This damps the initial gauge wave, allowing a cleaner start. After t ~ 100M, the exponential factor makes this term negligible. Ref: arXiv:2404.01137, Eq. (27).</p>
+
+<p><strong>Source:</strong> <code>ccz4_rhs.c:398-425</code> &nbsp;|&nbsp; <strong>Ref:</strong> GRChombo MovingPunctureGauge.hpp:54-65</p>
+
+<!-- ========================================== -->
+<h2 id="puncture-id">9. Puncture Initial Data</h2>
+
+<p>A black hole is represented as a "puncture" &mdash; a point where the conformal factor diverges (chi goes to zero). Lattice implements Brill-Lindquist initial data for N non-spinning, uncharged black holes at rest. Source: <code>src/initial_data/puncture.c</code>.</p>
+
+<h3>Brill-Lindquist conformal factor</h3>
+
+<div class="diagram"><span class="highlight">Brill-Lindquist: psi = 1 + sum_n M_n / (2 r_n)</span>
+
+For a single BH with mass M at the origin:
+
+  psi(r) = 1 + M / (2r)
+
+  chi = 1 / psi^4
+
+            chi
+         1 |.............................
+           |
+     0.5   |     .
+           |   .
+         0 |__._________________________
+           0    M/2     2M     4M    r
+
+<span class="comment">chi approaches 0 at the puncture (r=0), reaches 1 far from the BH.</span>
+<span class="comment">The conformal metric h_ij = delta_ij (flat).</span>
+<span class="comment">Physical metric gamma_ij = psi^4 * delta_ij = delta_ij / chi.</span></div>
+
+<h3>Initial field values</h3>
+
+<table class="file-table">
+<tr><th>Field</th><th>Value</th><th>Notes</th></tr>
+<tr><td>chi</td><td>1 / psi^4</td><td>Computed from Brill-Lindquist psi</td></tr>
+<tr><td>h_ij</td><td>delta_ij</td><td>Flat conformal metric (identity)</td></tr>
+<tr><td>K</td><td>0</td><td>Time-symmetric (no initial expansion)</td></tr>
+<tr><td>A_ij</td><td>0</td><td>No initial tidal distortion</td></tr>
+<tr><td>Theta</td><td>0</td><td>Constraints satisfied initially</td></tr>
+<tr><td>Gamma^i</td><td>0</td><td>Christoffels of flat conformal metric vanish</td></tr>
+<tr><td>lapse</td><td>sqrt(chi)</td><td>Pre-collapsed: avoids large initial gauge pulse</td></tr>
+<tr><td>shift^i</td><td>0</td><td>Coordinates initially at rest</td></tr>
+<tr><td>B^i</td><td>0</td><td>No initial shift evolution</td></tr>
+</table>
+
+<h3>Why lapse = sqrt(chi)?</h3>
+
+<p>The "obvious" choice alpha = 1 everywhere produces a violent initial gauge pulse as the lapse rapidly collapses near the puncture. Setting alpha = sqrt(chi) = 1/psi^2 provides a pre-collapsed lapse that is already close to the trumpet solution. This dramatically reduces initial transients and lets the simulation settle to the physical solution faster. Combined with SSL, this gives a clean start for single-BH evolutions.</p>
+
+<!-- ========================================== -->
+<h2 id="constraints">10. Constraints</h2>
+
+<p>The Hamiltonian and momentum constraints are "checksums" on the simulation. If the numerical solution satisfies Einstein's equations perfectly, these constraints vanish identically. In practice, they measure how much numerical error has accumulated.</p>
+
+<h3>Hamiltonian constraint</h3>
+
+<pre><code>H = R + (2/3)*K^2 - A^{ij}*A_{ij}</code></pre>
+
+<p>This uses the Ricci scalar with <strong>Z = 0</strong> (the pure geometric Ricci, not the CCZ4 Ricci with Z terms). This matches GRChombo's <code>NewConstraints</code> implementation, which calls <code>compute_ricci</code> without Z contributions.</p>
+
+<h3>Momentum constraint</h3>
+
+<pre><code>M_i = -(2/3)*d_i K + h^{jk}*covd_k A_{ji} - (3/(2*chi))*h^{jk}*A_{ij}*d_k chi</code></pre>
+
+<p>The covariant derivative of A includes Christoffel symbol corrections: <code>covd_k A_{ij} = d_k A_{ij} - Gamma^l_{ki} A_{lj} - Gamma^l_{kj} A_{li}</code>.</p>
+
+<h3>L2 norm monitoring</h3>
+
+<p>The constraint violation is measured as an L2 (root-mean-square) norm over the interior grid points:</p>
+
+<pre><code>L2(H) = sqrt( sum(H^2) / N_points )
+L2(M) = sqrt( sum(|M|^2) / (3 * N_points) )</code></pre>
+
+<p>For the flat spacetime test, L2(H) must remain below 1e-10 after 1000 steps. For a single Schwarzschild puncture, constraints should converge at 4th order (16x reduction when doubling resolution).</p>
+
+<p><strong>Source:</strong> <code>src/diagnostics/constraints.c</code> &nbsp;|&nbsp; <strong>Ref:</strong> GRChombo NewConstraints.impl.hpp:55-100</p>
+
+<!-- ========================================== -->
+<h2 id="psi4">11. Psi4 / Gravitational Waves</h2>
+
+<p>Psi4 (the Newman-Penrose Weyl scalar) encodes the outgoing gravitational wave content of the spacetime. It is the primary observable for comparing numerical relativity simulations with gravitational wave detector data.</p>
+
+<h3>What Psi4 measures</h3>
+
+<p>Psi4 is a complex scalar constructed from the Weyl curvature tensor projected onto a null tetrad (a set of four null vectors adapted to the outgoing radiation direction). At large distances from the source, Psi4 is directly related to the gravitational wave strain: <code>h_+ - i*h_x = integral(integral(Psi4))</code>.</p>
+
+<h3>Extraction procedure</h3>
+
+<p>The standard approach is to extract Psi4 on a coordinate sphere at a fixed extraction radius r_ex (typically 50-100M), decompose it into spin-weighted spherical harmonics Y^{-2}_{lm}, and record the dominant (l=2, m=2) mode as a function of time. This gives the gravitational waveform.</p>
+
+<div class="warn-banner">
+<strong>Not yet implemented.</strong> Psi4 extraction is planned for Phase 1, Milestone 5 (binary inspiral). The file <code>src/diagnostics/psi4.c</code> does not yet exist. The GRChombo reference for implementation is <code>Source/CCZ4/Weyl4.impl.hpp</code>.
+</div>
+
+<!-- ========================================== -->
+<h2 id="source-map">Source File Map</h2>
+
+<table class="file-table">
+<tr><th>File</th><th>Role</th><th>Key functions</th></tr>
+<tr><td>src/evolution/ccz4_rhs.c</td><td>CCZ4 right-hand-side</td><td><code>ccz4_rhs_point()</code> &mdash; all 25 evolution equations at one point</td></tr>
+<tr><td>src/evolution/dissipation.c</td><td>Kreiss-Oliger dissipation</td><td><code>add_ko_dissipation()</code> &mdash; CAKO + per-field sigma</td></tr>
+<tr><td>src/numerics/finite_diff.h</td><td>FD stencils (all inline)</td><td><code>fd_d1()</code>, <code>fd_d2()</code>, <code>fd_d2_mixed()</code>, <code>fd_adv()</code>, <code>fd_ko()</code></td></tr>
+<tr><td>src/numerics/rk4.c</td><td>Time integration</td><td><code>rk4_step()</code>, <code>rk4_step_mesh()</code> &mdash; classic RK4 + CK45</td></tr>
+<tr><td>src/geometry/tensor_utils.h</td><td>Tensor algebra (all inline)</td><td><code>compute_christoffel()</code>, <code>compute_inverse_sym()</code>, <code>make_trace_free()</code></td></tr>
+<tr><td>src/initial_data/puncture.c</td><td>Puncture initial data</td><td><code>set_brill_lindquist()</code>, <code>set_flat_spacetime()</code></td></tr>
+<tr><td>src/diagnostics/constraints.c</td><td>Constraint monitoring</td><td><code>compute_hamiltonian_at()</code>, <code>compute_momentum_at()</code>, <code>compute_constraint_l2()</code></td></tr>
+<tr><td>src/boundary/sommerfeld.c</td><td>Radiative BCs</td><td><code>apply_sommerfeld()</code>, <code>apply_sommerfeld_block()</code></td></tr>
+<tr><td>src/core/fields.h</td><td>Field enum + loop macros</td><td><code>FIELD_CHI..FIELD_B3</code>, <code>FOR1..FOR4</code>, <code>NUM_FIELDS = 25</code></td></tr>
+<tr><td>src/core/grid.h</td><td>Grid indexing</td><td><code>IDX()</code>, <code>STRIDE_X/Y/Z</code>, <code>COORD()</code></td></tr>
+<tr><td>src/backend/backend.h</td><td>CPU/GPU abstraction</td><td><code>backend_compute_rhs()</code> &mdash; dispatches to OpenMP threads or GPU target</td></tr>
+</table>
+
+<!-- ========================================== -->
+<h2 id="parameters">CCZ4 Parameters</h2>
+
+<table class="file-table">
+<tr><th>Parameter</th><th>Default</th><th>Description</th></tr>
+<tr><td>kappa1</td><td>0.1</td><td>Constraint damping strength for Theta and Z_i. Larger = more aggressive damping.</td></tr>
+<tr><td>kappa2</td><td>0.0</td><td>Controls mix of Theta damping in K equation.</td></tr>
+<tr><td>kappa3</td><td>1.0</td><td>Controls Z contribution in Gamma^i equation.</td></tr>
+<tr><td>sigma</td><td>0.3</td><td>Kreiss-Oliger dissipation strength (when per-field sigma disabled).</td></tr>
+<tr><td>lapse_coeff</td><td>2.0</td><td>Coefficient c in 1+log slicing: dt(alpha) = -c * alpha * (K - 2*Theta).</td></tr>
+<tr><td>lapse_power</td><td>1.0</td><td>Power p in Bona-Masso: f(alpha) = c * alpha^(p-2). p=1 gives standard 1+log.</td></tr>
+<tr><td>shift_Gamma_coeff</td><td>0.75</td><td>Coefficient F in dt(beta^i) = F * B^i.</td></tr>
+<tr><td>eta</td><td>1.0</td><td>Gamma-driver damping: dt(B^i) = dt(Gamma^i) - eta * B^i.</td></tr>
+<tr><td>CFL</td><td>0.25</td><td>Courant-Friedrichs-Lewy factor: dt = CFL * dx.</td></tr>
+<tr><td>rk_method</td><td>CK45</td><td>Time integrator: classic (4 stages, 4 blocks) or CK45 (5 stages, 3 blocks).</td></tr>
+</table>
+
+<p style="margin-top: 40px;">
+  <a href="architecture.html">&larr; Architecture Map</a> &nbsp;|&nbsp;
+  <a href="phase3_ghost_exchange.html">Ghost Exchange Deep-Dive &rarr;</a>
+</p>
+
+</main>
+</body>
+</html>

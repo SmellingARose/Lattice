@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lattice &mdash; Debugging the Dimension-Sweep Bug</title>
+<style>
+/* ===== Reset & Base ===== */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { font-size: 15px; scroll-behavior: smooth; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  color: #2d333b; background: #f6f8fa; line-height: 1.6;
+  display: flex; min-height: 100vh;
+}
+
+/* ===== Sidebar ===== */
+nav.sidebar {
+  position: fixed; top: 0; left: 0; bottom: 0; width: 260px;
+  background: #1c2128; color: #adbac7; overflow-y: auto;
+  padding: 20px 0; z-index: 100; font-size: 0.87rem;
+}
+nav.sidebar::-webkit-scrollbar { width: 6px; }
+nav.sidebar::-webkit-scrollbar-thumb { background: #444c56; border-radius: 3px; }
+nav.sidebar .logo { padding: 0 20px 18px; border-bottom: 1px solid #373e47; margin-bottom: 12px; }
+nav.sidebar .logo h1 { font-size: 1.25rem; color: #e6edf3; font-weight: 700; letter-spacing: 0.5px; }
+nav.sidebar .logo p { font-size: 0.75rem; color: #768390; margin-top: 2px; }
+nav.sidebar ul { list-style: none; }
+nav.sidebar ul li a {
+  display: block; padding: 6px 20px; color: #adbac7; text-decoration: none;
+  transition: background 0.15s, color 0.15s;
+}
+nav.sidebar ul li a:hover { background: #262c36; color: #e6edf3; }
+nav.sidebar ul li a.section-header {
+  font-size: 0.7rem; text-transform: uppercase; letter-spacing: 1.2px;
+  color: #636e7b; margin-top: 14px; pointer-events: none; font-weight: 600;
+}
+nav.sidebar ul li a .status-dot {
+  display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle;
+}
+.dot-green { background: #3fb950; }
+.dot-yellow { background: #d29922; }
+.dot-red { background: #f85149; }
+.dot-gray { background: #636e7b; }
+
+/* ===== Main content ===== */
+main {
+  margin-left: 260px; flex: 1; padding: 32px 48px 80px;
+  max-width: 1100px;
+}
+main h2 {
+  font-size: 1.5rem; color: #1c2128; margin-top: 44px; margin-bottom: 12px;
+  padding-bottom: 8px; border-bottom: 2px solid #d0d7de;
+}
+main h2:first-of-type { margin-top: 0; }
+main h3 { font-size: 1.15rem; color: #2d333b; margin-top: 28px; margin-bottom: 8px; }
+main h4 { font-size: 1rem; color: #444c56; margin-top: 18px; margin-bottom: 6px; }
+main p { margin-bottom: 10px; }
+main ul, main ol { margin-left: 22px; margin-bottom: 10px; }
+main li { margin-bottom: 4px; }
+main code {
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', Menlo, Consolas, monospace;
+  font-size: 0.88em; background: #eef1f5; padding: 1px 5px; border-radius: 3px;
+}
+main pre {
+  background: #1c2128; color: #adbac7; padding: 16px 20px; border-radius: 6px;
+  overflow-x: auto; font-size: 0.82rem; line-height: 1.55; margin: 12px 0 16px;
+  font-family: 'SF Mono', 'Fira Code', Menlo, Consolas, monospace;
+}
+main pre code { background: none; padding: 0; color: inherit; font-size: inherit; }
+a { color: #2f81f7; text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ===== Banner ===== */
+.banner {
+  background: #ddf4ff; border: 1px solid #54aeff44; border-radius: 6px;
+  padding: 14px 18px; margin-bottom: 24px; font-size: 0.88rem; color: #1a4b77;
+}
+.banner strong { color: #0550ae; }
+
+/* ===== Warning banner ===== */
+.warn-banner {
+  background: #fff8c5; border: 1px solid #d4a72c66; border-radius: 6px;
+  padding: 14px 18px; margin: 14px 0 18px; font-size: 0.88rem; color: #6a4e00;
+}
+.warn-banner strong { color: #7c4d12; }
+
+/* ===== Error banner ===== */
+.err-banner {
+  background: #ffebe9; border: 1px solid #f8514944; border-radius: 6px;
+  padding: 14px 18px; margin: 14px 0 18px; font-size: 0.88rem; color: #82071e;
+}
+.err-banner strong { color: #cf222e; }
+
+/* ===== Status badges ===== */
+.badge {
+  display: inline-block; font-size: 0.72rem; font-weight: 600; padding: 2px 8px;
+  border-radius: 10px; vertical-align: middle; letter-spacing: 0.3px;
+}
+.badge-green { background: #2ea04333; color: #1a7f37; }
+.badge-yellow { background: #d299221a; color: #9a6700; }
+.badge-red { background: #f8514933; color: #cf222e; }
+.badge-gray { background: #636e7b22; color: #57606a; }
+
+/* ===== File table ===== */
+table.file-table {
+  width: 100%; border-collapse: collapse; margin: 12px 0 20px; font-size: 0.88rem;
+}
+table.file-table th {
+  text-align: left; padding: 8px 10px; background: #eef1f5;
+  border-bottom: 2px solid #d0d7de; font-weight: 600; color: #1c2128;
+}
+table.file-table td {
+  padding: 7px 10px; border-bottom: 1px solid #d8dee4; vertical-align: top;
+}
+table.file-table tr:hover td { background: #f3f6fa; }
+table.file-table td:first-child { font-family: 'SF Mono', Menlo, monospace; font-size: 0.84em; white-space: nowrap; }
+
+/* ===== Collapsible sections ===== */
+details { margin: 10px 0; }
+details > summary {
+  cursor: pointer; font-weight: 600; color: #1c2128; padding: 10px 14px;
+  background: #f3f6fa; border: 1px solid #d8dee4; border-radius: 6px;
+  list-style: none; user-select: none; transition: background 0.15s;
+}
+details > summary::-webkit-details-marker { display: none; }
+details > summary::before {
+  content: '\25B6'; display: inline-block; margin-right: 8px; font-size: 0.7em;
+  transition: transform 0.2s; color: #636e7b;
+}
+details[open] > summary::before { transform: rotate(90deg); }
+details > summary:hover { background: #eaeff4; }
+details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-top: none; border-radius: 0 0 6px 6px; }
+
+/* ===== Diagram ===== */
+.diagram {
+  background: #1c2128; color: #7ee787; padding: 20px 24px; border-radius: 6px;
+  font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 0.78rem;
+  line-height: 1.5; overflow-x: auto; margin: 14px 0 18px; white-space: pre;
+}
+.diagram .comment { color: #636e7b; }
+.diagram .highlight { color: #f0883e; }
+.diagram .type { color: #79c0ff; }
+.diagram .fn { color: #d2a8ff; }
+.diagram .err { color: #f85149; font-weight: 700; }
+.diagram .ok { color: #3fb950; font-weight: 700; }
+
+/* ===== Diff blocks ===== */
+.diff {
+  background: #1c2128; color: #adbac7; padding: 16px 20px; border-radius: 6px;
+  overflow-x: auto; font-size: 0.82rem; line-height: 1.55; margin: 12px 0 16px;
+  font-family: 'SF Mono', 'Fira Code', Menlo, Consolas, monospace;
+  white-space: pre;
+}
+.diff .del { color: #f85149; background: #f851491a; display: inline-block; width: 100%; }
+.diff .add { color: #3fb950; background: #3fb9501a; display: inline-block; width: 100%; }
+.diff .ctx { color: #636e7b; }
+.diff .hdr { color: #79c0ff; font-weight: 600; }
+
+/* ===== Timeline ===== */
+.timeline { position: relative; margin: 18px 0 24px 28px; padding-left: 22px; border-left: 3px solid #d0d7de; }
+.timeline .step { position: relative; margin-bottom: 16px; }
+.timeline .step::before {
+  content: ''; position: absolute; left: -28px; top: 4px;
+  width: 12px; height: 12px; border-radius: 50%; background: #636e7b; border: 2px solid #f6f8fa;
+}
+.timeline .step.step-red::before { background: #f85149; }
+.timeline .step.step-yellow::before { background: #d29922; }
+.timeline .step.step-green::before { background: #3fb950; }
+.timeline .step h4 { margin-top: 0; font-size: 0.95rem; }
+.timeline .step p { margin-bottom: 4px; font-size: 0.88rem; }
+
+/* ===== Responsive ===== */
+@media (max-width: 900px) {
+  nav.sidebar { position: static; width: 100%; }
+  main { margin-left: 0; padding: 20px; }
+}
+</style>
+</head>
+<body>
+
+<!-- ===== SIDEBAR ===== -->
+<nav class="sidebar">
+  <div class="logo">
+    <h1>Lattice</h1>
+    <p>Dimension-Sweep Bug Fix</p>
+  </div>
+  <ul>
+    <li><a class="section-header">The Story</a></li>
+    <li><a href="#intro">Introduction</a></li>
+    <li><a href="#symptom"><span class="status-dot dot-red"></span>The Symptom</a></li>
+    <li><a href="#wrong1">Wrong Diagnosis #1</a></li>
+    <li><a href="#wrong2">Wrong Diagnosis #2</a></li>
+    <li><a href="#location">Finding the Location</a></li>
+
+    <li><a class="section-header">Root Cause</a></li>
+    <li><a href="#root-cause"><span class="status-dot dot-red"></span>The Unfilled Corner</a></li>
+    <li><a href="#athenak">The AthenaK Pattern</a></li>
+    <li><a href="#sweep-chain">The Sweep Chain</a></li>
+
+    <li><a class="section-header">The Fix</a></li>
+    <li><a href="#fix"><span class="status-dot dot-green"></span>The 4-Line Fix</a></li>
+    <li><a href="#result">Result</a></li>
+
+    <li><a class="section-header">Takeaways</a></li>
+    <li><a href="#lessons">Lessons Learned</a></li>
+    <li><a href="#methodology">Debugging Methodology</a></li>
+
+    <li><a class="section-header">Navigation</a></li>
+    <li><a href="#references">References</a></li>
+    <li><a href="phase3_ghost_exchange.html">Ghost Exchange Deep-Dive</a></li>
+    <li><a href="architecture.html">Architecture Reference</a></li>
+  </ul>
+</nav>
+
+<!-- ===== MAIN ===== -->
+<main>
+
+<div class="banner">
+  <strong>Debugging case study.</strong> How a 4-line loop-bound change fixed a 4000x error in the AMR ghost exchange pipeline. Covers the wrong turns, the root cause analysis, and the generalizable debugging methodology.<br>
+  <strong>Last updated:</strong> 2026-02-17 &nbsp;|&nbsp; <strong>Source:</strong> <code>src/amr/ghost_exchange.c</code> &nbsp;|&nbsp; <strong>Companion:</strong> <a href="phase3_ghost_exchange.html">Coarse-Buffer Ghost Exchange</a>
+</div>
+
+<!-- ========================================== -->
+<h2 id="intro">Introduction: AMR Ghost Exchange</h2>
+
+<p>In an adaptive mesh refinement (AMR) simulation, blocks at different refinement levels share boundaries. When a fine block (level L+1) neighbors a coarser block (level L), the fine block's ghost cells need data that does not exist at fine resolution. The <strong>multi-level ghost exchange</strong> solves this by interpolating coarse data into fine ghost zones through a 5-phase pipeline.</p>
+
+<p>Lattice implements the <strong>AthenaK coarse-buffer architecture</strong>: each fine block carries a private half-resolution buffer (<code>coarse_buf</code>) that is filled with restricted fine data (Phase 2), given proper ghost zones from neighbors (Phase 3) and boundary extrapolation (Phase 3.5), then prolongated back into the fine block's ghost cells (Phase 4). The full pipeline is documented in the <a href="phase3_ghost_exchange.html">companion deep-dive</a>.</p>
+
+<p>This case study tells the story of a bug in Phase 3.5 that took three debugging attempts to find.</p>
+
+<!-- ========================================== -->
+<h2 id="symptom">The Symptom: Test 6 Fails with O(1) Error</h2>
+
+<p>After implementing the coarse-buffer architecture (AMR Stage 4.1), all tests passed except Test 6: "Multi-level ghost exchange polynomial accuracy." The test creates a 2x2x2 mesh, refines one block to level 1, sets a polynomial <code>f = 1 + 0.001*(x^2 + y^2 + z^2)</code> on all blocks, runs <code>ghost_exchange_multilevel()</code>, then checks that fine ghost cells match the analytic polynomial.</p>
+
+<div class="err-banner">
+  <strong>Test 6 FAIL:</strong> <code>max_err = 0.386</code>, threshold = <code>9.8e-5</code>. The error was 4000x above the acceptable limit. This is an O(1) error &mdash; not a convergence order problem, but a fundamental data-filling failure.
+</div>
+
+<p>The error magnitude immediately ruled out numerical precision issues or stencil-order problems. Something was reading garbage data.</p>
+
+<!-- ========================================== -->
+<h2 id="wrong1">Wrong Diagnosis #1: Blame the Extrapolation Coefficients</h2>
+
+<p>Phase 3.5 uses 3-point Lagrange extrapolation to fill domain-boundary ghost cells. The coefficients for distance <code>d</code> from the boundary are derived from evaluating the Lagrange basis at <code>-d</code>:</p>
+
+<pre><code>d=1: ghost = 3*f[0] - 3*f[1] + 1*f[2]
+d=2: ghost = 6*f[0] - 8*f[1] + 3*f[2]</code></pre>
+
+<p>First hypothesis: the extrapolation coefficients <code>{3, -3, 1}</code> and <code>{6, -8, 3}</code> were wrong, or quadratic extrapolation was the wrong approach entirely. Maybe flat copy (zeroth-order, just replicate the boundary cell) would be more stable.</p>
+
+<div class="warn-banner">
+  <strong>Test:</strong> Replaced quadratic extrapolation with flat copy (<code>ghost[d] = interior[0]</code>). Same error: <code>max_err = 0.386</code>. The extrapolation coefficients were irrelevant &mdash; the bug was not about <em>how</em> the cells were filled, but about <em>which</em> cells were filled at all.
+</div>
+
+<!-- ========================================== -->
+<h2 id="wrong2">Wrong Diagnosis #2: Maybe Our Approach is Fundamentally Wrong</h2>
+
+<p>Second hypothesis: perhaps the AthenaK/Athena++ pattern requires a different boundary treatment that we had not implemented. Time to re-read the reference code.</p>
+
+<p>Consulting AthenaK's <code>src/bvals/physics/z4c_bcs.cpp</code> and Athena++'s <code>src/bvals/bvals_refine.cpp</code> showed that our approach &mdash; quadratic extrapolation on the coarse buffer's domain-boundary ghost cells, applied face-by-face in a dimension sweep &mdash; was correct. AthenaK's <code>BCHelper</code> does exactly the same thing. The approach was right; the implementation detail was wrong.</p>
+
+<!-- ========================================== -->
+<h2 id="location">Finding the Error Location</h2>
+
+<p>Adding debug prints to the ghost-accuracy checker pinpointed the worst error. The maximum error occurred at:</p>
+
+<pre><code>bid=12, (i,j,k) = (4, 4, 21)
+boundary flags: nblevel = [1, 0, 1, 0, 0, 0]
+  x-: domain boundary (nblevel &lt; 0)
+  y-: domain boundary (nblevel &lt; 0)
+  z+: coarser neighbor (nblevel = 0, block level = 1)
+Cell is in the z+ ghost zone (k=21 >= ghost+N=20)
+  at x-ghost position (i=4 = ghost) and y-ghost position (j=4 = ghost)</code></pre>
+
+<p>This cell sits at the intersection of two domain-boundary faces (x- and y-) and one coarse-neighbor face (z+). It is a <strong>triple-boundary corner</strong> in the coarse_buf &mdash; exactly the kind of cell that requires careful coordination between Phase 3 (neighbor copy) and Phase 3.5 (boundary extrapolation).</p>
+
+<!-- ========================================== -->
+<h2 id="root-cause">Root Cause: The Unfilled Corner</h2>
+
+<p>The bug is a coverage gap between Phase 3 and Phase 3.5. Neither phase fills cells at the intersection of a domain-boundary ghost zone and a non-boundary ghost zone.</p>
+
+<h3>What Phase 3 fills (and misses)</h3>
+
+<p>When <code>copy_from_coarse_grid()</code> fills the z+ ghost slab from a coarser neighbor, it computes loop ranges using <code>ghost_range()</code>:</p>
+
+<pre><code>ghost_range(ox=0, ...)  // x: not a ghost direction -> interior range [ghost, ghost+N)
+ghost_range(oy=0, ...)  // y: not a ghost direction -> interior range [ghost, ghost+N)
+ghost_range(oz=+1, ...) // z: ghost direction       -> ghost range [ghost+N, Ntotal)</code></pre>
+
+<p>The z+ ghost slab is filled only for <code>x in [ghost, ghost+N)</code> and <code>y in [ghost, ghost+N)</code>. Cells at x-ghost positions <code>[0, ghost)</code> within the z+ slab are <strong>not touched</strong>.</p>
+
+<h3>What Phase 3.5 fills (and misses)</h3>
+
+<p>Phase 3.5 processes domain-boundary faces only. It fills x- ghost cells and y- ghost cells, but <strong>not</strong> z+ ghost cells (z+ has a coarser neighbor, not a domain boundary). The original loop ranges for X-face extrapolation used <code>j in [ghost, ghost+N)</code> and <code>k in [ghost, ghost+N)</code> &mdash; interior only. So cells at z-ghost positions within the x- ghost slab were also not filled.</p>
+
+<h4>Diagram 1: Unfilled corner in coarse_buf (x-z slice at y=interior)</h4>
+
+<div class="diagram">              <span class="type">x- domain boundary</span>         <span class="type">x interior</span>               <span class="type">x+ (neighbor)</span>
+           i: [0, ghost)          i: [ghost, ghost+N)        i: [ghost+N, Ntotal)
+        +---------------------+-----------------------------+---------------------+
+        |                     |                             |                     |
+ z+     | <span class="err">   UNFILLED         </span>|  Phase 3 fills              |  Phase 3 fills      |  k: [ghost+N,
+ ghost  | <span class="err">   (THE BUG)         </span>|  (z+ coarse neighbor copy)  |  (from x+ + z+)     |      Ntotal)
+        |                     |                             |                     |
+        +---------------------+-----------------------------+---------------------+
+        |                     |                             |                     |
+ z      |  Phase 3.5 fills    |  Phase 2 fills              |  Phase 3 fills      |  k: [ghost,
+ int.   |  (x- bdry extrap)   |  (restriction from fine)    |  (from x+ neighbor) |      ghost+N)
+        |                     |                             |                     |
+        +---------------------+-----------------------------+---------------------+
+        |                     |                             |                     |
+ z-     |  Phase 3.5 fills    |  Phase 3.5 fills            |  Phase 3 fills      |  k: [0,
+ ghost  |  (x- bdry, narrow)  |  (z- domain bdry extrap)    |  (from x+ neighbor) |      ghost)
+        |                     |                             |                     |
+        +---------------------+-----------------------------+---------------------+
+
+The <span class="err">top-left cell</span> (x_ghost, z_ghost+) is at the intersection of a domain boundary
+(x-) and a coarse-neighbor face (z+). Neither Phase 3 nor Phase 3.5 fills it.
+Prolongation in Phase 4 reads this cell and gets <span class="err">uninitialized garbage</span>.</div>
+
+<p>In 3D, a triple-corner cell at <code>(x_ghost, y_ghost, z_ghost+)</code> where x- and y- are domain boundaries and z+ is a coarse neighbor has <strong>three unfilled dimensions</strong>. The 5-point prolongation stencil reads multiple unfilled cells, producing the observed O(1) error of 0.386.</p>
+
+<!-- ========================================== -->
+<h2 id="athenak">The AthenaK Pattern: Full-Width Dimension Sweeps</h2>
+
+<p>AthenaK's <code>BCHelper</code> (in <code>src/bvals/physics/z4c_bcs.cpp</code>) applies boundary conditions face-by-face with loop ranges that span the <strong>full array dimensions</strong> <code>[0, Ntotal)</code> in non-ghost directions &mdash; not just the interior range <code>[ghost, ghost+N)</code>. This is the critical difference.</p>
+
+<p>The sequential ordering (X faces first, then Y, then Z) combined with full-width loops means:</p>
+<ul>
+  <li>The <strong>X sweep</strong> writes valid data into all x-ghost cells for every j and k, including positions in y-ghost and z-ghost regions.</li>
+  <li>The <strong>Y sweep</strong> reads x-ghost values that were written by the X sweep, producing correct results at x-ghost/y-ghost intersections.</li>
+  <li>The <strong>Z sweep</strong> reads both x-ghost and y-ghost values from earlier sweeps.</li>
+</ul>
+
+<p>Edge and corner ghost cells are filled <em>transitively</em> through the sweep chain without any explicit edge or corner handling code.</p>
+
+<!-- ========================================== -->
+<h2 id="sweep-chain">The Sweep Chain: How Corners Get Filled</h2>
+
+<p>Consider a triple-boundary corner cell at <code>(i_ghost, j_ghost, k_ghost)</code> where all three faces are domain boundaries. With full-width loops, the sweep chain fills it through a dependency cascade:</p>
+
+<h4>Diagram 2: X, Y, Z sweep chain for a triple-boundary corner</h4>
+
+<div class="diagram"><span class="highlight">How sequential sweeps fill corner cell (i_ghost, j_ghost, k_ghost):</span>
+
+<span class="ok">Step 1 &mdash; X sweep</span> writes (i_ghost, j_int, k_int)
+   reads interior data at (i_int, j_int, k_int)
+   <span class="type">Source: Phase 2 restriction (always valid)</span>
+
+<span class="ok">Step 2 &mdash; Y sweep</span> writes (i_ghost, j_ghost, k_int)
+   reads (i_ghost, j_int, k_int) <span class="comment">&larr; written by X sweep in Step 1</span>
+   <span class="type">Source: X sweep output (valid)</span>
+
+<span class="ok">Step 3 &mdash; Z sweep</span> writes (i_ghost, j_ghost, k_ghost)
+   reads (i_ghost, j_ghost, k_int) <span class="comment">&larr; written by Y sweep in Step 2</span>
+   <span class="type">Source: Y sweep output (valid)</span>
+
+Each sweep's output feeds the next sweep's input. The chain terminates
+at interior data from Phase 2. <span class="ok">No cell is left unfilled.</span></div>
+
+<p>This pattern works for any combination of boundary types at a corner: domain boundaries, coarse neighbors, or same-level neighbors. The key requirement is that the non-ghost loop ranges must span <code>[0, Ntotal)</code> so that ghost-zone positions from earlier sweeps are included.</p>
+
+<h4>Diagram 3: Before and after the fix (which cells Phase 3.5 fills)</h4>
+
+<div class="diagram"><span class="highlight">Before fix: interior-only ranges</span>                <span class="highlight">After fix: full-width ranges</span>
+
+X sweep fills x-ghosts for:                      X sweep fills x-ghosts for:
+  j in <span class="err">[ghost, ghost+N)</span>   <span class="comment">(interior only)</span>          j in <span class="ok">[0, Ntotal)</span>   <span class="comment">(full array)</span>
+  k in <span class="err">[ghost, ghost+N)</span>   <span class="comment">(interior only)</span>          k in <span class="ok">[0, Ntotal)</span>   <span class="comment">(full array)</span>
+
+Y sweep fills y-ghosts for:                      Y sweep fills y-ghosts for:
+  i in [0, Ntotal)        <span class="comment">(was correct)</span>            i in <span class="ok">[0, Ntotal)</span>   <span class="comment">(unchanged)</span>
+  k in <span class="err">[ghost, ghost+N)</span>   <span class="comment">(interior only)</span>          k in <span class="ok">[0, Ntotal)</span>   <span class="comment">(full array)</span>
+
+Z sweep fills z-ghosts for:                      Z sweep fills z-ghosts for:
+  i in [0, Ntotal)        <span class="comment">(was correct)</span>            i in <span class="ok">[0, Ntotal)</span>   <span class="comment">(unchanged)</span>
+  j in [0, Ntotal)        <span class="comment">(was correct)</span>            j in <span class="ok">[0, Ntotal)</span>   <span class="comment">(unchanged)</span>
+
+Unfilled cells:                                  Unfilled cells:
+  <span class="err">x-ghost at z-ghost positions</span>                    <span class="ok">NONE</span>
+  <span class="err">x-ghost at y-ghost positions</span>                    All edge/corner cells filled
+  <span class="err">y-ghost at z-ghost positions</span>                    transitively through sweep chain
+  <span class="err">all triple-boundary corners</span></div>
+
+<!-- ========================================== -->
+<h2 id="fix">The 4-Line Fix</h2>
+
+<p>The fix widens Phase 3.5's loop ranges in non-ghost directions from <code>[ghost, ghost+N)</code> to <code>[0, Ntotal)</code>. Only the X-face and Y-face loops needed changes; the Z-face loops already used full-width ranges.</p>
+
+<div class="diff"><span class="hdr">--- a/src/amr/ghost_exchange.c   (buggy: interior-only ranges)</span>
+<span class="hdr">+++ b/src/amr/ghost_exchange.c   (fixed: full-width ranges)</span>
+
+<span class="ctx"> /* X-faces: extrapolate in i */</span>
+<span class="ctx"> if (b->nblevel[1][1][0] < 0) {  /* x- boundary */</span>
+<span class="del">-    for (int k = ghost; k < ghost + N; k++) {</span>
+<span class="del">-        for (int j = ghost; j < ghost + N; j++) {</span>
+<span class="add">+    for (int k = 0; k < Nt; k++) {</span>
+<span class="add">+        for (int j = 0; j < Nt; j++) {</span>
+<span class="ctx">             for (int d = 0; d < gh; d++) { ... }</span>
+
+<span class="ctx"> /* Y-faces: extrapolate in j */</span>
+<span class="ctx"> if (b->nblevel[1][0][1] < 0) {  /* y- boundary */</span>
+<span class="del">-    for (int k = ghost; k < ghost + N; k++) {</span>
+<span class="del">-        for (int i = ghost; i < ghost + N; i++) {</span>
+<span class="add">+    for (int k = 0; k < Nt; k++) {</span>
+<span class="add">+        for (int i = 0; i < Nt; i++) {</span>
+<span class="ctx">             for (int d = 0; d < gh; d++) { ... }</span>
+
+<span class="ctx"> /* Same fix applied to x+ and y+ boundary faces (symmetric) */</span></div>
+
+<p>The Z-face loops already iterated over <code>i in [0, Nt)</code> and <code>j in [0, Nt)</code>, so they required no changes. After the fix, all six face loops use full-width ranges in their non-ghost directions.</p>
+
+<!-- ========================================== -->
+<h2 id="result">Result</h2>
+
+<div class="banner">
+  <strong>Test 6:</strong> <code>max_err</code> dropped from <strong>0.386</strong> to <strong>4.1e-6</strong> (threshold <code>9.8e-5</code>). That is a <strong>94,000x improvement</strong> from a 4-line change. All 72 AMR tests pass. All other test suites unchanged.
+</div>
+
+<table class="file-table">
+<tr><th>Metric</th><th>Before Fix</th><th>After Fix</th><th>Threshold</th></tr>
+<tr><td>max_err</td><td><code>0.386</code></td><td><code>4.1e-6</code></td><td><code>9.8e-5</code></td></tr>
+<tr><td>Error ratio</td><td>4000x above</td><td>24x below</td><td>&mdash;</td></tr>
+<tr><td>Test 6</td><td>FAIL</td><td>PASS</td><td>&mdash;</td></tr>
+<tr><td>Other tests</td><td>PASS</td><td>PASS</td><td>&mdash;</td></tr>
+</table>
+
+<!-- ========================================== -->
+<h2 id="lessons">Lessons Learned</h2>
+
+<details>
+<summary>Lesson 1: O(1) errors mean data is not being written, not computed wrong</summary>
+<div class="detail-body">
+<p>An error of 0.386 on data that should be ~1.0 is not a precision problem. It means the cell is reading uninitialized or stale memory. When you see O(1) errors in a simulation that should have O(h^4) accuracy, stop looking at stencil coefficients and start looking at which cells are <strong>never touched</strong>.</p>
+</div>
+</details>
+
+<details>
+<summary>Lesson 2: Changing the coefficients was a red herring</summary>
+<div class="detail-body">
+<p>The first instinct was to blame the extrapolation formula. But swapping quadratic extrapolation for flat copy produced the same error &mdash; because the unfilled cells were never reached by any extrapolation at all. The lesson: when debugging, test whether the <strong>location</strong> of the bug matches your hypothesis before changing <strong>formulas</strong>.</p>
+</div>
+</details>
+
+<details>
+<summary>Lesson 3: Dimension sweeps require full-width loops to fill edges and corners</summary>
+<div class="detail-body">
+<p>This is a general principle for any dimension-by-dimension algorithm (boundary conditions, diffusion sweeps, ADI methods). If the non-swept dimensions use interior-only ranges, cells at the intersection of ghost zones in multiple dimensions will be missed. The sequential sweep order (X, Y, Z) with full-width loops is the standard pattern that avoids explicit edge and corner handling.</p>
+</div>
+</details>
+
+<details>
+<summary>Lesson 4: Read the reference implementation line-by-line, not just conceptually</summary>
+<div class="detail-body">
+<p>We knew AthenaK used a dimension sweep for boundary conditions on the coarse buffer. The conceptual understanding was correct. But the implementation used interior-only ranges in the non-ghost directions, which differs from AthenaK's use of <code>n1</code>, <code>n2</code>, <code>n3</code> (full array dimensions). The difference was not in the algorithm but in the loop bounds &mdash; something only visible by reading the reference code line-by-line.</p>
+</div>
+</details>
+
+<details>
+<summary>Lesson 5: Debug prints that show cell coordinates and boundary flags are invaluable</summary>
+<div class="detail-body">
+<p>The breakthrough came from adding prints that showed not just the error magnitude but the <strong>cell indices</strong>, <strong>block ID</strong>, and <strong>boundary flags</strong> (<code>nblevel</code>) at the worst-error location. The boundary flags <code>[1,0,1,0,0,0]</code> immediately pointed to the boundary/ghost intersection pattern. Without that context, we would have continued guessing at coefficient problems.</p>
+</div>
+</details>
+
+<!-- ========================================== -->
+<h2 id="methodology">Debugging Methodology</h2>
+
+<p>The approach that worked here generalizes to any numerical simulation bug. The five steps form a systematic narrowing process:</p>
+
+<div class="timeline">
+  <div class="step step-red">
+    <h4>Step 1: Classify the error magnitude</h4>
+    <p>O(1) = missing data. O(h^n) with wrong n = stencil bug. O(h^n) with right n but wrong prefactor = physics error. This immediately narrows the search space.</p>
+  </div>
+  <div class="step step-red">
+    <h4>Step 2: Locate the worst error</h4>
+    <p>Add debug output that prints block ID, cell indices, boundary flags, and the expected vs. actual values at the maximum-error cell. The <em>position</em> of the error tells you more than its magnitude.</p>
+  </div>
+  <div class="step step-yellow">
+    <h4>Step 3: Identify what should fill that cell</h4>
+    <p>Walk the pipeline phase by phase and determine which phase is responsible for filling the error cell. If the answer is "none of them," you have found a coverage gap.</p>
+  </div>
+  <div class="step step-yellow">
+    <h4>Step 4: Cross-reference with the reference implementation</h4>
+    <p>Read the corresponding code in the reference (AthenaK, GRChombo, etc.) <strong>line by line</strong>. Focus on loop bounds, index ranges, and sweep ordering. Conceptual understanding is necessary but not sufficient.</p>
+  </div>
+  <div class="step step-green">
+    <h4>Step 5: Apply the minimal fix and verify</h4>
+    <p>Change only the identified loop bounds. If the error drops by orders of magnitude, the diagnosis was correct. If it does not change, return to Step 2 with new debug prints.</p>
+  </div>
+</div>
+
+<!-- ========================================== -->
+<h2 id="references">References</h2>
+
+<details open>
+<summary>Source files</summary>
+<div class="detail-body">
+<table class="file-table">
+<tr><th>File</th><th>Role</th></tr>
+<tr><td><code>src/amr/ghost_exchange.c</code></td><td>All 5 phases including <code>fill_coarse_buf_boundary()</code> (the fixed function) and <code>ghost_range()</code> (the range helper)</td></tr>
+<tr><td><code>src/amr/ghost_exchange.h</code></td><td>Public API: <code>ghost_exchange_multilevel()</code></td></tr>
+<tr><td><code>src/amr/restriction.c</code></td><td>Phase 2: 4th-order <code>restrict_to_coarse_buf()</code></td></tr>
+<tr><td><code>src/amr/prolongation.c</code></td><td>Phase 4: 5-point Lagrange weights</td></tr>
+<tr><td><code>src/amr/block.h</code></td><td><code>block_t</code> with <code>coarse_buf</code> field and <code>nblevel[3][3][3]</code></td></tr>
+<tr><td><code>tests/test_amr_refine.c</code></td><td>Test 6: polynomial accuracy through multi-level ghost exchange</td></tr>
+</table>
+</div>
+</details>
+
+<details>
+<summary>Reference implementations</summary>
+<div class="detail-body">
+<table class="file-table">
+<tr><th>Source</th><th>What it shows</th></tr>
+<tr><td><code>AthenaK z4c_bcs.cpp</code></td><td><code>BCHelper</code> &mdash; dimension-by-dimension boundary extrapolation with full-width loops (<code>n1</code>, <code>n2</code>, <code>n3</code>)</td></tr>
+<tr><td><code>AthenaK bvals_refine.cpp</code></td><td><code>ApplyPhysicalBoundariesOnCoarseLevel</code> &mdash; orchestrates Phase 3.5 in AthenaK terminology</td></tr>
+<tr><td><code>Athena++ bvals_refine.cpp</code></td><td>Original C++ implementation of the same pattern</td></tr>
+<tr><td>arXiv:2409.10383</td><td>AthenaK NR paper, Section 3.1: coarse-buffer data sources</td></tr>
+</table>
+</div>
+</details>
+
+<details>
+<summary>Companion documents</summary>
+<div class="detail-body">
+<table class="file-table">
+<tr><th>Document</th><th>Content</th></tr>
+<tr><td><a href="phase3_ghost_exchange.html"><code>phase3_ghost_exchange.html</code></a></td><td>Complete deep-dive on the 5-phase coarse-buffer ghost exchange pipeline, including the same bug fix from the pipeline perspective</td></tr>
+<tr><td><a href="architecture.html"><code>architecture.html</code></a></td><td>Interactive codebase map with call graph and file dependency diagram</td></tr>
+<tr><td><code>DEVLOG.md</code></td><td>Development log entries for 2026-02-16 (Stage 4.1 implementation) and 2026-02-17 (this bug fix)</td></tr>
+</table>
+</div>
+</details>
+
+</main>
+</body>
+</html>
