@@ -699,23 +699,348 @@ static void classic_rk4_step_mesh_packed(mesh_t *m, const sim_params_t *p,
 }
 
 /* ========================================================================
+ * Berger-Oliger subcycling (per-level packing)
+ *
+ * Each AMR level advances at dt_L = dt_0 / 2^L. Fine levels take 2x
+ * more sub-steps per coarse step. Cross-level ghost zones are filled
+ * via temporal interpolation from the coarser level's saved old state.
+ *
+ * Ref: Berger & Oliger (1984), JCP 53:484.
+ * Ref: Athena++ src/mesh/mesh.cpp Mesh::Step().
+ * Ref: GRChombo GRAMRLevel::advance() + Chombo AMR::timeStep().
+ * ======================================================================== */
+
+/*
+ * Build a meshblock_pack_t containing only leaf blocks at the specified level.
+ * Same as mesh_build_leaf_pack but filtered by level.
+ *
+ * Returns NULL if no leaves exist at this level (caller must handle).
+ *
+ * Ref: AthenaK MeshBlockPack per-level construction.
+ */
+static meshblock_pack_t *mesh_build_level_pack(mesh_t *m, int level,
+                                                rk_method_t rk_method)
+{
+    /* Count leaves at this level */
+    int n_leaves = 0;
+    for (int bid = 0; bid < m->num_blocks; bid++) {
+        block_t *b = m->blocks[bid];
+        if (b && b->is_leaf && b->loc.level == level)
+            n_leaves++;
+    }
+
+    if (n_leaves == 0) return NULL;
+
+    int *ids = malloc(n_leaves * sizeof(int));
+    if (!ids) {
+        fprintf(stderr, "mesh_build_level_pack: malloc failed\n");
+        exit(1);
+    }
+
+    int idx = 0;
+    for (int bid = 0; bid < m->num_blocks; bid++) {
+        block_t *b = m->blocks[bid];
+        if (b && b->is_leaf && b->loc.level == level)
+            ids[idx++] = bid;
+    }
+
+    size_t npts = m->blocks[ids[0]]->grid->npoints;
+
+    meshblock_pack_t *pack = meshblock_pack_create(
+        n_leaves, npts, ids, level, rk_method);
+
+    meshblock_pack_load(pack, m->blocks);
+    meshblock_pack_load_meta(pack, m->blocks);
+    meshblock_pack_build_neighbors(pack, m->blocks);
+
+    /* Per-level packs at level > 0 may have coarse_bufs, but cross-level
+     * ghost fill is done BEFORE packing (via ghost_fill_from_coarser),
+     * so we don't need coarse_data in the pack. The pack's ghost exchange
+     * only handles same-level neighbors. For blocks that do have coarse_bufs,
+     * load coarse data so pack phases 2-4 can run if n_refined > 0. */
+    if (pack->n_refined > 0)
+        meshblock_pack_load_coarse(pack, m->blocks);
+
+    free(ids);
+    return pack;
+}
+
+/*
+ * Save fields_old for all leaf blocks at the given level.
+ * Called before advancing a level so we have the pre-step state
+ * for temporal interpolation during finer-level subcycles.
+ *
+ * Ref: Chombo AMRLevel::m_old_data save pattern.
+ */
+static void mesh_save_old_level(mesh_t *m, int level)
+{
+    for (int bid = 0; bid < m->num_blocks; bid++) {
+        block_t *b = m->blocks[bid];
+        if (!b || !b->is_leaf || b->loc.level != level) continue;
+
+        if (!b->fields_old_block)
+            block_alloc_fields_old(b);
+        block_save_old(b);
+    }
+}
+
+/*
+ * Advance all leaf blocks at `level` by one step of size dt.
+ * Fills cross-level ghosts (time-interpolated from coarser),
+ * then does same-level ghost exchange within a per-level pack,
+ * then RHS + Sommerfeld + update.
+ *
+ * frac: temporal interpolation fraction for cross-level ghosts.
+ *   frac = (current_time - coarse_old_time) / dt_coarse
+ *   For level 0: frac is unused (no coarser level).
+ *
+ * Ref: Berger & Oliger (1984), Athena++ Mesh::Step().
+ */
+static void step_level(mesh_t *m, const sim_params_t *p,
+                        int level, double dt_level, double frac)
+{
+    /* Cross-level ghost fill (time-interpolated from coarser level).
+     * Done on the mesh BEFORE building the per-level pack. */
+    if (level > 0)
+        ghost_fill_from_coarser(m, level, frac);
+
+    /* Build per-level pack (only leaves at this level) */
+    meshblock_pack_t *pack = mesh_build_level_pack(m, level, p->rk_method);
+    if (!pack) return;  /* no blocks at this level */
+
+    backend_map_pack(pack, p);
+
+    /* CK45 or classic RK4 — same kernel sequence as global packed stepper,
+     * but pack contains only one level's blocks */
+    if (p->rk_method == RK_CK45) {
+        backend_zero_packed(pack, PACK_BUF_SCRATCH);
+        for (int s = 0; s < 5; s++) {
+            backend_ghost_exchange_packed(pack);
+            backend_compute_rhs_packed(pack, p);
+            backend_sommerfeld_packed(pack, p);
+            backend_update_ck45_packed(pack, CK_A[s], CK_B[s], dt_level);
+        }
+    } else {
+        /* Classic RK4: 4 stages */
+        backend_copy_packed(pack, PACK_BUF_SCRATCH, PACK_BUF_DATA);
+        backend_zero_packed(pack, PACK_BUF_ACCUM);
+
+        /* Stage 1 */
+        backend_ghost_exchange_packed(pack);
+        backend_compute_rhs_packed(pack, p);
+        backend_sommerfeld_packed(pack, p);
+        backend_accum_add_packed(pack, 1.0/6.0, dt_level);
+        backend_axpy_packed(pack, 0.5, dt_level);
+
+        /* Stage 2 */
+        backend_ghost_exchange_packed(pack);
+        backend_compute_rhs_packed(pack, p);
+        backend_sommerfeld_packed(pack, p);
+        backend_accum_add_packed(pack, 1.0/3.0, dt_level);
+        backend_axpy_packed(pack, 0.5, dt_level);
+
+        /* Stage 3 */
+        backend_ghost_exchange_packed(pack);
+        backend_compute_rhs_packed(pack, p);
+        backend_sommerfeld_packed(pack, p);
+        backend_accum_add_packed(pack, 1.0/3.0, dt_level);
+        backend_axpy_packed(pack, 1.0, dt_level);
+
+        /* Stage 4 */
+        backend_ghost_exchange_packed(pack);
+        backend_compute_rhs_packed(pack, p);
+        backend_sommerfeld_packed(pack, p);
+        backend_accum_add_packed(pack, 1.0/6.0, dt_level);
+        backend_copy_packed(pack, PACK_BUF_DATA, PACK_BUF_SCRATCH);
+        backend_apply_accum_packed(pack);
+    }
+
+    backend_unmap_pack(pack);
+    meshblock_pack_store(pack, m->blocks);
+    meshblock_pack_free(pack);
+}
+
+/*
+ * Berger-Oliger recursive subcycling.
+ * Advances level L by dt_L, then recursively subcycles finer levels.
+ *
+ * Algorithm:
+ *   1. Save fields_old at level L (for temporal interpolation by finer levels)
+ *   2. Advance level L by dt_L
+ *   3. If L < max_level:
+ *        subcycle(L+1, dt_L/2, t_start)           — first half
+ *        subcycle(L+1, dt_L/2, t_start + dt_L/2)  — second half
+ *   4. Restrict level L+1 → level L parents
+ *   5. Enforce algebraic constraints at level L
+ *
+ * Ref: Berger & Oliger (1984), JCP 53:484.
+ * Ref: Athena++ src/mesh/mesh.cpp Mesh::Step().
+ * Ref: GRChombo GRAMRLevel::advance().
+ */
+static void subcycle_level(mesh_t *m, const sim_params_t *p,
+                            int level, double dt_level, double t_start)
+{
+    /* Save pre-step state for temporal interpolation by finer levels */
+    if (level < m->max_level)
+        mesh_save_old_level(m, level);
+
+    /* Compute temporal interpolation fraction for cross-level ghosts.
+     * frac = how far into the coarser level's step we are at t_start.
+     * At the start of a coarse step, frac = 0.
+     * At the midpoint (second fine sub-step), frac = 0.5.
+     *
+     * For level 0: no coarser level, frac unused.
+     * For level > 0: the coarse level's step runs from t_coarse_old to
+     *   t_coarse_old + dt_coarse, where dt_coarse = 2 * dt_level.
+     *   frac = (t_start + dt_level - t_coarse_old) / dt_coarse
+     *        = fraction of the way through the coarse step AFTER this step.
+     *   But for the ghost fill at the START of the step, we need:
+     *   frac_start = (t_start - t_coarse_old) / dt_coarse
+     *   The coarser level was already advanced, so its fields = t_coarse_new.
+     *   Its fields_old = t_coarse_old.
+     *
+     * We pass the frac for the beginning of this level's step.
+     * The coarse level's old time is when it saved fields_old. For the
+     * first sub-step of a pair, frac = 0 (we're at coarse old time).
+     * For the second sub-step, frac = 0.5 (midway through coarse step).
+     *
+     * We compute this from the block times: after the coarse step,
+     * coarse blocks are at t_start (same as our t_start for first sub-step).
+     * Actually, the coarse level advanced by dt_coarse = 2*dt_level before
+     * we do the fine sub-steps. So:
+     *   - coarse old time = t_start (saved before coarse step)
+     *   - coarse new time = t_start + 2*dt_level
+     *   - first fine step starts at t_start: frac = 0
+     *   - second fine step starts at t_start + dt_level: frac = 0.5
+     *
+     * Wait, that's not right. Let me re-derive. The call pattern is:
+     *   subcycle(L, dt_L, t):
+     *     save_old(L)            // saves state at time t
+     *     step(L, dt_L)          // advances L from t to t+dt_L
+     *     subcycle(L+1, dt_L/2, t)          // first fine sub-step
+     *     subcycle(L+1, dt_L/2, t+dt_L/2)  // second fine sub-step
+     *
+     * When subcycle(L+1, ..., t) is called:
+     *   - L's fields_old = state at time t (before L stepped)
+     *   - L's fields     = state at time t + dt_L
+     *   - First fine sub-step (t_start = t): needs ghosts at time t → frac = 0
+     *   - Second fine sub-step (t_start = t + dt_L/2): needs ghosts at t + dt_L/2
+     *     → frac = (t + dt_L/2 - t) / dt_L = 0.5
+     *
+     * So frac = (t_start_of_fine - t_start_of_coarse) / dt_coarse.
+     * The coarse level's t_start is our parent's t_start, passed to us.
+     * For level > 0, we need to track the coarse level's step start time.
+     *
+     * Simplification: since subcycling is recursive and symmetric,
+     * the frac at level L+1 is determined by which sub-step we're on:
+     *   - Called with t_start = parent_t_start: frac = 0
+     *   - Called with t_start = parent_t_start + dt_L/2: frac = 0.5
+     *
+     * We compute frac from t_start and the coarse level's step parameters.
+     * The coarse level was called with subcycle(L, dt_L, parent_t_start),
+     * so coarse old time = parent_t_start, dt_coarse = dt_level.
+     *
+     * Actually, we ARE level L. The finer level (L+1) will need frac.
+     * For this level's own step, frac is passed to us from the caller.
+     * Let me restructure: frac is computed by the CALLER (parent) for us. */
+
+    /* For level 0, frac = 0 (no coarser level to interpolate from). */
+    double frac = 0.0;
+    if (level > 0) {
+        /* Our coarser level (level-1) saved its old state at some time t_old.
+         * After stepping, its fields are at t_old + dt_coarse.
+         * dt_coarse = 2 * dt_level (our dt is half of parent's dt).
+         * We were called at t_start. The coarse old time is t_start
+         * rounded down to the coarse step boundary.
+         *
+         * Instead of tracking absolute times, we use a simpler approach:
+         * The frac is computed from where t_start falls within the coarse
+         * step interval. We check the coarse block's saved time.
+         * But coarse blocks might not all have the same time.
+         *
+         * Simplest correct approach: compute frac from block times.
+         * Find any coarse neighbor and use its time field. */
+        double dt_coarse = 2.0 * dt_level;
+        /* Find the coarse step start by looking at fields_old timing.
+         * Coarse block time = t_coarse_new. Coarse old = t_coarse_new - dt_coarse.
+         * frac = (t_start - (t_coarse_new - dt_coarse)) / dt_coarse
+         *      = (t_start - t_coarse_new + dt_coarse) / dt_coarse
+         *      = 1 + (t_start - t_coarse_new) / dt_coarse
+         * But we don't track t_coarse_new explicitly...
+         *
+         * Better: since the recursion structure is rigid (binary subdivision),
+         * we can compute frac from t_start and dt_coarse alone.
+         * The coarse step covers [t_coarse_start, t_coarse_start + dt_coarse].
+         * t_coarse_start = t_start rounded down to nearest multiple of dt_coarse.
+         * frac = (t_start - t_coarse_start) / dt_coarse. */
+        double t_coarse_start = floor(t_start / dt_coarse) * dt_coarse;
+        /* Handle floating-point rounding at t_start near step boundaries */
+        double offset = t_start - t_coarse_start;
+        if (offset < 0.0) offset = 0.0;
+        frac = offset / dt_coarse;
+        /* Clamp frac to [0, 1) */
+        if (frac < 0.0) frac = 0.0;
+        if (frac >= 1.0) frac = 1.0 - 1.0e-14;
+    }
+
+    step_level(m, p, level, dt_level, frac);
+
+    /* Update block times after stepping */
+    for (int bid = 0; bid < m->num_blocks; bid++) {
+        block_t *b = m->blocks[bid];
+        if (b && b->is_leaf && b->loc.level == level)
+            b->time = t_start + dt_level;
+    }
+
+    /* Subcycle finer levels: 2 sub-steps at dt/2 */
+    if (level < m->max_level) {
+        subcycle_level(m, p, level + 1, dt_level / 2.0, t_start);
+        subcycle_level(m, p, level + 1, dt_level / 2.0,
+                       t_start + dt_level / 2.0);
+    }
+
+    /* Restrict fine data into coarse parents at this level boundary */
+    if (level < m->max_level)
+        restrict_level_to_parents(m, level + 1);
+
+    /* Enforce algebraic constraints at this level */
+    for (int bid = 0; bid < m->num_blocks; bid++) {
+        block_t *b = m->blocks[bid];
+        if (b && b->is_leaf && b->loc.level == level)
+            enforce_algebraic(b->grid);
+    }
+}
+
+/* ========================================================================
  * Public interface — mesh-level stepping
  * ======================================================================== */
 
 /*
  * Production path: packed batch kernels.
- * All leaf blocks packed into one buffer, one kernel per operation.
+ * Uniform mesh (max_level == 0): single pack, no subcycling.
+ * AMR mesh (max_level > 0): Berger-Oliger subcycling, per-level packs.
+ *
  * Ghost exchange via device kernels (Commit 2: direct on pack buffers).
+ *
+ * Ref: Berger & Oliger (1984), JCP 53:484.
  */
 void rk4_step_mesh(mesh_t *m, const sim_params_t *p,
                    rk4_rhs_func_t rhs_func, double dt)
 {
     (void)rhs_func;  /* packed kernels call ccz4_rhs_point directly */
 
-    if (p->rk_method == RK_CK45)
-        ck45_step_mesh_packed(m, p, dt);
-    else
-        classic_rk4_step_mesh_packed(m, p, dt);
+    if (m->max_level == 0) {
+        /* Uniform mesh: single pack, no subcycling needed */
+        if (p->rk_method == RK_CK45)
+            ck45_step_mesh_packed(m, p, dt);
+        else
+            classic_rk4_step_mesh_packed(m, p, dt);
+    } else {
+        /* AMR with Berger-Oliger subcycling.
+         * dt is the coarsest-level time step (CFL * dx_coarse).
+         * Each finer level takes 2x more sub-steps at half the dt. */
+        subcycle_level(m, p, 0, dt, p->time);
+    }
 }
 
 /*

@@ -81,6 +81,15 @@ typedef struct block_s {
                                    /* -1 = no neighbor (physical boundary)     */
     int      on_boundary[6];       /* 1 if face touches domain boundary        */
                                    /* [0]=x-, [1]=x+, [2]=y-, [3]=y+, [4]=z-, [5]=z+ */
+
+    /* Subcycling (Berger-Oliger) state for temporal interpolation.
+     * Ref: Chombo AMRLevel::m_old_data / m_new_data pattern.
+     * Ref: Athena++ MeshRefinement::ProlongateBoundaries time interp. */
+    double   time;                 /* simulation time this block is at          */
+    double  *fields_old[NUM_FIELDS]; /* previous time-level state              */
+                                   /* Allocated for leaves at level < max_level */
+                                   /* NULL if not needed (finest level/non-leaf)*/
+    double  *fields_old_block;     /* contiguous backing allocation             */
 } block_t;
 
 /* Physical coordinate of grid point i in direction dir within a block.
@@ -105,5 +114,33 @@ block_t *block_alloc(int id, int level, int N_block, double dx,
 
 /* Free a block and its grid data */
 void block_free(block_t *b);
+
+/*
+ * Allocate fields_old arrays for temporal interpolation (subcycling).
+ * Only needed for leaf blocks at level < max_level.
+ * fields_old[f] gets the same size as grid->fields[f].
+ * No-op if fields_old_block is already allocated.
+ */
+void block_alloc_fields_old(block_t *b);
+
+/* Free fields_old arrays. Safe to call if already NULL. */
+void block_free_fields_old(block_t *b);
+
+/*
+ * Save current fields → fields_old (memcpy all NUM_FIELDS arrays).
+ * Called before advancing a level so finer levels can time-interpolate.
+ * Ref: Chombo AMRLevel m_old_data save pattern.
+ */
+void block_save_old(block_t *b);
+
+/*
+ * Time-interpolate between fields_old and fields.
+ *   out[f][i] = (1 - frac) * fields_old[f][i] + frac * fields[f][i]
+ * frac in [0,1]: 0 = old state, 1 = new state.
+ * Writes into the provided out[] array (caller-owned, same layout as fields[]).
+ * Ref: Athena++ MeshRefinement::ProlongateBoundaries temporal interpolation.
+ */
+void block_time_interp(const block_t *b, double frac,
+                        double *out[], size_t npoints);
 
 #endif /* LATTICE_BLOCK_H */

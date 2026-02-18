@@ -26,6 +26,8 @@
 #include "prolongation.h"
 #include "restriction.h"
 #include "../core/fields.h"
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <math.h>
 
@@ -531,6 +533,124 @@ static void prolongate_from_own_coarse_buf(block_t *b)
                 }
             }
         }
+    }
+}
+
+/* ========================================================================
+ * Temporal interpolation for subcycling (Berger-Oliger)
+ * ======================================================================== */
+
+/*
+ * Fill fine-level ghost zones from time-interpolated coarse neighbors.
+ *
+ * For each fine leaf block at fine_level:
+ *   1. For each of 26 neighbor directions where nblevel = fine_level - 1:
+ *      - Time-interpolate coarser neighbor (frac between old and new states)
+ *      - Copy interpolated data into fine block's coarse_buf ghost zones
+ *   2. Fill coarse_buf boundary ghost cells by extrapolation
+ *   3. Prolongate from coarse_buf into fine ghost zones
+ *
+ * The interpolation fraction frac is relative to the coarse step:
+ *   frac = 0.0 → use coarse old state
+ *   frac = 1.0 → use coarse new state
+ *   frac = 0.5 → midpoint interpolation
+ *
+ * Ref: Athena++ MeshRefinement::ProlongateBoundaries() temporal interpolation.
+ * Ref: Chombo AMR::timeStep() coarse-fine boundary fill.
+ */
+void ghost_fill_from_coarser(mesh_t *m, int fine_level, double frac)
+{
+    if (fine_level <= 0) return;
+
+    for (int bid = 0; bid < m->num_blocks; bid++) {
+        block_t *b = m->blocks[bid];
+        if (!b || !b->is_leaf || b->loc.level != fine_level) continue;
+        if (!b->coarse_buf) continue;
+
+        /* Phase 2: Restrict fine interior → own coarse_buf.
+         * This fills the coarse_buf interior from the fine block's fields. */
+        restrict_to_coarse_buf(b);
+
+        /* Phase 3a: Fill coarse_buf ghosts from same-level siblings
+         * (their coarse_bufs already have valid interiors) */
+        for (int n = 0; n < NUM_NEIGHBORS; n++) {
+            int ox = nbr_offset[n][0];
+            int oy = nbr_offset[n][1];
+            int oz = nbr_offset[n][2];
+            int nlev = b->nblevel[oz + 1][oy + 1][ox + 1];
+
+            if (nlev == b->loc.level) {
+                /* Same-level neighbor: exchange coarse_buf ↔ coarse_buf */
+                int nbr_id = b->neighbor_ids[n];
+                if (nbr_id < 0) continue;
+                block_t *nbr = m->blocks[nbr_id];
+                if (!nbr || !nbr->coarse_buf) continue;
+                exchange_grid_pair(b->coarse_buf, nbr->coarse_buf,
+                                   ox, oy, oz);
+
+            } else if (nlev >= 0 && nlev == b->loc.level - 1) {
+                /* Coarser neighbor: need temporal interpolation.
+                 * If neighbor has fields_old, interpolate; otherwise use current. */
+                int nbr_id = b->neighbor_ids[n];
+                if (nbr_id < 0) continue;
+                block_t *nbr = m->blocks[nbr_id];
+                if (!nbr || !nbr->grid) continue;
+
+                if (nbr->fields_old_block) {
+                    /* Time-interpolate coarse neighbor into a temporary,
+                     * then copy from that temporary into coarse_buf ghosts.
+                     * We do this in-place: temporarily modify nbr->grid->fields,
+                     * do the copy, then restore. Instead, we use a simpler approach:
+                     * interpolate directly into the coarse_buf ghost cells. */
+
+                    /* Use copy_from_coarse_grid approach but with interpolated data.
+                     * We temporarily point nbr's grid fields to interpolated data. */
+                    grid_t *cg = nbr->grid;
+                    size_t npts = cg->npoints;
+
+                    /* Allocate temporary for interpolated fields */
+                    double *interp_ptrs[NUM_FIELDS];
+                    double *interp_block = malloc((size_t)NUM_FIELDS * npts
+                                                   * sizeof(double));
+                    if (!interp_block) {
+                        fprintf(stderr, "ghost_fill_from_coarser: malloc failed\n");
+                        exit(1);
+                    }
+                    for (int f = 0; f < NUM_FIELDS; f++)
+                        interp_ptrs[f] = interp_block + f * npts;
+
+                    block_time_interp(nbr, frac, interp_ptrs, npts);
+
+                    /* Temporarily swap fields to interpolated data for copy */
+                    double *saved_fields[NUM_FIELDS];
+                    for (int f = 0; f < NUM_FIELDS; f++) {
+                        saved_fields[f] = cg->fields[f];
+                        cg->fields[f] = interp_ptrs[f];
+                    }
+
+                    copy_from_coarse_grid(b->coarse_buf, b->origin,
+                                          cg, nbr->origin, ox, oy, oz);
+
+                    /* Restore original fields */
+                    for (int f = 0; f < NUM_FIELDS; f++)
+                        cg->fields[f] = saved_fields[f];
+
+                    free(interp_block);
+                } else {
+                    /* No old state: use current coarse data as-is
+                     * (first step or uniform mesh) */
+                    copy_from_coarse_grid(b->coarse_buf, b->origin,
+                                          nbr->grid, nbr->origin,
+                                          ox, oy, oz);
+                }
+            }
+        }
+
+        /* Phase 3.5: Extrapolate boundary ghost cells of coarse_buf */
+        fill_coarse_buf_boundary(b);
+
+        /* Phase 4: Prolongate coarse_buf → fine ghost zones */
+        prolongate_from_own_coarse_buf(b);
     }
 }
 

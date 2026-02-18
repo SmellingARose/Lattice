@@ -54,4 +54,17 @@ void ghost_exchange_array(mesh_t *m, int src_field);
  */
 void ghost_exchange_multilevel(mesh_t *m);
 
+/*
+ * Fill fine-level ghost zones from time-interpolated coarse neighbors.
+ * For each fine leaf at `fine_level`, finds coarser neighbors, interpolates
+ * their fields between t_old and t_new using frac = (t_fine - t_old)/dt_coarse,
+ * restricts to coarse_buf, then prolongates into fine ghosts.
+ *
+ * Must be called BEFORE same-level ghost exchange for the fine level.
+ *
+ * Ref: Athena++ MeshRefinement::ProlongateBoundaries() temporal interpolation.
+ * Ref: Chombo AMR::timeStep() coarse-fine boundary fill.
+ */
+void ghost_fill_from_coarser(mesh_t *m, int fine_level, double frac);
+
 #endif /* LATTICE_GHOST_EXCHANGE_H */

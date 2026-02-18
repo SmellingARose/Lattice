@@ -141,13 +141,69 @@ block_t *block_alloc(int id, int level, int N_block, double dx,
 
     memset(b->on_boundary, 0, sizeof(b->on_boundary));
 
+    /* Subcycling state: initialized to NULL, allocated on demand */
+    b->time = 0.0;
+    for (int f = 0; f < NUM_FIELDS; f++)
+        b->fields_old[f] = NULL;
+    b->fields_old_block = NULL;
+
     return b;
 }
 
 void block_free(block_t *b)
 {
     if (!b) return;
+    block_free_fields_old(b);
     grid_free(b->coarse_buf);
     grid_free(b->grid);
     free(b);
+}
+
+void block_alloc_fields_old(block_t *b)
+{
+    if (!b || !b->grid || b->fields_old_block) return;
+
+    size_t npts = b->grid->npoints;
+    size_t block_bytes = (size_t)NUM_FIELDS * npts * sizeof(double);
+    void *ptr = NULL;
+    if (posix_memalign(&ptr, PAGE_ALIGN, block_bytes) != 0) {
+        fprintf(stderr, "block_alloc_fields_old: posix_memalign failed\n");
+        exit(1);
+    }
+    memset(ptr, 0, block_bytes);
+    b->fields_old_block = (double *)ptr;
+
+    for (int f = 0; f < NUM_FIELDS; f++)
+        b->fields_old[f] = b->fields_old_block + f * npts;
+}
+
+void block_free_fields_old(block_t *b)
+{
+    if (!b || !b->fields_old_block) return;
+    free(b->fields_old_block);
+    b->fields_old_block = NULL;
+    for (int f = 0; f < NUM_FIELDS; f++)
+        b->fields_old[f] = NULL;
+}
+
+void block_save_old(block_t *b)
+{
+    if (!b || !b->grid || !b->fields_old_block) return;
+    size_t npts = b->grid->npoints;
+    for (int f = 0; f < NUM_FIELDS; f++)
+        memcpy(b->fields_old[f], b->grid->fields[f], npts * sizeof(double));
+}
+
+void block_time_interp(const block_t *b, double frac,
+                        double *out[], size_t npoints)
+{
+    if (!b || !b->fields_old_block || !b->grid) return;
+    double one_minus_frac = 1.0 - frac;
+    for (int f = 0; f < NUM_FIELDS; f++) {
+        const double *old_f = b->fields_old[f];
+        const double *new_f = b->grid->fields[f];
+        double *dst = out[f];
+        for (size_t i = 0; i < npoints; i++)
+            dst[i] = one_minus_frac * old_f[i] + frac * new_f[i];
+    }
 }

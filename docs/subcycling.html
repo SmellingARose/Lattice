@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lattice Berger-Oliger Subcycling</title>
+<style>
+/* ===== Reset & Base ===== */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { font-size: 15px; scroll-behavior: smooth; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  color: #2d333b; background: #f6f8fa; line-height: 1.6;
+  display: flex; min-height: 100vh;
+}
+
+/* ===== Sidebar ===== */
+nav.sidebar {
+  position: fixed; top: 0; left: 0; bottom: 0; width: 260px;
+  background: #1c2128; color: #adbac7; overflow-y: auto;
+  padding: 20px 0; z-index: 100; font-size: 0.87rem;
+}
+nav.sidebar::-webkit-scrollbar { width: 6px; }
+nav.sidebar::-webkit-scrollbar-thumb { background: #444c56; border-radius: 3px; }
+nav.sidebar .logo { padding: 0 20px 18px; border-bottom: 1px solid #373e47; margin-bottom: 12px; }
+nav.sidebar .logo h1 { font-size: 1.25rem; color: #e6edf3; font-weight: 700; letter-spacing: 0.5px; }
+nav.sidebar .logo p { font-size: 0.75rem; color: #768390; margin-top: 2px; }
+nav.sidebar ul { list-style: none; }
+nav.sidebar ul li a {
+  display: block; padding: 6px 20px; color: #adbac7; text-decoration: none;
+  transition: background 0.15s, color 0.15s;
+}
+nav.sidebar ul li a:hover { background: #262c36; color: #e6edf3; }
+nav.sidebar ul li a.section-header {
+  font-size: 0.7rem; text-transform: uppercase; letter-spacing: 1.2px;
+  color: #636e7b; margin-top: 14px; pointer-events: none; font-weight: 600;
+}
+
+/* ===== Main content ===== */
+main {
+  margin-left: 260px; flex: 1; padding: 32px 48px 80px;
+  max-width: 1100px;
+}
+main h2 {
+  font-size: 1.5rem; color: #1c2128; margin-top: 44px; margin-bottom: 12px;
+  padding-bottom: 8px; border-bottom: 2px solid #d0d7de;
+}
+main h2:first-of-type { margin-top: 0; }
+main h3 { font-size: 1.15rem; color: #2d333b; margin-top: 28px; margin-bottom: 8px; }
+main h4 { font-size: 1rem; color: #444c56; margin-top: 18px; margin-bottom: 6px; }
+main p { margin-bottom: 10px; }
+main ul, main ol { margin-left: 22px; margin-bottom: 10px; }
+main li { margin-bottom: 4px; }
+main code {
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', Menlo, Consolas, monospace;
+  font-size: 0.88em; background: #eef1f5; padding: 1px 5px; border-radius: 3px;
+}
+main pre {
+  background: #1c2128; color: #adbac7; padding: 16px 20px; border-radius: 6px;
+  overflow-x: auto; font-size: 0.82rem; line-height: 1.55; margin: 12px 0 16px;
+  font-family: 'SF Mono', 'Fira Code', Menlo, Consolas, monospace;
+}
+main pre code { background: none; padding: 0; color: inherit; font-size: inherit; }
+a { color: #2f81f7; text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ===== Banner ===== */
+.banner {
+  background: #ddf4ff; border: 1px solid #54aeff44; border-radius: 6px;
+  padding: 14px 18px; margin-bottom: 24px; font-size: 0.88rem; color: #1a4b77;
+}
+.banner strong { color: #0550ae; }
+
+/* ===== Diagram ===== */
+.diagram {
+  background: #1c2128; color: #7ee787; padding: 20px 24px; border-radius: 6px;
+  font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 0.78rem;
+  line-height: 1.5; overflow-x: auto; margin: 14px 0 18px; white-space: pre;
+}
+.diagram .comment { color: #636e7b; }
+.diagram .highlight { color: #f0883e; }
+.diagram .type { color: #79c0ff; }
+.diagram .fn { color: #d2a8ff; }
+
+/* ===== Comparison cards ===== */
+.compare-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+  margin: 16px 0 20px;
+}
+.card {
+  border-radius: 8px; padding: 18px 20px; border: 1px solid;
+}
+.card-before {
+  background: #fff1e5; border-color: #f0883e44;
+}
+.card-before h4 { color: #953800; margin-top: 0; margin-bottom: 10px; font-size: 1.05rem; }
+.card-before .card-label {
+  display: inline-block; background: #f0883e22; color: #953800;
+  font-size: 0.72rem; font-weight: 600; padding: 2px 8px;
+  border-radius: 10px; margin-bottom: 10px; letter-spacing: 0.3px;
+}
+.card-after {
+  background: #dafbe1; border-color: #3fb95044;
+}
+.card-after h4 { color: #1a7f37; margin-top: 0; margin-bottom: 10px; font-size: 1.05rem; }
+.card-after .card-label {
+  display: inline-block; background: #2ea04333; color: #1a7f37;
+  font-size: 0.72rem; font-weight: 600; padding: 2px 8px;
+  border-radius: 10px; margin-bottom: 10px; letter-spacing: 0.3px;
+}
+.card ul { margin-left: 18px; margin-bottom: 0; font-size: 0.92rem; }
+.card li { margin-bottom: 3px; }
+
+/* ===== Metric highlight ===== */
+.metric {
+  display: inline-block; font-size: 1.8rem; font-weight: 700;
+  line-height: 1.1; margin: 4px 0 6px;
+}
+.metric-label {
+  display: block; font-size: 0.78rem; font-weight: 400; color: #57606a;
+  margin-top: 2px;
+}
+.card-before .metric { color: #953800; }
+.card-after .metric { color: #1a7f37; }
+
+/* ===== Info box ===== */
+.info-box {
+  background: #f3f6fa; border: 1px solid #d8dee4; border-radius: 6px;
+  padding: 14px 18px; margin: 14px 0 18px; font-size: 0.9rem;
+}
+.info-box strong { color: #1c2128; }
+
+/* ===== File table ===== */
+table.file-table {
+  width: 100%; border-collapse: collapse; margin: 12px 0 20px; font-size: 0.88rem;
+}
+table.file-table th {
+  text-align: left; padding: 8px 10px; background: #eef1f5;
+  border-bottom: 2px solid #d0d7de; font-weight: 600; color: #1c2128;
+}
+table.file-table td {
+  padding: 7px 10px; border-bottom: 1px solid #d8dee4; vertical-align: top;
+}
+table.file-table tr:hover td { background: #f3f6fa; }
+table.file-table td:first-child {
+  font-family: 'SF Mono', Menlo, monospace; font-size: 0.84em; white-space: nowrap;
+}
+
+/* ===== SVG diagram ===== */
+.svg-container {
+  margin: 14px 0 18px; text-align: center;
+}
+.svg-container svg {
+  max-width: 100%;
+}
+
+/* ===== Responsive ===== */
+@media (max-width: 900px) {
+  nav.sidebar { position: static; width: 100%; }
+  main { margin-left: 0; padding: 20px; }
+  .compare-grid { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+
+<!-- ===== SIDEBAR ===== -->
+<nav class="sidebar">
+  <div class="logo">
+    <h1>Lattice</h1>
+    <p>Berger-Oliger Subcycling</p>
+  </div>
+  <ul>
+    <li><a class="section-header">Overview</a></li>
+    <li><a href="#problem">The Problem</a></li>
+    <li><a href="#solution">The Solution</a></li>
+
+    <li><a class="section-header">Details</a></li>
+    <li><a href="#temporal-interp">Temporal Interpolation</a></li>
+    <li><a href="#implementation">Implementation</a></li>
+    <li><a href="#data-flow">Data Flow</a></li>
+
+    <li><a class="section-header">Reference</a></li>
+    <li><a href="#file-map">File Map</a></li>
+    <li><a href="#references">References</a></li>
+  </ul>
+</nav>
+
+<!-- ===== MAIN ===== -->
+<main>
+
+<div class="banner">
+  <strong>Living document.</strong> This file describes Berger-Oliger subcycling for AMR time integration.
+  See also: <a href="architecture.html">architecture.html</a> for the full codebase map,
+  <a href="gpu_batch_kernels.html">gpu_batch_kernels.html</a> for the packed batch kernel architecture.<br>
+  <strong>Last updated:</strong> 2026-02-18
+</div>
+
+<!-- ========================================== -->
+<h2 id="problem">The Problem: CFL vs Efficiency</h2>
+
+<p>In AMR, each refinement level halves the grid spacing: dx<sub>L</sub> = dx<sub>0</sub> / 2<sup>L</sup>. The CFL stability condition requires dt &le; C &middot; dx, so fine levels need proportionally smaller timesteps. Without subcycling, there are two bad options:</p>
+
+<div class="compare-grid">
+  <div class="card card-before">
+    <span class="card-label">OPTION A: GLOBAL FINE DT</span>
+    <h4>Use smallest dt everywhere</h4>
+    <ul>
+      <li>dt = CFL &middot; dx<sub>finest</sub> for all levels</li>
+      <li>Fine levels are happy (CFL satisfied)</li>
+      <li>Coarse levels waste work: taking 2<sup>L</sup> steps when 1 would suffice</li>
+    </ul>
+    <div class="metric">4x<span class="metric-label">wasted coarse-level work (max_level=2)</span></div>
+  </div>
+  <div class="card card-before">
+    <span class="card-label">OPTION B: GLOBAL COARSE DT</span>
+    <h4>Use largest dt everywhere</h4>
+    <ul>
+      <li>dt = CFL &middot; dx<sub>coarsest</sub> for all levels</li>
+      <li>Coarse levels step efficiently</li>
+      <li>Fine levels violate CFL &rarr; <strong>unstable</strong></li>
+    </ul>
+    <div class="metric">Crash<span class="metric-label">CFL violation at fine levels</span></div>
+  </div>
+</div>
+
+<!-- ========================================== -->
+<h2 id="solution">The Solution: Berger-Oliger Subcycling</h2>
+
+<p>Each AMR level uses its own CFL-appropriate timestep: <strong>dt<sub>L</sub> = dt<sub>0</sub> / 2<sup>L</sup></strong>. Fine levels take 2x more sub-steps per coarse step. The recursion pattern:</p>
+
+<div class="diagram"><span class="highlight">Subcycling step counts per coarse step</span>
+
+<span class="type">Level 0:</span>  1 step  at dt         <span class="comment">(coarsest)</span>
+<span class="type">Level 1:</span>  2 steps at dt/2
+<span class="type">Level 2:</span>  4 steps at dt/4
+<span class="type">Level L:</span>  2^L steps at dt/2^L   <span class="comment">(finest)</span></div>
+
+<p>The levels are advanced recursively. After a coarse step, the next finer level takes two sub-steps to cover the same time interval:</p>
+
+<div class="svg-container">
+<svg viewBox="0 0 680 220" width="680" height="220" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background -->
+  <rect width="680" height="220" rx="6" fill="#1c2128"/>
+
+  <!-- Level labels -->
+  <text x="20" y="52" fill="#79c0ff" font-family="SF Mono, Menlo, monospace" font-size="12" font-weight="600">Level 0</text>
+  <text x="20" y="112" fill="#79c0ff" font-family="SF Mono, Menlo, monospace" font-size="12" font-weight="600">Level 1</text>
+  <text x="20" y="172" fill="#79c0ff" font-family="SF Mono, Menlo, monospace" font-size="12" font-weight="600">Level 2</text>
+
+  <!-- Time axis -->
+  <text x="110" y="20" fill="#636e7b" font-family="SF Mono, Menlo, monospace" font-size="10">t</text>
+  <text x="330" y="20" fill="#636e7b" font-family="SF Mono, Menlo, monospace" font-size="10">t + dt/2</text>
+  <text x="570" y="20" fill="#636e7b" font-family="SF Mono, Menlo, monospace" font-size="10">t + dt</text>
+
+  <!-- Level 0: one step -->
+  <line x1="110" y1="48" x2="580" y2="48" stroke="#7ee787" stroke-width="3"/>
+  <circle cx="110" cy="48" r="5" fill="#7ee787"/>
+  <circle cx="580" cy="48" r="5" fill="#7ee787"/>
+  <text x="330" y="42" fill="#7ee787" font-family="SF Mono, Menlo, monospace" font-size="10" text-anchor="middle">dt</text>
+
+  <!-- Arrow from L0 end to L1 start -->
+  <line x1="345" y1="58" x2="145" y2="98" stroke="#636e7b" stroke-width="1" stroke-dasharray="4,3"/>
+
+  <!-- Level 1: two steps -->
+  <line x1="110" y1="108" x2="345" y2="108" stroke="#f0883e" stroke-width="3"/>
+  <line x1="345" y1="108" x2="580" y2="108" stroke="#f0883e" stroke-width="3"/>
+  <circle cx="110" cy="108" r="5" fill="#f0883e"/>
+  <circle cx="345" cy="108" r="5" fill="#f0883e"/>
+  <circle cx="580" cy="108" r="5" fill="#f0883e"/>
+  <text x="225" y="102" fill="#f0883e" font-family="SF Mono, Menlo, monospace" font-size="10" text-anchor="middle">dt/2</text>
+  <text x="462" y="102" fill="#f0883e" font-family="SF Mono, Menlo, monospace" font-size="10" text-anchor="middle">dt/2</text>
+
+  <!-- Level 2: four steps -->
+  <line x1="110" y1="168" x2="227" y2="168" stroke="#d2a8ff" stroke-width="3"/>
+  <line x1="227" y1="168" x2="345" y2="168" stroke="#d2a8ff" stroke-width="3"/>
+  <line x1="345" y1="168" x2="462" y2="168" stroke="#d2a8ff" stroke-width="3"/>
+  <line x1="462" y1="168" x2="580" y2="168" stroke="#d2a8ff" stroke-width="3"/>
+  <circle cx="110" cy="168" r="4" fill="#d2a8ff"/>
+  <circle cx="227" cy="168" r="4" fill="#d2a8ff"/>
+  <circle cx="345" cy="168" r="4" fill="#d2a8ff"/>
+  <circle cx="462" cy="168" r="4" fill="#d2a8ff"/>
+  <circle cx="580" cy="168" r="4" fill="#d2a8ff"/>
+  <text x="168" y="162" fill="#d2a8ff" font-family="SF Mono, Menlo, monospace" font-size="10" text-anchor="middle">dt/4</text>
+  <text x="286" y="162" fill="#d2a8ff" font-family="SF Mono, Menlo, monospace" font-size="10" text-anchor="middle">dt/4</text>
+  <text x="403" y="162" fill="#d2a8ff" font-family="SF Mono, Menlo, monospace" font-size="10" text-anchor="middle">dt/4</text>
+  <text x="521" y="162" fill="#d2a8ff" font-family="SF Mono, Menlo, monospace" font-size="10" text-anchor="middle">dt/4</text>
+
+  <!-- Dashed arrows showing recursion -->
+  <line x1="225" y1="118" x2="165" y2="158" stroke="#636e7b" stroke-width="1" stroke-dasharray="4,3"/>
+  <line x1="462" y1="118" x2="400" y2="158" stroke="#636e7b" stroke-width="1" stroke-dasharray="4,3"/>
+
+  <!-- Legend -->
+  <text x="110" y="205" fill="#636e7b" font-family="SF Mono, Menlo, monospace" font-size="10">Each level takes 2x more sub-steps than its parent</text>
+</svg>
+</div>
+
+<p>The recursion is depth-first: advance the coarse level, then recursively subcycle finer levels within each coarse step. This ensures the coarse solution is always available when fine levels need ghost data.</p>
+
+<div class="diagram"><span class="highlight">Recursive call pattern (pseudocode)</span>
+
+<span class="fn">subcycle_level</span>(level, dt_level, t_start):
+    <span class="fn">save_old</span>(level)                <span class="comment">// snapshot for temporal interpolation</span>
+    <span class="fn">step_level</span>(level, dt_level)    <span class="comment">// advance this level by dt_level</span>
+    if level &lt; max_level:
+        <span class="fn">subcycle_level</span>(level+1, dt_level/2, t_start)              <span class="comment">// first sub-step</span>
+        <span class="fn">subcycle_level</span>(level+1, dt_level/2, t_start + dt_level/2)  <span class="comment">// second sub-step</span>
+    <span class="fn">restrict</span>(level+1 &rarr; level)     <span class="comment">// fine data overwrites coarse parents</span>
+    <span class="fn">enforce_algebraic</span>(level)       <span class="comment">// det(gambar)=1, tr(Abar)=0</span></div>
+
+<!-- ========================================== -->
+<h2 id="temporal-interp">Temporal Interpolation</h2>
+
+<p>When a fine block needs ghost data from a coarser neighbor mid-subcycle, the coarse data exists at two times: the saved old state (before the coarse step) and the current state (after the coarse step). We linearly interpolate between them:</p>
+
+<div class="diagram"><span class="highlight">Temporal interpolation formula</span>
+
+  <span class="type">U(t)</span> = (1 - frac) * <span class="fn">U_old</span> + frac * <span class="fn">U_new</span>
+
+  where <span class="type">frac</span> = (t - t_old) / (t_new - t_old)
+
+<span class="comment">Examples during one coarse step [t, t + dt_coarse]:</span>
+  First  fine sub-step at t:                frac = <span class="highlight">0.0</span>  &rarr; use U_old
+  Second fine sub-step at t + dt_coarse/2:  frac = <span class="highlight">0.5</span>  &rarr; midpoint average</div>
+
+<p>This interpolation is first-order in time, which is sufficient because the spatial prolongation (4th-order Lagrange) dominates the error budget. The ghost fill happens <em>before</em> the fine level is packed into its per-level <code>meshblock_pack_t</code>, so the fine pack sees already-filled boundary data.</p>
+
+<div class="info-box">
+  <strong>Why save the old state?</strong> After the coarse level steps, its fields hold the new state.
+  Without a saved copy of the pre-step state, we cannot interpolate to intermediate times.
+  Only levels that have finer children need <code>fields_old</code> storage &mdash; leaf levels at <code>max_level</code> never save.
+</div>
+
+<!-- ========================================== -->
+<h2 id="implementation">Implementation</h2>
+
+<p>Five functions coordinate the subcycling:</p>
+
+<table class="file-table">
+<tr><th>Function</th><th>File</th><th>Role</th></tr>
+<tr><td>subcycle_level()</td><td>src/numerics/rk4.c</td><td>Recursive driver: save old, step, recurse into finer levels, restrict, enforce constraints</td></tr>
+<tr><td>step_level()</td><td>src/numerics/rk4.c</td><td>Advance one level by dt: fill cross-level ghosts, build per-level pack, run CK45/RK4 stages</td></tr>
+<tr><td>ghost_fill_from_coarser()</td><td>src/amr/ghost_exchange.c</td><td>Time-interpolate coarse neighbors, copy into fine coarse_buf, prolongate to fine ghosts</td></tr>
+<tr><td>mesh_build_level_pack()</td><td>src/numerics/rk4.c</td><td>Build a <code>meshblock_pack_t</code> containing only leaf blocks at a single level</td></tr>
+<tr><td>block_save_old() / block_time_interp()</td><td>src/amr/block.h/c</td><td>Save pre-step state; interpolate between old and new for ghost fill</td></tr>
+</table>
+
+<h3>Per-Level Packing</h3>
+<p>Unlike the global all-leaves pack used for uniform grids, subcycling builds a <strong>per-level pack</strong> for each step. Only blocks at the target level are packed, so the CK45/RK4 kernel processes a single refinement level at a time. This keeps the same batch kernel infrastructure while respecting per-level timesteps.</p>
+
+<pre><code>// step_level: build per-level pack, then run the standard CK45 kernel sequence
+meshblock_pack_t *pack = mesh_build_level_pack(m, level, p->rk_method);
+
+if (level > 0)
+    ghost_fill_from_coarser(m, level, frac);  // temporal interpolation
+
+backend_map_pack(pack, p);
+backend_zero_packed(pack, PACK_BUF_SCRATCH);
+for (int s = 0; s < 5; s++) {
+    backend_ghost_exchange_packed(pack);       // same-level ghosts only
+    backend_compute_rhs_packed(pack, p);
+    backend_sommerfeld_packed(pack, p);
+    backend_update_ck45_packed(pack, CK_A[s], CK_B[s], dt_level);
+}
+backend_unmap_pack(pack);
+meshblock_pack_store(pack, m->blocks);</code></pre>
+
+<!-- ========================================== -->
+<h2 id="data-flow">Data Flow: One Coarse Step (max_level=1)</h2>
+
+<p>Walk through a complete coarse step with two AMR levels (level 0 and level 1). The coarse step covers time interval [t, t+dt].</p>
+
+<div class="diagram"><span class="highlight">subcycle_level(level=0, dt, t)</span>
+
+ <span class="fn">1. Save level-0 old state</span>                     <span class="comment">// mesh_save_old_level(m, 0)</span>
+    For each level-0 leaf: memcpy fields &rarr; fields_old
+    Now fields_old = state at time t
+
+ <span class="fn">2. Step level 0 by dt</span>                          <span class="comment">// step_level(m, p, 0, dt, 0.0)</span>
+    Build level-0 pack &rarr; CK45 stages &rarr; store back
+    Level-0 blocks now at time t + dt
+
+ <span class="fn">3. First level-1 sub-step</span>                      <span class="comment">// subcycle_level(level=1, dt/2, t)</span>
+    <span class="type">frac = 0.0</span> (t_start = t = coarse old time)
+    ghost_fill_from_coarser:
+      U_ghost = (1-0) * U_old + 0 * U_new = <span class="highlight">U_old</span>
+    Build level-1 pack &rarr; CK45 stages &rarr; store back
+    Level-1 blocks now at time t + dt/2
+
+ <span class="fn">4. Second level-1 sub-step</span>                     <span class="comment">// subcycle_level(level=1, dt/2, t + dt/2)</span>
+    <span class="type">frac = 0.5</span> (midway through coarse step)
+    ghost_fill_from_coarser:
+      U_ghost = 0.5 * U_old + 0.5 * U_new = <span class="highlight">midpoint average</span>
+    Build level-1 pack &rarr; CK45 stages &rarr; store back
+    Level-1 blocks now at time t + dt
+
+ <span class="fn">5. Restrict level 1 &rarr; level 0</span>                 <span class="comment">// restrict_level_to_parents(m, 1)</span>
+    Volume-weighted fine averaging overwrites coarse-parent cells
+    Ensures coarse-fine consistency at level boundary
+
+ <span class="fn">6. Enforce algebraic constraints</span>               <span class="comment">// enforce_algebraic per block</span>
+    det(gambar) = 1, tr(Abar) = 0, chi &gt; 0, lapse &gt; 0</div>
+
+<div class="info-box">
+  <strong>Key ordering detail:</strong> The coarse level steps <em>first</em>, before the fine sub-steps. This is the Berger-Oliger "coarse-first" strategy. The coarse solution at t+dt is available throughout the fine sub-steps, enabling temporal interpolation. The final restriction step (fine &rarr; coarse) then corrects the coarse solution with higher-resolution data from the fine level.
+</div>
+
+<!-- ========================================== -->
+<h2 id="file-map">File Map</h2>
+
+<table class="file-table">
+<tr><th>File</th><th>Subcycling Role</th></tr>
+<tr><td>src/numerics/rk4.c</td><td><code>subcycle_level()</code>, <code>step_level()</code>, <code>mesh_build_level_pack()</code>, <code>mesh_save_old_level()</code></td></tr>
+<tr><td>src/amr/block.h</td><td><code>block_alloc_fields_old()</code>, <code>block_save_old()</code>, <code>block_time_interp()</code> declarations</td></tr>
+<tr><td>src/amr/block.c</td><td>Implementation of old-state save/restore and temporal interpolation</td></tr>
+<tr><td>src/amr/ghost_exchange.c</td><td><code>ghost_fill_from_coarser()</code>: temporal interpolation + prolongation for cross-level ghosts</td></tr>
+<tr><td>src/amr/restriction.c</td><td><code>restrict_level_to_parents()</code>: volume-weighted fine &rarr; coarse averaging</td></tr>
+<tr><td>src/amr/meshblock_pack.c</td><td>Per-level pack creation (filtered by level in <code>mesh_build_level_pack</code>)</td></tr>
+</table>
+
+<!-- ========================================== -->
+<h2 id="references">References</h2>
+
+<ul>
+  <li><strong>Berger &amp; Oliger (1984):</strong> <em>Adaptive mesh refinement for hyperbolic partial differential equations</em>, JCP 53:484 &mdash; Original subcycling algorithm</li>
+  <li><strong>Berger &amp; Colella (1989):</strong> <em>Local adaptive mesh refinement for shock hydrodynamics</em>, JCP 82:64 &mdash; Block-structured AMR with subcycling</li>
+  <li><strong>Athena++:</strong> Stone et al. 2020, ApJS 249, 4 &mdash; <code>Mesh::Step()</code> recursive subcycling reference</li>
+  <li><strong>GRChombo:</strong> Andrade et al. 2021 (JOSS) &mdash; <code>GRAMRLevel::advance()</code> + Chombo <code>AMR::timeStep()</code></li>
+  <li><strong>AthenaK:</strong> Grete et al. 2024, <a href="https://arxiv.org/abs/2409.16053">arXiv:2409.16053</a> &mdash; Per-level MeshBlockPack construction</li>
+</ul>
+
+</main>
+</body>
+</html>
