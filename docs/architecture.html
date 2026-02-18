@@ -455,7 +455,7 @@ Grid indexing:  IDX(g, i, j, k) = k * Ntotal^2 + j * Ntotal + i
 <tr><td><code>rk4_step_mesh(m, p, rhs_func, dt)</code></td><td>Packed batch: builds meshblock_pack from all leaves, dispatches to <code>ck45_step_mesh_packed</code> or <code>classic_rk4_step_mesh_packed</code>. One kernel per op for all blocks.</td></tr>
 <tr><td><code>rk4_step_mesh_perblock(m, p, rhs_func, dt)</code></td><td>Per-block fallback for debug/comparison. Same algorithm, one kernel per block per stage. Should produce identical results to packed path.</td></tr>
 <tr><td><code>mesh_build_leaf_pack(m, rk_method)</code></td><td>Static. Collects leaf IDs, creates pack, loads fields/metadata/neighbors/coarse_buf.</td></tr>
-<tr><td><code>packed_ghost_exchange_fallback(pack, m)</code></td><td>Static. Commit 1: unpack &rarr; CPU 5-phase exchange &rarr; repack.</td></tr>
+<tr><td colspan="2"><em>Note: Ghost exchange now handled by <code>backend_ghost_exchange_packed(pack)</code> (Commit 2). Old <code>packed_ghost_exchange_fallback</code> removed.</em></td></tr>
 </table>
 
 <p><strong>CK45 coefficients:</strong> Carpenter &amp; Kennedy, NASA TM-109112 (1994), Solution 3.</p>
@@ -526,7 +526,7 @@ Grid indexing:  IDX(g, i, j, k) = k * Ntotal^2 + j * Ntotal + i
 <tr><td><code>backend_accum_add_packed(pack, w, dt)</code></td><td>Classic RK4: accum += w * dt * rhs</td></tr>
 <tr><td><code>backend_axpy_packed(pack, a, dt)</code></td><td>Classic RK4: data = scratch + a*dt*rhs</td></tr>
 <tr><td><code>backend_apply_accum_packed(pack)</code></td><td>Classic RK4: data += accum</td></tr>
-<tr><td><code>backend_ghost_exchange_packed(pack)</code></td><td>Device-side ghost exchange (Commit 2, stub)</td></tr>
+<tr><td><code>backend_ghost_exchange_packed(pack)</code></td><td>5-phase multilevel ghost exchange on pack buffers (Commit 2). CPU: direct on host. GPU: sync to host, exchange, sync back.</td></tr>
 </table>
 
 <p><strong>Depends on:</strong> grid.h, params.h, meshblock_pack.h<br>
@@ -539,8 +539,9 @@ Grid indexing:  IDX(g, i, j, k) = k * Ntotal^2 + j * Ntotal + i
 <div class="detail-body">
 <p><strong>Legacy path:</strong> Triple loop with <code>#pragma omp parallel for collapse(2)</code> over z,y. Calls RHS via function pointer.</p>
 <p><strong>Packed path:</strong> All packed functions use <code>#pragma omp parallel for</code>. The batched RHS iterates over blocks, building per-field pointer arrays into the pack layout and a stack-local <code>grid_t</code>, then calls <code>ccz4_rhs_point</code> with <code>collapse(2)</code> over k,j. Map/unmap are no-ops. This enables full testing of packed infrastructure on macOS without GPU hardware.</p>
+<p><strong>Ghost exchange (Commit 2):</strong> Full 5-phase multilevel ghost exchange operating directly on pack buffers &mdash; no unpack/repack. Phase 0+1: same-level 26-neighbor exchange; Phase 2: restrict fine&rarr;coarse_buf; Phase 3: fill coarse_buf ghosts; Phase 3.5: boundary quadratic extrapolation; Phase 4: prolongate coarse_buf&rarr;fine ghosts.</p>
 
-<p><strong>Depends on:</strong> backend.h, ccz4_rhs.h, sommerfeld.h<br>
+<p><strong>Depends on:</strong> backend.h, ccz4_rhs.h, sommerfeld.h, block.h, restriction.h, prolongation.h<br>
 <strong>Depended on by:</strong> linked at build time when <code>BACKEND=cpu</code></p>
 </div>
 </details>
@@ -550,10 +551,11 @@ Grid indexing:  IDX(g, i, j, k) = k * Ntotal^2 + j * Ntotal + i
 <div class="detail-body">
 <p><strong>Legacy path:</strong> <code>#pragma omp target teams distribute parallel for collapse(3)</code>. Calls <code>ccz4_rhs_point</code> directly (no function pointers on GPU).</p>
 <p><strong>Packed path:</strong> Batched kernels use <code>collapse(4)</code> over (block, k, j, i). Each GPU thread builds per-field pointer arrays (~400B) and a stack-local <code>grid_t</code> (~872B) on its thread stack, then calls <code>ccz4_rhs_point</code> (~4KB). Total ~5.3KB per thread &lt; 16KB limit. Map/unmap use <code>omp target enter/exit data</code>. Arithmetic kernels (CK45 update, copy, axpy, etc.) are flat loops over the full pack buffer.</p>
+<p><strong>Ghost exchange (Commit 2):</strong> Syncs pack data to host via <code>omp target update from/to</code>, runs 5-phase multilevel exchange on host (same code as CPU backend), syncs back. Eliminates Commit 1 unpack/repack overhead. True device-side kernels deferred to future optimization.</p>
 
 <p><strong>Requires:</strong> GCC 15+ with <code>GOMP_NVPTX_NATIVE_GPU_THREAD_STACK_SIZE=16384</code>.</p>
 
-<p><strong>Depends on:</strong> backend.h, ccz4_rhs.h, sommerfeld.h<br>
+<p><strong>Depends on:</strong> backend.h, ccz4_rhs.h, sommerfeld.h, block.h, restriction.h, prolongation.h<br>
 <strong>Depended on by:</strong> linked at build time when <code>BACKEND=gpu</code></p>
 </div>
 </details>

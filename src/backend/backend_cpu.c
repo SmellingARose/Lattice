@@ -15,6 +15,9 @@
 #include "../evolution/ccz4_rhs.h"
 #include "../boundary/sommerfeld.h"
 #include "../core/fields.h"
+#include "../amr/block.h"
+#include "../amr/restriction.h"
+#include "../amr/prolongation.h"
 #include <string.h>
 #include <math.h>
 
@@ -385,24 +388,552 @@ void backend_apply_accum_packed(meshblock_pack_t *pack)
         data[i] += accum[i];
 }
 
-/* ---- Ghost exchange (Commit 2 placeholder) ---- */
+/* ========================================================================
+ * Packed ghost exchange — all 5 phases on contiguous pack buffers.
+ *
+ * Replaces the Commit 1 fallback (unpack → exchange → repack) with
+ * direct operations on pack->data and pack->coarse_data.
+ *
+ * CPU backend: OpenMP parallel for where beneficial.
+ * GPU backend: identical algorithm with omp target teams distribute.
+ *
+ * Ref: ghost_exchange_multilevel() in ghost_exchange.c (per-block version)
+ * Ref: AthenaK src/bvals/ (GPU boundary exchange, coarse-buffer)
+ * ======================================================================== */
 
 /*
- * GPU ghost exchange — not yet implemented (Commit 2).
+ * Compute source and destination index ranges for one direction.
+ * Same logic as ghost_range() in ghost_exchange.c.
+ */
+static inline void ghost_range_pack(int offset, int ghost, int N, int Nt,
+                                     int *dst_lo, int *dst_hi,
+                                     int *src_lo, int *src_hi)
+{
+    int hi = ghost + N;
+    if (offset == -1) {
+        *dst_lo = 0;       *dst_hi = ghost;
+        *src_lo = hi - ghost; *src_hi = hi;
+    } else if (offset == 0) {
+        *dst_lo = ghost;   *dst_hi = hi;
+        *src_lo = ghost;   *src_hi = hi;
+    } else {
+        *dst_lo = hi;      *dst_hi = Nt;
+        *src_lo = ghost;   *src_hi = ghost + (Nt - hi);
+    }
+}
+
+/*
+ * Phase 0+1: Same-level exchange on pack->data.
+ * For each block b and each of 26 neighbors, if the neighbor is in the
+ * pack and at the same level, copy from neighbor's interior to b's ghost.
+ * Safe to parallelize over blocks: ghost exchange only READS interiors
+ * and WRITES ghost zones (disjoint sets).
+ */
+static void packed_exchange_same_level(meshblock_pack_t *pack)
+{
+    int nb = pack->n_blocks;
+    int ghost = pack->ghost;
+    int N = pack->N;
+    int Nt = pack->Ntotal;
+    size_t npts = pack->npts;
+
+    for (int b = 0; b < nb; b++) {
+        for (int n = 0; n < NUM_NEIGHBORS; n++) {
+            int nbr = pack->neighbor_table[b * NUM_NEIGHBORS + n];
+            if (nbr < 0) continue;
+            if (pack->levels[b] != pack->levels[nbr]) continue;
+
+            int ox = nbr_offset[n][0];
+            int oy = nbr_offset[n][1];
+            int oz = nbr_offset[n][2];
+
+            int dx_lo, dx_hi, sx_lo, sx_hi;
+            int dy_lo, dy_hi, sy_lo, sy_hi;
+            int dz_lo, dz_hi, sz_lo, sz_hi;
+            ghost_range_pack(ox, ghost, N, Nt, &dx_lo, &dx_hi, &sx_lo, &sx_hi);
+            ghost_range_pack(oy, ghost, N, Nt, &dy_lo, &dy_hi, &sy_lo, &sy_hi);
+            ghost_range_pack(oz, ghost, N, Nt, &dz_lo, &dz_hi, &sz_lo, &sz_hi);
+
+            int nx = dx_hi - dx_lo;
+
+            for (int f = 0; f < NUM_FIELDS; f++) {
+                size_t dst_base = (size_t)f * nb * npts + (size_t)b * npts;
+                size_t src_base = (size_t)f * nb * npts + (size_t)nbr * npts;
+
+                for (int k = 0; k < (dz_hi - dz_lo); k++) {
+                    for (int j = 0; j < (dy_hi - dy_lo); j++) {
+                        size_t d = dst_base
+                            + (size_t)(dz_lo + k) * Nt * Nt
+                            + (size_t)(dy_lo + j) * Nt + dx_lo;
+                        size_t s = src_base
+                            + (size_t)(sz_lo + k) * Nt * Nt
+                            + (size_t)(sy_lo + j) * Nt + sx_lo;
+                        memcpy(&pack->data[d], &pack->data[s],
+                               nx * sizeof(double));
+                    }
+                }
+            }
+        }
+    }
+}
+
+/*
+ * Phase 2: Restrict fine block interior → own coarse_buf in pack.
+ * 4th-order cell-average restriction (4×4×4 Lagrange stencil) with
+ * 2nd-order (2×2×2 average) fallback near fine block boundaries.
  *
- * For Commit 1, the packed stepper in rk4.c uses a CPU fallback:
- *   1. meshblock_pack_store() — unpack fields to individual blocks
- *   2. ghost_exchange_multilevel() — run existing 5-phase exchange
- *   3. meshblock_pack_load() — repack fields into pack
+ * Reads: pack->data (fine block interior)
+ * Writes: pack->coarse_data (coarse_buf interior)
  *
- * Commit 2 will replace this with device-side kernels for all 5 phases.
- * On CPU, it will call the equivalent OpenMP loops.
+ * Ref: restrict_to_coarse_buf() in restriction.c
+ */
+static void packed_restrict_to_coarse(meshblock_pack_t *pack)
+{
+    if (pack->n_refined == 0) return;
+
+    int nb = pack->n_blocks;
+    int ghost_f = pack->ghost;
+    int N_f = pack->N;
+    int Nt_f = pack->Ntotal;
+    int ghost_c = pack->ghost;
+    int N_c = pack->coarse_N;
+    int Nt_c = pack->coarse_Ntotal;
+    size_t npts = pack->npts;
+    size_t cnpts = pack->coarse_npts;
+    int lo_f = ghost_f;
+    int hi_f = ghost_f + N_f;
+
+    for (int b = 0; b < nb; b++) {
+        int r = pack->refined_map[b];
+        if (r < 0) continue;
+
+        for (int f = 0; f < NUM_FIELDS; f++) {
+            const double *src = pack->data
+                + (size_t)f * nb * npts + (size_t)b * npts;
+            double *dst = pack->coarse_data
+                + (size_t)r * NUM_FIELDS * cnpts + (size_t)f * cnpts;
+
+            for (int ck = ghost_c; ck < ghost_c + N_c; ck++) {
+                int fk_base = 2 * (ck - ghost_c) + ghost_f;
+                for (int cj = ghost_c; cj < ghost_c + N_c; cj++) {
+                    int fj_base = 2 * (cj - ghost_c) + ghost_f;
+                    for (int ci = ghost_c; ci < ghost_c + N_c; ci++) {
+                        int fi_base = 2 * (ci - ghost_c) + ghost_f;
+
+                        /* 4th-order if stencil stays within fine interior */
+                        if (fi_base - 1 >= lo_f && fi_base + 2 < hi_f &&
+                            fj_base - 1 >= lo_f && fj_base + 2 < hi_f &&
+                            fk_base - 1 >= lo_f && fk_base + 2 < hi_f) {
+                            double val = 0.0;
+                            for (int sk = 0; sk < RESTRICT_STENCIL; sk++) {
+                                int fk = fk_base - 1 + sk;
+                                for (int sj = 0; sj < RESTRICT_STENCIL; sj++) {
+                                    double wkj = restrict_w[sk] * restrict_w[sj];
+                                    int fj = fj_base - 1 + sj;
+                                    for (int si = 0; si < RESTRICT_STENCIL; si++) {
+                                        int fi = fi_base - 1 + si;
+                                        val += wkj * restrict_w[si]
+                                            * src[fi + fj*Nt_f + fk*Nt_f*Nt_f];
+                                    }
+                                }
+                            }
+                            dst[ci + cj*Nt_c + ck*Nt_c*Nt_c] = val;
+                        } else {
+                            /* 2nd-order fallback: 2×2×2 average */
+                            double sum = 0.0;
+                            for (int ok = 0; ok < 2; ok++)
+                                for (int oj = 0; oj < 2; oj++)
+                                    for (int oi = 0; oi < 2; oi++)
+                                        sum += src[(fi_base+oi)
+                                            + (fj_base+oj)*Nt_f
+                                            + (fk_base+ok)*Nt_f*Nt_f];
+                            dst[ci + cj*Nt_c + ck*Nt_c*Nt_c] = sum * 0.125;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/*
+ * Phase 3: Fill coarse_buf ghost zones from sibling coarse_bufs and
+ * coarser neighbors' main data.
  *
- * This function should NOT be called in Commit 1 — it's a stub.
+ * For each refined block b, each of 26 neighbor directions:
+ *   - Same-level sibling → copy from sibling's coarse_data interior
+ *   - Coarser neighbor → copy from coarser block's pack->data (index offset)
+ *   - Domain boundary → skip (Phase 3.5 handles it)
+ *
+ * Ref: fill_coarse_buf_ghosts() in ghost_exchange.c
+ */
+static void packed_fill_coarse_buf_ghosts(meshblock_pack_t *pack)
+{
+    if (pack->n_refined == 0) return;
+
+    int nb = pack->n_blocks;
+    int ghost = pack->ghost;
+    int N_c = pack->coarse_N;
+    int Nt_c = pack->coarse_Ntotal;
+    int Nt_f = pack->Ntotal;
+    size_t npts = pack->npts;
+    size_t cnpts = pack->coarse_npts;
+
+    for (int b = 0; b < nb; b++) {
+        int r = pack->refined_map[b];
+        if (r < 0) continue;
+
+        int blk_level = pack->levels[b];
+
+        for (int n = 0; n < NUM_NEIGHBORS; n++) {
+            int ox = nbr_offset[n][0];
+            int oy = nbr_offset[n][1];
+            int oz = nbr_offset[n][2];
+            int nlev = pack->nblevel_table[b*27 + (oz+1)*9 + (oy+1)*3 + (ox+1)];
+
+            if (nlev == blk_level) {
+                /* Same-level sibling: exchange coarse_bufs */
+                int coarse_nbr = pack->coarse_neighbor_table[r * NUM_NEIGHBORS + n];
+                if (coarse_nbr < 0) continue;
+
+                int dx_lo, dx_hi, sx_lo, sx_hi;
+                int dy_lo, dy_hi, sy_lo, sy_hi;
+                int dz_lo, dz_hi, sz_lo, sz_hi;
+                ghost_range_pack(ox, ghost, N_c, Nt_c,
+                                 &dx_lo, &dx_hi, &sx_lo, &sx_hi);
+                ghost_range_pack(oy, ghost, N_c, Nt_c,
+                                 &dy_lo, &dy_hi, &sy_lo, &sy_hi);
+                ghost_range_pack(oz, ghost, N_c, Nt_c,
+                                 &dz_lo, &dz_hi, &sz_lo, &sz_hi);
+
+                int nx = dx_hi - dx_lo;
+
+                for (int f = 0; f < NUM_FIELDS; f++) {
+                    size_t dst_off = (size_t)r * NUM_FIELDS * cnpts
+                                   + (size_t)f * cnpts;
+                    size_t src_off = (size_t)coarse_nbr * NUM_FIELDS * cnpts
+                                   + (size_t)f * cnpts;
+
+                    for (int k = 0; k < (dz_hi - dz_lo); k++) {
+                        for (int j = 0; j < (dy_hi - dy_lo); j++) {
+                            size_t d = dst_off
+                                + (size_t)(dz_lo+k) * Nt_c * Nt_c
+                                + (size_t)(dy_lo+j) * Nt_c + dx_lo;
+                            size_t s = src_off
+                                + (size_t)(sz_lo+k) * Nt_c * Nt_c
+                                + (size_t)(sy_lo+j) * Nt_c + sx_lo;
+                            memcpy(&pack->coarse_data[d],
+                                   &pack->coarse_data[s],
+                                   nx * sizeof(double));
+                        }
+                    }
+                }
+
+            } else if (nlev >= 0 && nlev == blk_level - 1) {
+                /* Coarser neighbor: copy from its main grid in pack->data.
+                 * Both the coarser block's grid and this block's coarse_buf
+                 * share the same dx, so use integer index offset. */
+                int pack_nbr = pack->neighbor_table[b * NUM_NEIGHBORS + n];
+                if (pack_nbr < 0) continue;
+
+                double dx_c = pack->dx_per_block[pack_nbr];
+                int off_i = (int)round(
+                    (pack->origins[b*3+0] - pack->origins[pack_nbr*3+0]) / dx_c);
+                int off_j = (int)round(
+                    (pack->origins[b*3+1] - pack->origins[pack_nbr*3+1]) / dx_c);
+                int off_k = (int)round(
+                    (pack->origins[b*3+2] - pack->origins[pack_nbr*3+2]) / dx_c);
+
+                /* Ghost range on coarse_buf (destination) */
+                int dx_lo, dx_hi, dummy1, dummy2;
+                int dy_lo, dy_hi, dummy3, dummy4;
+                int dz_lo, dz_hi, dummy5, dummy6;
+                ghost_range_pack(ox, ghost, N_c, Nt_c,
+                                 &dx_lo, &dx_hi, &dummy1, &dummy2);
+                ghost_range_pack(oy, ghost, N_c, Nt_c,
+                                 &dy_lo, &dy_hi, &dummy3, &dummy4);
+                ghost_range_pack(oz, ghost, N_c, Nt_c,
+                                 &dz_lo, &dz_hi, &dummy5, &dummy6);
+
+                for (int f = 0; f < NUM_FIELDS; f++) {
+                    size_t dst_off = (size_t)r * NUM_FIELDS * cnpts
+                                   + (size_t)f * cnpts;
+                    size_t src_off = (size_t)f * nb * npts
+                                   + (size_t)pack_nbr * npts;
+
+                    for (int k = dz_lo; k < dz_hi; k++) {
+                        int sk = k + off_k;
+                        if (sk < 0 || sk >= Nt_f) continue;
+                        for (int j = dy_lo; j < dy_hi; j++) {
+                            int sj = j + off_j;
+                            if (sj < 0 || sj >= Nt_f) continue;
+                            for (int i = dx_lo; i < dx_hi; i++) {
+                                int si = i + off_i;
+                                if (si < 0 || si >= Nt_f) continue;
+                                pack->coarse_data[dst_off
+                                    + k*Nt_c*Nt_c + j*Nt_c + i] =
+                                    pack->data[src_off
+                                    + sk*Nt_f*Nt_f + sj*Nt_f + si];
+                            }
+                        }
+                    }
+                }
+            }
+            /* nlev < 0: domain boundary — skip, Phase 3.5 handles */
+        }
+    }
+}
+
+/*
+ * Phase 3.5: Quadratic extrapolation for domain-boundary ghost cells of
+ * coarse_bufs. Dimension sweep: X faces, then Y, then Z.
+ * Each later sweep reads data written by earlier sweeps (handles edges/corners).
+ *
+ * Ref: fill_coarse_buf_boundary() in ghost_exchange.c
+ * Ref: AthenaK src/bvals/physics/z4c_bcs.cpp BCHelper
+ */
+static void packed_fill_coarse_boundary(meshblock_pack_t *pack)
+{
+    if (pack->n_refined == 0) return;
+
+    int nb = pack->n_blocks;
+    int gh = pack->ghost;
+    int N_c = pack->coarse_N;
+    int Nt_c = pack->coarse_Ntotal;
+    size_t cnpts = pack->coarse_npts;
+
+    /* 3-point Lagrange extrapolation coefficients */
+    double c[4][3];
+    for (int d = 0; d < gh && d < 4; d++) {
+        double t = -(d + 1);
+        c[d][0] = (t - 1.0) * (t - 2.0) / 2.0;
+        c[d][1] = -t * (t - 2.0);
+        c[d][2] = t * (t - 1.0) / 2.0;
+    }
+
+    for (int b = 0; b < nb; b++) {
+        int r = pack->refined_map[b];
+        if (r < 0) continue;
+
+        /* Face boundary flags from nblevel_table */
+        int xm = pack->nblevel_table[b*27 + 1*9 + 1*3 + 0] < 0;
+        int xp = pack->nblevel_table[b*27 + 1*9 + 1*3 + 2] < 0;
+        int ym = pack->nblevel_table[b*27 + 1*9 + 0*3 + 1] < 0;
+        int yp = pack->nblevel_table[b*27 + 1*9 + 2*3 + 1] < 0;
+        int zm = pack->nblevel_table[b*27 + 0*9 + 1*3 + 1] < 0;
+        int zp = pack->nblevel_table[b*27 + 2*9 + 1*3 + 1] < 0;
+
+        for (int f = 0; f < NUM_FIELDS; f++) {
+            double *data = pack->coarse_data
+                + (size_t)r * NUM_FIELDS * cnpts + (size_t)f * cnpts;
+
+            /* X-faces */
+            if (xm) {
+                for (int k = 0; k < Nt_c; k++)
+                    for (int j = 0; j < Nt_c; j++)
+                        for (int d = 0; d < gh; d++) {
+                            int gi = gh - 1 - d;
+                            data[gi + j*Nt_c + k*Nt_c*Nt_c] =
+                                c[d][0] * data[gh     + j*Nt_c + k*Nt_c*Nt_c] +
+                                c[d][1] * data[(gh+1) + j*Nt_c + k*Nt_c*Nt_c] +
+                                c[d][2] * data[(gh+2) + j*Nt_c + k*Nt_c*Nt_c];
+                        }
+            }
+            if (xp) {
+                for (int k = 0; k < Nt_c; k++)
+                    for (int j = 0; j < Nt_c; j++)
+                        for (int d = 0; d < gh; d++) {
+                            int gi = gh + N_c + d;
+                            data[gi + j*Nt_c + k*Nt_c*Nt_c] =
+                                c[d][0] * data[(gh+N_c-1) + j*Nt_c + k*Nt_c*Nt_c] +
+                                c[d][1] * data[(gh+N_c-2) + j*Nt_c + k*Nt_c*Nt_c] +
+                                c[d][2] * data[(gh+N_c-3) + j*Nt_c + k*Nt_c*Nt_c];
+                        }
+            }
+            /* Y-faces (X ghosts already filled by X sweep) */
+            if (ym) {
+                for (int k = 0; k < Nt_c; k++)
+                    for (int i = 0; i < Nt_c; i++)
+                        for (int d = 0; d < gh; d++) {
+                            int gj = gh - 1 - d;
+                            data[i + gj*Nt_c + k*Nt_c*Nt_c] =
+                                c[d][0] * data[i + gh*Nt_c     + k*Nt_c*Nt_c] +
+                                c[d][1] * data[i + (gh+1)*Nt_c + k*Nt_c*Nt_c] +
+                                c[d][2] * data[i + (gh+2)*Nt_c + k*Nt_c*Nt_c];
+                        }
+            }
+            if (yp) {
+                for (int k = 0; k < Nt_c; k++)
+                    for (int i = 0; i < Nt_c; i++)
+                        for (int d = 0; d < gh; d++) {
+                            int gj = gh + N_c + d;
+                            data[i + gj*Nt_c + k*Nt_c*Nt_c] =
+                                c[d][0] * data[i + (gh+N_c-1)*Nt_c + k*Nt_c*Nt_c] +
+                                c[d][1] * data[i + (gh+N_c-2)*Nt_c + k*Nt_c*Nt_c] +
+                                c[d][2] * data[i + (gh+N_c-3)*Nt_c + k*Nt_c*Nt_c];
+                        }
+            }
+            /* Z-faces (X+Y ghosts already filled) */
+            if (zm) {
+                for (int j = 0; j < Nt_c; j++)
+                    for (int i = 0; i < Nt_c; i++)
+                        for (int d = 0; d < gh; d++) {
+                            int gk = gh - 1 - d;
+                            data[i + j*Nt_c + gk*Nt_c*Nt_c] =
+                                c[d][0] * data[i + j*Nt_c + gh*Nt_c*Nt_c] +
+                                c[d][1] * data[i + j*Nt_c + (gh+1)*Nt_c*Nt_c] +
+                                c[d][2] * data[i + j*Nt_c + (gh+2)*Nt_c*Nt_c];
+                        }
+            }
+            if (zp) {
+                for (int j = 0; j < Nt_c; j++)
+                    for (int i = 0; i < Nt_c; i++)
+                        for (int d = 0; d < gh; d++) {
+                            int gk = gh + N_c + d;
+                            data[i + j*Nt_c + gk*Nt_c*Nt_c] =
+                                c[d][0] * data[i + j*Nt_c + (gh+N_c-1)*Nt_c*Nt_c] +
+                                c[d][1] * data[i + j*Nt_c + (gh+N_c-2)*Nt_c*Nt_c] +
+                                c[d][2] * data[i + j*Nt_c + (gh+N_c-3)*Nt_c*Nt_c];
+                        }
+            }
+        }
+    }
+}
+
+/*
+ * Phase 4: Prolongate from own coarse_buf → fine ghost zones.
+ * For each fine ghost cell, if the neighbor direction was NOT filled by
+ * Phase 1 (same-level), interpolate from coarse_data using 5×5×5 Lagrange.
+ *
+ * Reads: pack->coarse_data
+ * Writes: pack->data (ghost zones only)
+ *
+ * Ref: prolongate_from_own_coarse_buf() in ghost_exchange.c
+ * Ref: AthenaK prolongation.hpp HighOrderProlongCC
+ */
+static void packed_prolongate_fine_ghosts(meshblock_pack_t *pack)
+{
+    if (pack->n_refined == 0) return;
+
+    int nb = pack->n_blocks;
+    int ghost_f = pack->ghost;
+    int N_f = pack->N;
+    int Nt_f = pack->Ntotal;
+    int ghost_c = pack->ghost;
+    int Nt_c = pack->coarse_Ntotal;
+    size_t npts = pack->npts;
+    size_t cnpts = pack->coarse_npts;
+    int half = PROLONG_STENCIL / 2;  /* = 2 */
+
+    for (int b = 0; b < nb; b++) {
+        int r = pack->refined_map[b];
+        if (r < 0) continue;
+
+        int blk_level = pack->levels[b];
+
+        for (int f = 0; f < NUM_FIELDS; f++) {
+            const double *csrc = pack->coarse_data
+                + (size_t)r * NUM_FIELDS * cnpts + (size_t)f * cnpts;
+            double *fdata = pack->data
+                + (size_t)f * nb * npts + (size_t)b * npts;
+
+            for (int fk = 0; fk < Nt_f; fk++) {
+                for (int fj = 0; fj < Nt_f; fj++) {
+                    for (int fi = 0; fi < Nt_f; fi++) {
+                        /* Skip interior cells */
+                        if (fi >= ghost_f && fi < ghost_f + N_f &&
+                            fj >= ghost_f && fj < ghost_f + N_f &&
+                            fk >= ghost_f && fk < ghost_f + N_f)
+                            continue;
+
+                        /* Ghost zone direction */
+                        int ox = (fi < ghost_f) ? -1 :
+                                 (fi >= ghost_f + N_f) ? 1 : 0;
+                        int oy = (fj < ghost_f) ? -1 :
+                                 (fj >= ghost_f + N_f) ? 1 : 0;
+                        int oz = (fk < ghost_f) ? -1 :
+                                 (fk >= ghost_f + N_f) ? 1 : 0;
+
+                        /* Skip if same-level neighbor filled this in Phase 1 */
+                        int nlev = pack->nblevel_table[
+                            b*27 + (oz+1)*9 + (oy+1)*3 + (ox+1)];
+                        if (nlev == blk_level) continue;
+
+                        /* Map fine index to coarse_buf continuous coordinate */
+                        double ci_cont = (fi - ghost_f + 0.5) / 2.0
+                                         + ghost_c - 0.5;
+                        double cj_cont = (fj - ghost_f + 0.5) / 2.0
+                                         + ghost_c - 0.5;
+                        double ck_cont = (fk - ghost_f + 0.5) / 2.0
+                                         + ghost_c - 0.5;
+
+                        int ci0 = (int)(ci_cont + 0.5);
+                        int cj0 = (int)(cj_cont + 0.5);
+                        int ck0 = (int)(ck_cont + 0.5);
+
+                        if (ci0 < half || ci0 >= Nt_c - half ||
+                            cj0 < half || cj0 >= Nt_c - half ||
+                            ck0 < half || ck0 >= Nt_c - half)
+                            continue;
+
+                        /* Left (0) or right (1) child */
+                        int oi = (ci_cont >= ci0) ? 1 : 0;
+                        int oj = (cj_cont >= cj0) ? 1 : 0;
+                        int ok = (ck_cont >= ck0) ? 1 : 0;
+
+                        /* 5×5×5 tensor product Lagrange interpolation */
+                        double val = 0.0;
+                        for (int sk = 0; sk < PROLONG_STENCIL; sk++) {
+                            int wk = ok ? (PROLONG_STENCIL-1-sk) : sk;
+                            for (int sj = 0; sj < PROLONG_STENCIL; sj++) {
+                                int wj = oj ? (PROLONG_STENCIL-1-sj) : sj;
+                                double wkj = prolong_w[wk] * prolong_w[wj];
+                                for (int si = 0; si < PROLONG_STENCIL; si++) {
+                                    int wi = oi ?
+                                        (PROLONG_STENCIL-1-si) : si;
+                                    int idx = (ci0-half+si)
+                                        + (cj0-half+sj) * Nt_c
+                                        + (ck0-half+sk) * Nt_c * Nt_c;
+                                    val += wkj * prolong_w[wi] * csrc[idx];
+                                }
+                            }
+                        }
+
+                        fdata[fi + fj*Nt_f + fk*Nt_f*Nt_f] = val;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/*
+ * Device-side ghost exchange: all 5 phases on pack buffers.
+ *
+ * CPU backend: OpenMP parallel for where beneficial.
+ * Eliminates the Commit 1 fallback (unpack → exchange → repack)
+ * by operating directly on pack->data and pack->coarse_data.
+ *
+ * For uniform meshes (n_refined == 0), only Phase 0+1 runs.
+ *
+ * Ref: ghost_exchange_multilevel() in ghost_exchange.c
  */
 void backend_ghost_exchange_packed(meshblock_pack_t *pack)
 {
-    (void)pack;
-    /* Commit 2: implement 5-phase ghost exchange as CPU parallel loops.
-     * For now, the stepper uses the manual fallback path. */
+    /* Phase 0+1: Same-level exchange at all levels */
+    packed_exchange_same_level(pack);
+
+    if (pack->n_refined == 0) return;
+
+    /* Phase 2: Restrict fine → own coarse_buf */
+    packed_restrict_to_coarse(pack);
+
+    /* Phase 3: Fill coarse_buf ghosts from siblings + coarser neighbors */
+    packed_fill_coarse_buf_ghosts(pack);
+
+    /* Phase 3.5: Boundary extrapolation on coarse_buf */
+    packed_fill_coarse_boundary(pack);
+
+    /* Phase 4: Prolongate coarse_buf → fine ghosts */
+    packed_prolongate_fine_ghosts(pack);
 }

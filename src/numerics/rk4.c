@@ -567,38 +567,9 @@ static meshblock_pack_t *mesh_build_leaf_pack(mesh_t *m,
     return pack;
 }
 
-/*
- * Ghost exchange fallback for Commit 1: unpack → CPU exchange → repack.
- *
- * This is the simplest correct approach: data round-trips through the
- * individual blocks' grid_t arrays, using the existing 5-phase multilevel
- * exchange. Correctness-preserving but slow (full memory copy each way).
- *
- * Commit 2 replaces this with backend_ghost_exchange_packed() which
- * performs all 5 phases as device kernels with no host sync.
- */
-static void packed_ghost_exchange_fallback(meshblock_pack_t *pack, mesh_t *m)
-{
-    /* 1. Store pack data back to individual blocks' grids.
-     *    data → fields, rhs → rhs, scratch → scratch, accum → accum.
-     *    The ghost exchange reads from fields[], so this makes the
-     *    current evolved state available in each block's grid. */
-    meshblock_pack_store(pack, m->blocks);
-
-    /* 2. Run existing ghost exchange on the per-block grids.
-     *    For uniform meshes (max_level == 0): same-level exchange only.
-     *    For AMR meshes: full 5-phase multilevel exchange:
-     *      Phase 0+1: same-level exchange at each level
-     *      Phase 2:   restrict fine → own coarse_buf
-     *      Phase 3:   fill coarse_buf ghosts
-     *      Phase 3.5: boundary extrapolation on coarse_buf
-     *      Phase 4:   prolongate coarse_buf → fine ghosts */
-    mesh_ghost_exchange(m);
-
-    /* 3. Reload updated fields (with ghost zones filled) back into pack.
-     *    rhs and scratch also reload but are unchanged by ghost exchange. */
-    meshblock_pack_load(pack, m->blocks);
-}
+/* Commit 1 fallback (packed_ghost_exchange_fallback) removed.
+ * Ghost exchange now runs directly on pack buffers via
+ * backend_ghost_exchange_packed() — no unpack/repack needed. */
 
 /*
  * CK45 packed mesh stepper: all leaf blocks in one pack, one kernel per op.
@@ -606,7 +577,7 @@ static void packed_ghost_exchange_fallback(meshblock_pack_t *pack, mesh_t *m)
  * Algorithm (same CK45 as per-block, different execution model):
  *   dU = 0   (zero scratch)
  *   For s = 0..4:
- *     Ghost exchange (Commit 1: CPU fallback)
+ *     Ghost exchange (Commit 2: direct on pack buffers)
  *     F = RHS(U)       (batched: all blocks in one kernel)
  *     Sommerfeld(F)    (batched: boundary BCs in one kernel)
  *     dU = A[s]*dU + dt*F;  U += B[s]*dU  (fused update, one kernel)
@@ -629,9 +600,8 @@ static void ck45_step_mesh_packed(mesh_t *m, const sim_params_t *p, double dt)
 
     /* 5 CK45 stages */
     for (int s = 0; s < 5; s++) {
-        /* Ghost exchange: Commit 1 fallback (unpack → exchange → repack).
-         * Commit 2 will replace with: backend_ghost_exchange_packed(pack) */
-        packed_ghost_exchange_fallback(pack, m);
+        /* Ghost exchange: all 5 phases on pack buffers (Commit 2) */
+        backend_ghost_exchange_packed(pack);
 
         /* Batched RHS + Sommerfeld BCs: one kernel each for all blocks */
         backend_compute_rhs_packed(pack, p);
@@ -687,28 +657,28 @@ static void classic_rk4_step_mesh_packed(mesh_t *m, const sim_params_t *p,
     backend_zero_packed(pack, PACK_BUF_ACCUM);
 
     /* Stage 1: F1 = RHS(U^0) */
-    packed_ghost_exchange_fallback(pack, m);
+    backend_ghost_exchange_packed(pack);
     backend_compute_rhs_packed(pack, p);
     backend_sommerfeld_packed(pack, p);
     backend_accum_add_packed(pack, 1.0/6.0, dt);   /* accum += dt/6 * F1 */
     backend_axpy_packed(pack, 0.5, dt);             /* data = scratch + dt/2*rhs */
 
     /* Stage 2: F2 = RHS(U^0 + dt/2 * F1) */
-    packed_ghost_exchange_fallback(pack, m);
+    backend_ghost_exchange_packed(pack);
     backend_compute_rhs_packed(pack, p);
     backend_sommerfeld_packed(pack, p);
     backend_accum_add_packed(pack, 1.0/3.0, dt);   /* accum += dt/3 * F2 */
     backend_axpy_packed(pack, 0.5, dt);             /* data = scratch + dt/2*rhs */
 
     /* Stage 3: F3 = RHS(U^0 + dt/2 * F2) */
-    packed_ghost_exchange_fallback(pack, m);
+    backend_ghost_exchange_packed(pack);
     backend_compute_rhs_packed(pack, p);
     backend_sommerfeld_packed(pack, p);
     backend_accum_add_packed(pack, 1.0/3.0, dt);   /* accum += dt/3 * F3 */
     backend_axpy_packed(pack, 1.0, dt);             /* data = scratch + dt*rhs */
 
     /* Stage 4: F4 = RHS(U^0 + dt * F3) */
-    packed_ghost_exchange_fallback(pack, m);
+    backend_ghost_exchange_packed(pack);
     backend_compute_rhs_packed(pack, p);
     backend_sommerfeld_packed(pack, p);
     backend_accum_add_packed(pack, 1.0/6.0, dt);   /* accum += dt/6 * F4 */
@@ -735,7 +705,7 @@ static void classic_rk4_step_mesh_packed(mesh_t *m, const sim_params_t *p,
 /*
  * Production path: packed batch kernels.
  * All leaf blocks packed into one buffer, one kernel per operation.
- * Ghost exchange via CPU fallback (Commit 1) or device kernels (Commit 2).
+ * Ghost exchange via device kernels (Commit 2: direct on pack buffers).
  */
 void rk4_step_mesh(mesh_t *m, const sim_params_t *p,
                    rk4_rhs_func_t rhs_func, double dt)

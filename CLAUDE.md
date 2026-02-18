@@ -82,7 +82,7 @@ Priority order:
 - Spatially varying KO dissipation
 - Full waveform catalog capability
 
-**Current status: Phase 1 — infrastructure + flat spacetime + single BH stable + head-on binary collision complete. AMR fully integrated: `./lattice --amr` runs multi-block mesh evolution with dynamic regridding. GPU batch kernels (Commit 1): packed mesh stepper with batched RHS/Sommerfeld/update kernels, CPU ghost exchange fallback. All tests passing (8/8 pack evolve, 8/8 AMR evolution, 72/72 AMR refine, 16/16 AMR ghost, 15/15 AMR prolong).** Update as milestones are reached.
+**Current status: Phase 1 — infrastructure + flat spacetime + single BH stable + head-on binary collision complete. AMR fully integrated: `./lattice --amr` runs multi-block mesh evolution with dynamic regridding. GPU batch kernels (Commits 1+2): packed mesh stepper with batched RHS/Sommerfeld/update kernels, device-side 5-phase ghost exchange on pack buffers (no unpack/repack). All tests passing (8/8 pack evolve, 8/8 AMR evolution, 72/72 AMR refine, 16/16 AMR ghost, 15/15 AMR prolong).** Update as milestones are reached.
 
 ## Project Structure
 

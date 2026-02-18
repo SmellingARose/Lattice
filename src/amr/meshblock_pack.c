@@ -134,6 +134,8 @@ meshblock_pack_t *meshblock_pack_create(int n_blocks, size_t npts,
     pack->neighbor_table = pack_alloc_int(n_blocks * NUM_NEIGHBORS);
     pack->refined_map   = pack_alloc_int(n_blocks);
 
+    pack->nblevel_table = pack_alloc_int(n_blocks * 27);
+
     /* Initialize refined_map to -1 (no coarse_buf by default) */
     for (int b = 0; b < n_blocks; b++)
         pack->refined_map[b] = -1;
@@ -182,6 +184,9 @@ void meshblock_pack_free(meshblock_pack_t *pack)
     /* Coarse_buf data */
     free(pack->coarse_data);
     free(pack->coarse_neighbor_table);
+
+    /* Neighbor level table */
+    free(pack->nblevel_table);
 
     free(pack);
 }
@@ -295,6 +300,13 @@ void meshblock_pack_load_meta(meshblock_pack_t *pack, block_t **blocks)
 
         /* Refinement level */
         pack->levels[b] = blk->loc.level;
+
+        /* Flatten nblevel[3][3][3] → nblevel_table[b*27 + (oz+1)*9+(oy+1)*3+(ox+1)] */
+        for (int oz = -1; oz <= 1; oz++)
+            for (int oy = -1; oy <= 1; oy++)
+                for (int ox = -1; ox <= 1; ox++)
+                    pack->nblevel_table[b * 27 + (oz+1)*9 + (oy+1)*3 + (ox+1)]
+                        = blk->nblevel[oz+1][oy+1][ox+1];
 
         /* Track refined blocks and build pack→coarse_data index mapping.
          * refined_map[b] gives the coarse_data index for this block,

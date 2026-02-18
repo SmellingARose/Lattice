@@ -86,6 +86,13 @@ typedef struct {
     int     *refined_map;   /* [n_blocks] — pack index → coarse_data index   */
                             /* -1 if level == 0 (no coarse_buf for this blk) */
     int     *coarse_neighbor_table; /* [n_refined * 26] — coarse_buf nbrs    */
+
+    /* ---- neighbor level table for ghost exchange phases 3.5 + 4 ----
+     * Flattened nblevel[3][3][3] per block. Index:
+     *   nblevel_table[b * 27 + (oz+1)*9 + (oy+1)*3 + (ox+1)]
+     * Values: neighbor level, or -1 = domain boundary.
+     * nblevel_table[b*27 + 13] = self level (center element). */
+    int     *nblevel_table;   /* [n_blocks * 27]                           */
 } meshblock_pack_t;
 
 /* Pack indexing macro:

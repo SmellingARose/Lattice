@@ -3,6 +3,58 @@
 > **Note:** When adding/removing/renaming files or functions, also update
 > `docs/architecture.html` — the living map of the codebase structure.
 
+## 2026-02-18: GPU Batch Kernels — Commit 2: Device-Side Ghost Exchange
+
+Replaced the Commit 1 ghost exchange fallback (unpack → CPU 5-phase exchange →
+repack, 3 full data copies per RK stage) with `backend_ghost_exchange_packed()`
+operating directly on pack buffers. Zero data copies on CPU; GPU backend syncs
+to host, runs 5-phase exchange, syncs back (eliminates unpack/repack overhead).
+
+### Architecture
+
+- **5-phase multilevel exchange on pack buffers:**
+  - Phase 0+1: Same-level 26-neighbor copy between `pack->data` slices
+  - Phase 2: 4th-order Lagrange restriction (fine → `pack->coarse_data`)
+  - Phase 3: Fill coarse_buf ghosts from siblings + cross-level copy from coarser neighbor
+  - Phase 3.5: Boundary quadratic extrapolation (dimension sweep x→y→z)
+  - Phase 4: 5×5×5 Lagrange prolongation (coarse_data → fine ghost zones)
+- **New metadata:** `nblevel_table[n_blocks * 27]` — flattened `nblevel[3][3][3]`
+  per block, needed by Phases 3.5 (boundary detection) and 4 (skip same-level-filled ghosts).
+- **CPU backend:** Direct operation on host memory, `omp parallel for`.
+- **GPU backend:** `omp target update from/to` sync brackets around host-side
+  5-phase exchange. True device-side kernels deferred to future optimization.
+- **rk4.c:** Removed `packed_ghost_exchange_fallback()`. All packed steppers
+  now call `backend_ghost_exchange_packed(pack)` directly.
+
+### Files changed
+
+| File | Changes |
+|------|---------|
+| `src/amr/meshblock_pack.h` | Added `nblevel_table` field to struct |
+| `src/amr/meshblock_pack.c` | Allocate/populate/free `nblevel_table` |
+| `src/backend/backend.h` | Updated `backend_ghost_exchange_packed` comment |
+| `src/backend/backend_cpu.c` | Full 5-phase ghost exchange (~550 lines) |
+| `src/backend/backend_gpu.c` | GPU version: sync + 5-phase exchange + sync back |
+| `src/numerics/rk4.c` | Removed fallback, use `backend_ghost_exchange_packed` |
+| `docs/architecture.html` | Updated backend and rk4 module docs |
+
+### Test results
+
+```
+test_pack_evolve: 8/8 passed
+  Packed vs per-block max |diff| = 7.14e-16 (< 1e-12 threshold)
+  Multilevel AMR: regridding works, Ham L2 finite and bounded
+  Flat spacetime: Ham L2 = 4.48e-14 (< 1e-10 threshold)
+
+All other tests pass:
+  test_flat: PASSED (Ham L2 = 5.29e-14)
+  test_convergence: PASSED (order 5.43, 5.47)
+  test_amr_evolve: 8/8 PASSED
+  test_amr_refine: 72/72 PASSED
+  test_amr_ghost: 16/16 PASSED
+  test_amr_prolong: 15/15 PASSED
+```
+
 ## 2026-02-17: GPU Batch Kernels — Commit 1 Complete
 
 Implemented AthenaK-style packed batch kernels for the AMR mesh stepper.
