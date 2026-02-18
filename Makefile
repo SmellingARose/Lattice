@@ -25,7 +25,7 @@ endif
 CORE_SRC    = src/core/grid.c
 EVOLUTION_SRC = src/evolution/ccz4_rhs.c src/evolution/dissipation.c
 NUMERICS_SRC  = src/numerics/rk4.c
-INITIAL_SRC   = src/initial_data/puncture.c
+INITIAL_SRC   = src/initial_data/puncture.c src/initial_data/bowen_york.c src/initial_data/relaxation.c
 DIAG_SRC      = src/diagnostics/constraints.c
 BOUNDARY_SRC  = src/boundary/sommerfeld.c
 IO_SRC        = src/io/output.c
@@ -75,7 +75,7 @@ LDFLAGS = $(BACKEND_LIBS) -lm
 BUILD = build
 
 # Targets
-.PHONY: all debug test test-single-bh test-convergence test-constraints test-head-on test-amr-mesh test-amr-ghost test-amr-prolong test-amr-refine test-amr-evolve test-pack-evolve clean
+.PHONY: all debug test test-single-bh test-convergence test-constraints test-head-on test-amr-mesh test-amr-ghost test-amr-prolong test-amr-refine test-amr-evolve test-pack-evolve test-subcycle test-bowen-york clean
 
 all: $(BUILD)/lattice
 
@@ -181,6 +181,22 @@ $(BUILD)/test_pack_evolve: tests/test_pack_evolve.c $(ALL_SRC)
 test-pack-evolve: $(BUILD)/test_pack_evolve
 	@echo "=== Running packed evolution test ==="
 	$(BUILD)/test_pack_evolve
+
+$(BUILD)/test_subcycle: tests/test_subcycle.c $(ALL_SRC)
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS_OPT) -o $@ tests/test_subcycle.c $(ALL_SRC) $(LDFLAGS)
+
+test-subcycle: $(BUILD)/test_subcycle
+	@echo "=== Running subcycling test ==="
+	$(BUILD)/test_subcycle
+
+$(BUILD)/test_bowen_york: tests/test_bowen_york.c $(ALL_SRC)
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS_OPT) -o $@ tests/test_bowen_york.c $(ALL_SRC) $(LDFLAGS)
+
+test-bowen-york: $(BUILD)/test_bowen_york
+	@echo "=== Running Bowen-York test ==="
+	$(BUILD)/test_bowen_york
 
 clean:
 	rm -rf $(BUILD)

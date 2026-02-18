@@ -68,6 +68,19 @@ typedef struct {
     double ssl_total_mass;     /* total puncture mass M (default 1.0)       */
 } noise_params_t;
 
+/*
+ * Puncture data: mass, position, linear momentum, spin.
+ * Used by Bowen-York initial data (gr-qc/9703066).
+ * 4 values = BL at rest, 7 = with momentum, 10 = with spin.
+ */
+#define MAX_PUNCTURES 16
+typedef struct {
+    double mass;
+    double center[3];
+    double momentum[3];
+    double spin[3];
+} puncture_data_t;
+
 /* Simulation parameters */
 typedef struct {
     int    N;              /* grid points per side (interior)        */

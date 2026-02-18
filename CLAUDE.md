@@ -82,7 +82,7 @@ Priority order:
 - Spatially varying KO dissipation
 - Full waveform catalog capability
 
-**Current status: Phase 1 — infrastructure + flat spacetime + single BH stable + head-on binary collision complete. AMR fully integrated: `./lattice --amr` runs multi-block mesh evolution with dynamic regridding. GPU batch kernels (Commits 1+2): packed mesh stepper with batched RHS/Sommerfeld/update kernels, device-side 5-phase ghost exchange on pack buffers (no unpack/repack). All tests passing (8/8 pack evolve, 8/8 AMR evolution, 72/72 AMR refine, 16/16 AMR ghost, 15/15 AMR prolong).** Update as milestones are reached.
+**Current status: Phase 1 — infrastructure + flat spacetime + single BH stable + head-on binary collision complete. AMR fully integrated: `./lattice --amr` runs multi-block mesh evolution with dynamic regridding. GPU batch kernels (Commits 1+2): packed mesh stepper with batched RHS/Sommerfeld/update kernels, device-side 5-phase ghost exchange on pack buffers (no unpack/repack). Berger-Oliger subcycling: each AMR level advances at its own CFL dt, with temporal interpolation for cross-level ghosts. Bowen-York initial data: `--puncture M,x,y,z,Px,Py,Pz,Sx,Sy,Sz` with hyperbolic relaxation solver for Hamiltonian constraint (Step 1 of plan1.md). All tests passing (29/29 Bowen-York, 7/7 subcycle, 8/8 pack evolve, 8/8 AMR evolution, 72/72 AMR refine, 16/16 AMR ghost, 15/15 AMR prolong).** Update as milestones are reached.
 
 ## Project Structure
 
@@ -110,7 +110,9 @@ lattice/
 │   │   ├── finite_diff.h       # FD_D1, FD_D2 macros (4th-order)
 │   │   └── rk4.c               # RK4 time integrator (+mesh stepping)
 │   ├── initial_data/
-│   │   └── puncture.c          # Brill-Lindquist puncture data
+│   │   ├── puncture.c          # Brill-Lindquist puncture data
+│   │   ├── bowen_york.h/c      # BY A_ij (momentum+spin) + CCZ4 conversion
+│   │   └── relaxation.h/c      # Hyperbolic relaxation solver (Hamiltonian constraint)
 │   ├── diagnostics/
 │   │   ├── constraints.c       # Hamiltonian + momentum constraints
 │   │   └── psi4.c              # Weyl4 scalar extraction
@@ -139,11 +141,15 @@ lattice/
 │   ├── test_head_on_output.txt # saved test output (merger diagnostics)
 │   ├── test_amr_refine.c     # oct-tree refinement + multi-level ghost
 │   ├── test_pack_evolve.c    # packed batch kernel validation
+│   ├── test_subcycle.c       # Berger-Oliger subcycling validation
+│   ├── test_bowen_york.c    # Bowen-York initial data (A_ij + solver + evolution)
 │   └── convergence.sh          # 3-resolution convergence check
 ├── docs/
 │   ├── physics.md              # variable-to-math mapping
 │   ├── architecture.html       # interactive codebase map
-│   └── gpu_batch_kernels.html  # GPU batch kernel optimization explainer
+│   ├── gpu_batch_kernels.html  # GPU batch kernel optimization explainer
+│   ├── bowen_york.html         # Bowen-York initial data explainer
+│   └── plan1.md                # Milestone 5 research & implementation plan
 └── tools/
     └── plot_convergence.py
 ```
@@ -160,6 +166,8 @@ make test-amr-mesh      # AMR mesh creation + Morton ordering
 make test-amr-ghost     # ghost exchange + multi-block evolution
 make test-amr-prolong   # prolongation + noise reduction (CAKO/CAHD/SSL)
 make test-amr-refine    # oct-tree refinement + multi-level ghost exchange
+make test-subcycle      # Berger-Oliger subcycling validation
+make test-bowen-york   # Bowen-York initial data (A_ij, solver, evolution)
 make clean
 ```
 

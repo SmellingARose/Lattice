@@ -3,6 +3,125 @@
 > **Note:** When adding/removing/renaming files or functions, also update
 > `docs/architecture.html` — the living map of the codebase structure.
 
+## 2026-02-18: Bowen-York Initial Data + Hyperbolic Relaxation Solver
+
+Implemented Step 1 of `docs/plan1.md`: Bowen-York extrinsic curvature for
+punctures with linear momentum and spin, plus a hyperbolic relaxation solver
+for the Hamiltonian constraint. This is the prerequisite for binary inspiral
+(Milestone 5) — BHs can now start with orbital momentum.
+
+### What's new
+
+- **Bowen-York A_ij** (`bowen_york.c`): Analytic formula for the physical
+  traceless extrinsic curvature with momentum (1/r^2, B&S Eq. 3.43) and spin
+  (1/r^3, B&S Eq. 3.44) terms. Linear superposition for N punctures.
+- **Hyperbolic relaxation** (`relaxation.c`): Converts the Hamiltonian
+  constraint (nonlinear elliptic PDE) into a damped wave equation in
+  pseudo-time, integrated with a standalone mini-RK4 on 2 scalar fields (u, v).
+  Ref: Ruter et al. arXiv:1708.07358, NRPyElliptic arXiv:2111.02424.
+- **CCZ4 conversion** (`set_ccz4_from_psi`): Maps solved psi + BY A_ij to all
+  25 CCZ4 fields: chi=psi^{-4}, A_CCZ4=psi^{-6}*A_phys, lapse=sqrt(chi).
+- **`set_bowen_york()` dispatch**: Auto-detects P=S=0 → fast analytic BL path.
+  Otherwise runs the relaxation solver.
+- **CLI extended**: `--puncture M,x,y,z[,Px,Py,Pz[,Sx,Sy,Sz]]` accepts 4/7/10
+  comma-separated values. Fully backward compatible (4 values = BL at rest).
+- **`puncture_data_t` struct** in `params.h`: mass, center[3], momentum[3],
+  spin[3].
+
+### Test results (29/29 pass)
+
+1. A_ij at known point vs analytic (machine precision)
+2. A_ij symmetry: |A_ij - A_ji| = 0
+3. Falloff: momentum ratio 4.0 (1/r^2), spin ratio 8.0 (1/r^3)
+4. Two-puncture superposition (linearity to 2e-18)
+5. CCZ4 conversion: chi = psi^{-4}, A_CCZ4 = psi^{-6} * A_phys
+6. Zero momentum: BL exact path, chi matches analytic, A_ij = 0
+7. Small momentum (P=0.1): solver converges, Ham bounded, chi > 0
+8. Convergence order: N=16 vs N=32 gives ratio 2.39 (order 1.26)
+9. Binary orbit: 2 BHs with tangential P, solver converges, evolve 10 steps
+   without NaN, constraints bounded
+
+### Solver behavior
+
+The relaxation solver converges quickly (residual drops 2-3 orders in ~500
+iterations) then plateaus at the discretization-limited floor (~5e-8 at N=24).
+This is expected — the 4th-order FD Laplacian can't drive the residual below
+O(dx^4). Higher resolution grids achieve tighter convergence.
+
+---
+
+## 2026-02-18: Berger-Oliger Subcycling for AMR
+
+Implemented Berger-Oliger subcycling so each AMR level advances at its own
+CFL-appropriate `dt_L = dt_0 / 2^L`. Previously all levels shared the same
+global dt (either coarse-level CFL-violating for fine blocks, or unnecessarily
+small for coarse blocks). Now: 1 coarse step + 2 level-1 steps + 4 level-2
+steps, each only touching blocks at that level.
+
+### Architecture
+
+- **Per-level packing:** `mesh_build_level_pack()` builds a `meshblock_pack_t`
+  containing only leaf blocks at one level. Same packed kernel infrastructure
+  (CK45/RK4, Sommerfeld, ghost exchange) operates on each per-level pack.
+- **Recursive subcycling:** `subcycle_level()` implements the Berger-Oliger
+  recursion: advance level L by `dt_L`, then recursively subcycle finer
+  levels with 2 sub-steps at `dt_L/2`.
+- **Temporal interpolation:** Coarser blocks save their pre-step state in
+  `fields_old[]`. When finer levels need cross-level ghost data at an
+  intermediate time, `ghost_fill_from_coarser()` linearly interpolates
+  between `fields_old` (old) and `fields` (new) using `frac`.
+- **Uniform mesh fast path preserved:** When `max_level == 0`, the original
+  single mixed-level pack path is used with zero overhead.
+- **No changes to existing packed infrastructure:** Backend ghost exchange,
+  RHS kernels, Sommerfeld BCs, and update kernels are unchanged. Per-level
+  packs with `n_refined == 0` naturally skip cross-level phases.
+
+### Key design decisions
+
+1. Cross-level ghost fill happens BEFORE building the per-level pack, on the
+   mesh blocks directly. This avoids modifying the packed ghost exchange —
+   per-level packs only need same-level exchange.
+2. `fields_old` is a contiguous backing block (page-aligned), allocated on
+   demand via `block_alloc_fields_old()`. Only blocks at levels < max_level
+   need it.
+3. The temporal interpolation fraction `frac` is computed from `t_start` and
+   `dt_coarse` using floor-based rounding to the coarse step boundary.
+
+### Files changed
+
+| File | Changes |
+|------|---------|
+| `src/amr/block.h` | Added `time`, `fields_old[]`, `fields_old_block` to block_t; new function declarations |
+| `src/amr/block.c` | `block_alloc_fields_old`, `block_free_fields_old`, `block_save_old`, `block_time_interp` |
+| `src/amr/ghost_exchange.h` | Declared `ghost_fill_from_coarser()` |
+| `src/amr/ghost_exchange.c` | Implemented `ghost_fill_from_coarser()` (~80 lines) |
+| `src/numerics/rk4.c` | `mesh_build_level_pack`, `step_level`, `subcycle_level`, updated `rk4_step_mesh` dispatch |
+| `src/main.c` | Explicit `p.time` tracking in AMR evolution loop |
+| `tests/test_subcycle.c` | **New** — 3 validation tests (7 checks) |
+| `Makefile` | `test-subcycle` target |
+
+### Test results
+
+```
+test_subcycle: 7/7 passed
+  Uniform mesh: two runs identical (max diff = 0.0)
+  Subcycled flat spacetime: Ham L2 = 3.5e-12 (< 1e-8 threshold)
+  Subcycled BH (AMR regrid): Ham L2 = 1.7e-03 (finite, bounded)
+
+All existing tests pass:
+  test_flat: PASSED (Ham L2 = 5.29e-14)
+  test_convergence: PASSED (order 5.4+)
+  test_amr_evolve: 8/8 passed
+  test_pack_evolve: 8/8 passed
+```
+
+### References
+
+- Berger & Oliger (1984), JCP 53:484 — original subcycling algorithm
+- Athena++ `src/mesh/mesh.cpp` `Mesh::Step()` — subcycle loop reference
+- GRChombo `GRAMRLevel::advance()` + Chombo `AMR::timeStep()` — coarse-fine pattern
+- Chombo `AMRLevel::m_old_data` / `m_new_data` — temporal interpolation storage
+
 ## 2026-02-18: GPU Batch Kernels — Commit 2: Device-Side Ghost Exchange
 
 Replaced the Commit 1 ghost exchange fallback (unpack → CPU 5-phase exchange →

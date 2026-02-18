@@ -12,6 +12,7 @@
 #include "core/params.h"
 #include "core/fields.h"
 #include "initial_data/puncture.h"
+#include "initial_data/bowen_york.h"
 #include "evolution/ccz4_rhs.h"
 #include "boundary/sommerfeld.h"
 #include "numerics/rk4.h"
@@ -35,7 +36,7 @@ static void print_usage(void)
     fprintf(stderr, "  --CFL <float>       CFL factor (default 0.25)\n");
     fprintf(stderr, "  --sigma <float>     KO dissipation (default 0.3)\n");
     fprintf(stderr, "  --output_every <int> Output interval (default 0=off)\n");
-    fprintf(stderr, "  --puncture M,x,y,z  Add a puncture BH\n");
+    fprintf(stderr, "  --puncture M,x,y,z[,Px,Py,Pz[,Sx,Sy,Sz]]  Add a puncture BH\n");
     fprintf(stderr, "  --rk classic|ck45   Time integrator (default ck45)\n");
     fprintf(stderr, "\nAMR options:\n");
     fprintf(stderr, "  --amr               Enable adaptive mesh refinement\n");
@@ -52,8 +53,8 @@ int main(int argc, char **argv)
     sim_params_t p = default_params();
 
     /* Puncture storage */
-    double bh_masses[16];
-    double bh_centers[16][3];
+    puncture_data_t bhs[MAX_PUNCTURES];
+    memset(bhs, 0, sizeof(bhs));
     int n_bh = 0;
 
     /* Parse CLI args */
@@ -71,19 +72,25 @@ int main(int argc, char **argv)
         } else if (strcmp(argv[a], "--output_every") == 0 && a + 1 < argc) {
             p.output_every = atoi(argv[++a]);
         } else if (strcmp(argv[a], "--puncture") == 0 && a + 1 < argc) {
-            if (n_bh >= 16) {
-                fprintf(stderr, "Error: max 16 punctures\n");
+            if (n_bh >= MAX_PUNCTURES) {
+                fprintf(stderr, "Error: max %d punctures\n", MAX_PUNCTURES);
                 return 1;
             }
             char *s = argv[++a];
-            if (sscanf(s, "%lf,%lf,%lf,%lf",
-                       &bh_masses[n_bh],
-                       &bh_centers[n_bh][0],
-                       &bh_centers[n_bh][1],
-                       &bh_centers[n_bh][2]) == 4) {
+            puncture_data_t *bh = &bhs[n_bh];
+            /* Accept 4, 7, or 10 comma-separated values:
+             *   M,x,y,z                    (BL at rest)
+             *   M,x,y,z,Px,Py,Pz          (with momentum)
+             *   M,x,y,z,Px,Py,Pz,Sx,Sy,Sz (with momentum + spin) */
+            int nread = sscanf(s, "%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf",
+                               &bh->mass,
+                               &bh->center[0], &bh->center[1], &bh->center[2],
+                               &bh->momentum[0], &bh->momentum[1], &bh->momentum[2],
+                               &bh->spin[0], &bh->spin[1], &bh->spin[2]);
+            if (nread == 4 || nread == 7 || nread == 10) {
                 n_bh++;
             } else {
-                fprintf(stderr, "Error: --puncture expects M,x,y,z\n");
+                fprintf(stderr, "Error: --puncture expects M,x,y,z[,Px,Py,Pz[,Sx,Sy,Sz]]\n");
                 return 1;
             }
         } else if (strcmp(argv[a], "--rk") == 0 && a + 1 < argc) {
@@ -142,14 +149,21 @@ int main(int argc, char **argv)
         printf("  blocks = %d (leaves = %d)\n",
                m->num_blocks, mesh_num_leaves(m));
 
-        /* Set initial data on all leaf blocks */
+        /* Set initial data on all leaf blocks (AMR uses BL for now) */
+        double amr_masses[MAX_PUNCTURES];
+        double amr_centers[MAX_PUNCTURES][3];
+        for (int n = 0; n < n_bh; n++) {
+            amr_masses[n] = bhs[n].mass;
+            for (int d = 0; d < 3; d++)
+                amr_centers[n][d] = bhs[n].center[d];
+        }
         for (int bid = 0; bid < m->num_blocks; bid++) {
             block_t *b = m->blocks[bid];
             if (!b || !b->is_leaf) continue;
             if (n_bh > 0)
                 set_brill_lindquist_global(b->grid, b->origin, n_bh,
-                                           bh_masses,
-                                           (const double(*)[3])bh_centers);
+                                           amr_masses,
+                                           (const double(*)[3])amr_centers);
             else
                 set_flat_spacetime(b->grid);
         }
@@ -160,9 +174,13 @@ int main(int argc, char **argv)
         double ham0 = mesh_constraint_l2(m);
         printf("  Initial Ham L2 = %.6e\n", ham0);
 
-        /* Evolution loop */
+        /* Evolution loop.
+         * p.time tracks the simulation time for subcycling's temporal
+         * interpolation (Berger-Oliger). dt is the coarsest-level step. */
+        p.time = 0.0;
         for (int step = 1; step <= p.num_steps; step++) {
             rk4_step_mesh(m, &p, ccz4_rhs_point, p.dt);
+            p.time += p.dt;
 
             if (p.amr.regrid_every > 0 && step % p.amr.regrid_every == 0)
                 mesh_regrid(m, &p.amr);
@@ -170,7 +188,7 @@ int main(int argc, char **argv)
             if (step % 100 == 0 || step == p.num_steps) {
                 double ham = mesh_constraint_l2(m);
                 printf("  step %5d  t=%.4f  Ham L2=%.6e  blocks=%d\n",
-                       step, step * p.dt, ham, mesh_num_leaves(m));
+                       step, p.time, ham, mesh_num_leaves(m));
             }
         }
 
@@ -198,9 +216,8 @@ int main(int argc, char **argv)
 
         /* Set initial data */
         if (n_bh > 0) {
-            printf("  Initial data: Brill-Lindquist, %d puncture(s)\n", n_bh);
-            set_brill_lindquist(g, n_bh, bh_masses,
-                                (const double(*)[3])bh_centers);
+            printf("  Initial data: Bowen-York, %d puncture(s)\n", n_bh);
+            set_bowen_york(g, n_bh, bhs);
         } else {
             printf("  Initial data: flat spacetime\n");
             set_flat_spacetime(g);

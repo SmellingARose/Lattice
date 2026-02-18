@@ -1,0 +1,704 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lattice Bowen-York Initial Data</title>
+<style>
+/* ===== Reset & Base ===== */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { font-size: 15px; scroll-behavior: smooth; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  color: #2d333b; background: #f6f8fa; line-height: 1.6;
+  display: flex; min-height: 100vh;
+}
+
+/* ===== Sidebar ===== */
+nav.sidebar {
+  position: fixed; top: 0; left: 0; bottom: 0; width: 260px;
+  background: #1c2128; color: #adbac7; overflow-y: auto;
+  padding: 20px 0; z-index: 100; font-size: 0.87rem;
+}
+nav.sidebar::-webkit-scrollbar { width: 6px; }
+nav.sidebar::-webkit-scrollbar-thumb { background: #444c56; border-radius: 3px; }
+nav.sidebar .logo { padding: 0 20px 18px; border-bottom: 1px solid #373e47; margin-bottom: 12px; }
+nav.sidebar .logo h1 { font-size: 1.25rem; color: #e6edf3; font-weight: 700; letter-spacing: 0.5px; }
+nav.sidebar .logo p { font-size: 0.75rem; color: #768390; margin-top: 2px; }
+nav.sidebar ul { list-style: none; }
+nav.sidebar ul li a {
+  display: block; padding: 6px 20px; color: #adbac7; text-decoration: none;
+  transition: background 0.15s, color 0.15s;
+}
+nav.sidebar ul li a:hover { background: #262c36; color: #e6edf3; }
+nav.sidebar ul li a.section-header {
+  font-size: 0.7rem; text-transform: uppercase; letter-spacing: 1.2px;
+  color: #636e7b; margin-top: 14px; pointer-events: none; font-weight: 600;
+}
+
+/* ===== Main content ===== */
+main {
+  margin-left: 260px; flex: 1; padding: 32px 48px 80px;
+  max-width: 1100px;
+}
+main h2 {
+  font-size: 1.5rem; color: #1c2128; margin-top: 44px; margin-bottom: 12px;
+  padding-bottom: 8px; border-bottom: 2px solid #d0d7de;
+}
+main h2:first-of-type { margin-top: 0; }
+main h3 { font-size: 1.15rem; color: #2d333b; margin-top: 28px; margin-bottom: 8px; }
+main h4 { font-size: 1rem; color: #444c56; margin-top: 18px; margin-bottom: 6px; }
+main p { margin-bottom: 10px; }
+main ul, main ol { margin-left: 22px; margin-bottom: 10px; }
+main li { margin-bottom: 4px; }
+main code {
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', Menlo, Consolas, monospace;
+  font-size: 0.88em; background: #eef1f5; padding: 1px 5px; border-radius: 3px;
+}
+main pre {
+  background: #1c2128; color: #adbac7; padding: 16px 20px; border-radius: 6px;
+  overflow-x: auto; font-size: 0.82rem; line-height: 1.55; margin: 12px 0 16px;
+  font-family: 'SF Mono', 'Fira Code', Menlo, Consolas, monospace;
+}
+main pre code { background: none; padding: 0; color: inherit; font-size: inherit; }
+a { color: #2f81f7; text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ===== Banner ===== */
+.banner {
+  background: #ddf4ff; border: 1px solid #54aeff44; border-radius: 6px;
+  padding: 14px 18px; margin-bottom: 24px; font-size: 0.88rem; color: #1a4b77;
+}
+.banner strong { color: #0550ae; }
+
+/* ===== Info box ===== */
+.info-box {
+  background: #f3f6fa; border: 1px solid #d8dee4; border-radius: 6px;
+  padding: 14px 18px; margin: 14px 0 18px; font-size: 0.9rem;
+}
+.info-box strong { color: #1c2128; }
+
+/* ===== Equation boxes ===== */
+.equation {
+  background: #fff; border: 1px solid #d8dee4; border-radius: 6px;
+  padding: 16px 20px; margin: 14px 0 18px; font-size: 0.95rem;
+  font-family: 'SF Mono', 'Fira Code', Menlo, Consolas, monospace;
+  overflow-x: auto; line-height: 1.8;
+}
+.equation .label {
+  display: inline-block; font-size: 0.72rem; font-weight: 600; padding: 2px 8px;
+  border-radius: 10px; letter-spacing: 0.3px; margin-bottom: 8px;
+  background: #eef1f5; color: #57606a;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+/* ===== Diagram ===== */
+.diagram {
+  background: #1c2128; color: #7ee787; padding: 20px 24px; border-radius: 6px;
+  font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 0.78rem;
+  line-height: 1.5; overflow-x: auto; margin: 14px 0 18px; white-space: pre;
+}
+.diagram .comment { color: #636e7b; }
+.diagram .highlight { color: #f0883e; }
+.diagram .type { color: #79c0ff; }
+.diagram .fn { color: #d2a8ff; }
+
+/* ===== File table ===== */
+table.file-table {
+  width: 100%; border-collapse: collapse; margin: 12px 0 20px; font-size: 0.88rem;
+}
+table.file-table th {
+  text-align: left; padding: 8px 10px; background: #eef1f5;
+  border-bottom: 2px solid #d0d7de; font-weight: 600; color: #1c2128;
+}
+table.file-table td {
+  padding: 7px 10px; border-bottom: 1px solid #d8dee4; vertical-align: top;
+}
+table.file-table tr:hover td { background: #f3f6fa; }
+table.file-table td:first-child {
+  font-family: 'SF Mono', Menlo, monospace; font-size: 0.84em; white-space: nowrap;
+}
+
+/* ===== Test table ===== */
+table.test-table {
+  width: 100%; border-collapse: collapse; margin: 12px 0 20px; font-size: 0.88rem;
+}
+table.test-table th {
+  text-align: left; padding: 8px 10px; background: #eef1f5;
+  border-bottom: 2px solid #d0d7de; font-weight: 600; color: #1c2128;
+}
+table.test-table td {
+  padding: 7px 10px; border-bottom: 1px solid #d8dee4; vertical-align: top;
+}
+table.test-table tr:hover td { background: #f3f6fa; }
+table.test-table td:first-child { white-space: nowrap; font-weight: 500; }
+table.test-table td:last-child {
+  font-family: 'SF Mono', Menlo, monospace; font-size: 0.84em;
+  text-align: center;
+}
+
+/* ===== Badge ===== */
+.badge {
+  display: inline-block; font-size: 0.72rem; font-weight: 600; padding: 2px 8px;
+  border-radius: 10px; vertical-align: middle; letter-spacing: 0.3px;
+}
+.badge-green { background: #2ea04333; color: #1a7f37; }
+
+/* ===== Pipeline diagram ===== */
+.pipeline {
+  display: flex; align-items: center; gap: 0; margin: 18px 0 22px;
+  flex-wrap: wrap;
+}
+.pipeline-step {
+  background: #fff; border: 2px solid #d0d7de; border-radius: 8px;
+  padding: 10px 16px; text-align: center; font-size: 0.85rem;
+  min-width: 130px;
+}
+.pipeline-step strong { display: block; color: #1c2128; font-size: 0.92rem; margin-bottom: 2px; }
+.pipeline-step span { color: #57606a; font-size: 0.78rem; }
+.pipeline-arrow {
+  font-size: 1.4rem; color: #768390; padding: 0 6px;
+  flex-shrink: 0;
+}
+.pipeline-step.step-solver {
+  border-color: #2f81f7; background: #ddf4ff;
+}
+.pipeline-step.step-solver strong { color: #0550ae; }
+
+/* ===== Responsive ===== */
+@media (max-width: 900px) {
+  nav.sidebar { position: static; width: 100%; }
+  main { margin-left: 0; padding: 20px; }
+  .pipeline { flex-direction: column; align-items: stretch; }
+  .pipeline-arrow { text-align: center; transform: rotate(90deg); padding: 4px 0; }
+}
+</style>
+</head>
+<body>
+
+<!-- ===== SIDEBAR ===== -->
+<nav class="sidebar">
+  <div class="logo">
+    <h1>Lattice</h1>
+    <p>Bowen-York Initial Data</p>
+  </div>
+  <ul>
+    <li><a class="section-header">Physics</a></li>
+    <li><a href="#overview">Overview</a></li>
+    <li><a href="#aij-formula">A_ij Formula</a></li>
+
+    <li><a class="section-header">Solver</a></li>
+    <li><a href="#hamiltonian">Hamiltonian Constraint</a></li>
+    <li><a href="#relaxation">Hyperbolic Relaxation</a></li>
+    <li><a href="#convergence">Convergence Monitoring</a></li>
+
+    <li><a class="section-header">Implementation</a></li>
+    <li><a href="#ccz4-conversion">CCZ4 Field Conversion</a></li>
+    <li><a href="#pipeline">Data Pipeline</a></li>
+    <li><a href="#files">New Files</a></li>
+
+    <li><a class="section-header">Usage</a></li>
+    <li><a href="#cli">CLI Examples</a></li>
+
+    <li><a class="section-header">Validation</a></li>
+    <li><a href="#tests">Test Suite</a></li>
+
+    <li><a class="section-header">References</a></li>
+    <li><a href="#references">Papers &amp; Code</a></li>
+  </ul>
+</nav>
+
+<!-- ===== MAIN CONTENT ===== -->
+<main>
+
+<div class="banner">
+  <strong>Phase 1, Milestone 5 prerequisite:</strong> Bowen-York initial data extends the
+  Brill-Lindquist puncture method to black holes with linear momentum and spin.
+  Required for binary inspiral simulations where the BHs are not at rest.
+</div>
+
+<!-- ============================================================ -->
+<h2 id="overview">What is Bowen-York Initial Data?</h2>
+
+<p>
+  In numerical relativity, initial data must satisfy the <strong>constraint equations</strong>
+  of general relativity: the Hamiltonian constraint and the momentum constraint. For black holes
+  at rest, the <strong>Brill-Lindquist</strong> (BL) method provides an analytic conformal factor
+  and trivial extrinsic curvature (<code>A_ij = 0</code>). However, black holes with linear
+  momentum <code>P_i</code> or spin angular momentum <code>S_i</code> require non-trivial
+  extrinsic curvature, and the conformal factor is no longer analytic.
+</p>
+
+<p>
+  The <strong>Bowen-York</strong> construction (Bowen &amp; York 1980; Brandt &amp; Brugmann 1997)
+  solves this in two steps:
+</p>
+
+<ol>
+  <li>Write down an <em>analytic</em> expression for the physical traceless extrinsic curvature
+      <code>A_ij^phys</code> that satisfies the momentum constraint by construction.</li>
+  <li><em>Solve</em> the Hamiltonian constraint numerically for the conformal factor correction
+      <code>u</code>, where the full conformal factor is <code>psi = psi_BL + u</code>.</li>
+</ol>
+
+<p>
+  When momentum and spin are both zero, <code>A_ij = 0</code> and <code>u = 0</code>, recovering
+  the analytic Brill-Lindquist solution exactly. The code automatically detects this case and
+  takes the fast BL path, making Bowen-York a strict superset of Brill-Lindquist.
+</p>
+
+<!-- ============================================================ -->
+<h2 id="aij-formula">The A_ij Formula</h2>
+
+<p>
+  For a single puncture at position <code>C_i</code> with bare mass <code>M</code>,
+  linear momentum <code>P_i</code>, and spin <code>S_i</code>, the physical traceless
+  extrinsic curvature has two additive terms. Both are evaluated at displacement
+  <code>r_i = x_i - C_i</code> with <code>r = |r_i|</code> and unit normal
+  <code>n_i = r_i / r</code>.
+</p>
+
+<h3>Momentum term (1/r<sup>2</sup> falloff)</h3>
+
+<div class="equation">
+  <div class="label">B&amp;S Eq. 3.43</div><br>
+  A_ij^P = (3 / 2r<sup>2</sup>) [ P_i n_j + P_j n_i - (delta_ij - n_i n_j)(P . n) ]
+</div>
+
+<p>
+  This is a symmetric, trace-free tensor that falls off as <code>1/r^2</code>. On axis
+  (evaluating at <code>(r, 0, 0)</code> with <code>P = (P, 0, 0)</code>),
+  <code>A_xx = 3P/r^2</code> and <code>A_yy = A_zz = -3P/(2r^2)</code>.
+</p>
+
+<h3>Spin term (1/r<sup>3</sup> falloff)</h3>
+
+<div class="equation">
+  <div class="label">B&amp;S Eq. 3.44</div><br>
+  A_ij^S = -(3 / r<sup>3</sup>) [ (n x S)_i n_j + (n x S)_j n_i ]
+</div>
+
+<p>
+  where <code>(n x S)_i = epsilon_{ijk} n_j S_k</code> is the cross product. The spin
+  contribution decays one power of <code>r</code> faster than the momentum term. The full
+  A_ij is the sum:
+</p>
+
+<div class="equation">
+  <div class="label">Multi-puncture superposition</div><br>
+  A_ij^phys(x) = SUM_n [ A_ij^P(x; P_n) + A_ij^S(x; S_n) ]
+</div>
+
+<p>
+  The Bowen-York A_ij is <strong>linear</strong>: multi-puncture data is obtained by
+  simple superposition. Each puncture contributes independently. This is a consequence
+  of the flat-space momentum constraint being linear.
+</p>
+
+<div class="info-box">
+  <strong>Key property:</strong> The Bowen-York A_ij satisfies the momentum constraint
+  analytically on a conformally flat background. Only the Hamiltonian constraint requires
+  a numerical solve.
+</div>
+
+<!-- ============================================================ -->
+<h2 id="hamiltonian">The Hamiltonian Constraint</h2>
+
+<p>
+  With conformal flatness (<code>h_ij = delta_ij</code>), maximal slicing (<code>K = 0</code>),
+  and the Bowen-York A_ij, the Hamiltonian constraint reduces to a single nonlinear elliptic PDE
+  for the conformal factor <code>psi</code>:
+</p>
+
+<div class="equation">
+  <div class="label">Hamiltonian constraint (puncture form)</div><br>
+  nabla<sup>2</sup> u + (1/8) A<sup>2</sup> (psi_BL + u)<sup>-7</sup> = 0
+</div>
+
+<p>
+  where:
+</p>
+<ul>
+  <li><code>psi_BL = 1 + SUM_n M_n / (2 r_n)</code> is the Brill-Lindquist conformal factor</li>
+  <li><code>u</code> is the correction that vanishes at infinity (<code>u -> 0</code> as <code>r -> infinity</code>)</li>
+  <li><code>A^2 = A_ij A^ij</code> is the squared norm of the Bowen-York extrinsic curvature (computed with flat metric)</li>
+  <li>The full conformal factor is <code>psi = psi_BL + u</code></li>
+</ul>
+
+<p>
+  The <code>psi^{-7}</code> nonlinearity makes this PDE challenging. Traditional multigrid solvers
+  work well but are complex to implement. We use <strong>hyperbolic relaxation</strong> instead.
+</p>
+
+<!-- ============================================================ -->
+<h2 id="relaxation">Hyperbolic Relaxation Solver</h2>
+
+<p>
+  Following <a href="https://arxiv.org/abs/1708.07358">Ruter et al. (2018)</a> and the
+  <a href="https://arxiv.org/abs/2111.02424">NRPyElliptic</a> implementation, we convert
+  the elliptic PDE into a damped wave equation in pseudo-time <code>tau</code>:
+</p>
+
+<div class="equation">
+  <div class="label">Damped wave system (arXiv:1708.07358)</div><br>
+  d_tau u = v<br>
+  d_tau v = -eta * v + c<sup>2</sup> * [ nabla<sup>2</sup>(u) + (1/8) * A<sup>2</sup> * (psi_BL + u)<sup>-7</sup> ]
+</div>
+
+<p>
+  The auxiliary field <code>v</code> acts as the pseudo-time velocity of <code>u</code>.
+  As the system relaxes to steady state, <code>v -> 0</code> everywhere, which means
+  <code>d_tau u = 0</code> and the original elliptic equation is satisfied.
+</p>
+
+<h3>Solver parameters</h3>
+
+<table class="file-table">
+  <tr><th>Parameter</th><th>Value</th><th>Description</th></tr>
+  <tr><td>c</td><td>1.0</td><td>Wave propagation speed in pseudo-time</td></tr>
+  <tr><td>eta</td><td>6.0 / L</td><td>Damping coefficient (scales with domain size)</td></tr>
+  <tr><td>CFL_relax</td><td>0.5</td><td>CFL factor for pseudo-time step: dt = 0.5 * dx</td></tr>
+  <tr><td>sigma_ko</td><td>0.1</td><td>Kreiss-Oliger dissipation on u for numerical stability</td></tr>
+  <tr><td>tol</td><td>1e-12</td><td>Convergence tolerance on ||v||_L2</td></tr>
+  <tr><td>max_iter</td><td>50000</td><td>Maximum pseudo-time steps before giving up</td></tr>
+</table>
+
+<h3>Mini-RK4 integrator</h3>
+
+<p>
+  The relaxation system is integrated with a standalone classic 4-stage RK4, completely
+  independent of the main 25-field <code>rk4_step()</code>. The solver operates on only
+  2 scalar fields (<code>u</code>, <code>v</code>) with a dedicated
+  <code>relax_workspace_t</code> holding 10 working arrays plus precomputed
+  <code>psi_BL</code> and <code>A^2</code> (12 arrays total).
+</p>
+
+<p>
+  Boundary conditions: zero-Dirichlet in ghost zones (<code>u = 0, v = 0</code>).
+  This is valid because the correction <code>u ~ 1/r</code> at large distances and the
+  computational domain is sufficiently large.
+</p>
+
+<!-- ============================================================ -->
+<h2 id="convergence">Convergence Monitoring</h2>
+
+<p>
+  Convergence is monitored via the L2 norm of the velocity field <code>v</code>:
+</p>
+
+<div class="equation">
+  <div class="label">Convergence criterion</div><br>
+  ||v||_L2 = sqrt( SUM(v<sup>2</sup>) / N_interior )
+</div>
+
+<p>
+  When <code>||v||_L2 &lt; tol</code>, the wave has damped to steady state and
+  <code>u</code> satisfies the elliptic equation to the requested tolerance. The residual
+  is checked every 500 iterations, with verbose output every 2000 iterations.
+</p>
+
+<div class="info-box">
+  <strong>Why hyperbolic relaxation?</strong> Compared to multigrid solvers (used by TwoPunctures),
+  hyperbolic relaxation is simple to implement (just a wave equation + RK4), naturally parallelizable,
+  and requires no complex coarsening/prolongation infrastructure. The tradeoff is more iterations,
+  but for the grid sizes used in Lattice the wall-clock time is acceptable.
+</div>
+
+<!-- ============================================================ -->
+<h2 id="ccz4-conversion">CCZ4 Field Conversion</h2>
+
+<p>
+  Once the solver produces the full conformal factor <code>psi = psi_BL + u</code>,
+  all 25 CCZ4 evolved fields are set via the standard conformal decomposition:
+</p>
+
+<table class="file-table">
+  <tr><th>CCZ4 Field</th><th>Formula</th><th>Description</th></tr>
+  <tr><td>chi</td><td>psi<sup>-4</sup></td><td>Conformal factor (CCZ4 convention)</td></tr>
+  <tr><td>h_ij</td><td>delta_ij</td><td>Conformal metric (conformally flat)</td></tr>
+  <tr><td>K</td><td>0</td><td>Trace of extrinsic curvature (maximal slicing)</td></tr>
+  <tr>
+    <td>A_ij</td>
+    <td>psi<sup>-6</sup> * A_ij<sup>phys</sup></td>
+    <td>Conformal traceless extrinsic curvature</td>
+  </tr>
+  <tr><td>Theta</td><td>0</td><td>CCZ4 constraint scalar</td></tr>
+  <tr><td>Gamma<sup>i</sup></td><td>0</td><td>Conformal connection functions</td></tr>
+  <tr><td>alpha (lapse)</td><td>psi<sup>-2</sup> = sqrt(chi)</td><td>Pre-collapsed lapse</td></tr>
+  <tr><td>beta<sup>i</sup> (shift)</td><td>0</td><td>Shift vector</td></tr>
+  <tr><td>B<sup>i</sup></td><td>0</td><td>Gamma-driver auxiliary</td></tr>
+</table>
+
+<p>
+  The key conversion is the extrinsic curvature: the Bowen-York formula gives the
+  <em>physical</em> <code>A_ij^phys</code>, but CCZ4 evolves the <em>conformal</em>
+  version. The relationship is:
+</p>
+
+<div class="equation">
+  <div class="label">B&amp;S Eq. 3.18 / GRChombo BinaryBH.impl.hpp:60</div><br>
+  A_ij<sup>CCZ4</sup> = psi<sup>-6</sup> * A_ij<sup>phys</sup> = chi<sup>3/2</sup> * A_ij<sup>phys</sup>
+</div>
+
+<p>
+  The pre-collapsed lapse <code>alpha = psi^{-2}</code> avoids the initial lapse spike that
+  would otherwise cause gauge dynamics issues. This matches the standard moving puncture
+  gauge initialization used by GRChombo, BAM, Einstein Toolkit, and others.
+</p>
+
+<!-- ============================================================ -->
+<h2 id="pipeline">Data Pipeline</h2>
+
+<p>
+  The top-level function <code>set_bowen_york()</code> dispatches to the appropriate path:
+</p>
+
+<div class="pipeline">
+  <div class="pipeline-step">
+    <strong>Parse CLI</strong>
+    <span>--puncture M,x,y,z,...</span>
+  </div>
+  <div class="pipeline-arrow">&#x2192;</div>
+  <div class="pipeline-step">
+    <strong>Check P, S</strong>
+    <span>All zero?</span>
+  </div>
+  <div class="pipeline-arrow">&#x2192;</div>
+  <div class="pipeline-step step-solver">
+    <strong>BL path (fast)</strong>
+    <span>Analytic psi, A=0</span>
+  </div>
+</div>
+
+<div class="pipeline">
+  <div class="pipeline-step" style="visibility: hidden;">
+    <strong>Parse CLI</strong>
+    <span></span>
+  </div>
+  <div class="pipeline-arrow" style="visibility: hidden;">&#x2192;</div>
+  <div class="pipeline-step">
+    <strong>Check P, S</strong>
+    <span>Non-zero?</span>
+  </div>
+  <div class="pipeline-arrow">&#x2192;</div>
+  <div class="pipeline-step">
+    <strong>Precompute</strong>
+    <span>psi_BL, A^2 at all pts</span>
+  </div>
+  <div class="pipeline-arrow">&#x2192;</div>
+  <div class="pipeline-step step-solver">
+    <strong>Relax Solve</strong>
+    <span>Damped wave RK4</span>
+  </div>
+  <div class="pipeline-arrow">&#x2192;</div>
+  <div class="pipeline-step">
+    <strong>CCZ4 Convert</strong>
+    <span>psi -> 25 fields</span>
+  </div>
+</div>
+
+<p>
+  The solver path precomputes <code>psi_BL</code> and <code>A^2 = A_ij A^ij</code> at every
+  grid point once (these are fixed throughout the relaxation), then iterates the damped wave
+  system until convergence. Finally, <code>set_ccz4_from_psi()</code> fills all 25 CCZ4 fields.
+</p>
+
+<!-- ============================================================ -->
+<h2 id="files">New Files</h2>
+
+<table class="file-table">
+  <tr><th>File</th><th>Role</th></tr>
+  <tr>
+    <td>src/initial_data/bowen_york.h</td>
+    <td>Public API: <code>bowen_york_Aij()</code>, <code>bowen_york_A2()</code>,
+        <code>brill_lindquist_psi()</code>, <code>set_ccz4_from_psi()</code>,
+        <code>set_bowen_york()</code></td>
+  </tr>
+  <tr>
+    <td>src/initial_data/bowen_york.c</td>
+    <td>Implementation of BY A_ij (momentum + spin terms), CCZ4 field conversion,
+        top-level dispatch with auto-detection of BL fast path</td>
+  </tr>
+  <tr>
+    <td>src/initial_data/relaxation.h</td>
+    <td>Public API: <code>relaxation_solve()</code></td>
+  </tr>
+  <tr>
+    <td>src/initial_data/relaxation.c</td>
+    <td>Hyperbolic relaxation solver: workspace management, RHS evaluation with
+        4th-order Laplacian + KO dissipation, mini-RK4 integrator, Robin/Dirichlet BCs,
+        convergence monitoring via ||v||_L2</td>
+  </tr>
+  <tr>
+    <td>tests/test_bowen_york.c</td>
+    <td>9 tests (29 checks) validating A_ij formulas, solver convergence,
+        CCZ4 conversion, and binary evolution stability</td>
+  </tr>
+  <tr>
+    <td>src/core/params.h</td>
+    <td><strong>Modified:</strong> Added <code>puncture_data_t</code> struct with
+        <code>mass</code>, <code>center[3]</code>, <code>momentum[3]</code>,
+        <code>spin[3]</code> fields</td>
+  </tr>
+  <tr>
+    <td>src/main.c</td>
+    <td><strong>Modified:</strong> Extended <code>--puncture</code> argument to accept
+        4, 7, or 10 comma-separated values (mass+position, +momentum, +spin)</td>
+  </tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="cli">CLI Usage</h2>
+
+<p>
+  The <code>--puncture</code> flag accepts 4, 7, or 10 comma-separated values:
+</p>
+
+<pre><code>--puncture M,x,y,z                       # Brill-Lindquist (at rest)
+--puncture M,x,y,z,Px,Py,Pz             # Bowen-York with momentum
+--puncture M,x,y,z,Px,Py,Pz,Sx,Sy,Sz   # Bowen-York with momentum + spin</code></pre>
+
+<p>
+  Multiple <code>--puncture</code> flags can be specified (up to 16). When all punctures have
+  <code>P = 0</code> and <code>S = 0</code>, the analytic BL path is used automatically.
+</p>
+
+<h3>Examples</h3>
+
+<h4>Single BH at rest (backward compatible with BL)</h4>
+<pre><code>./build/lattice --puncture 1.0,0,0,0</code></pre>
+
+<h4>Single BH with linear momentum P_y = 0.1</h4>
+<pre><code>./build/lattice --puncture 1.0,0,0,0,0,0.1,0</code></pre>
+
+<h4>Single BH with momentum and spin S_z = 0.5</h4>
+<pre><code>./build/lattice --puncture 1.0,0,0,0,0,0.1,0,0,0,0.5</code></pre>
+
+<h4>Equal-mass binary with tangential momentum (quasi-circular orbit)</h4>
+<pre><code>./build/lattice \
+  --puncture 0.5,0,0,3,0,0.1,0 \
+  --puncture 0.5,0,0,-3,0,-0.1,0 \
+  --N 64 --steps 100</code></pre>
+
+<h4>Spinning binary (momentum + spin)</h4>
+<pre><code>./build/lattice \
+  --puncture 0.5,0,0,3,0,0.1,0,0,0,0.3 \
+  --puncture 0.5,0,0,-3,0,-0.1,0,0,0,-0.3 \
+  --N 64 --steps 200</code></pre>
+
+<div class="info-box">
+  <strong>Note on backward compatibility:</strong> The 4-value format
+  <code>--puncture M,x,y,z</code> works exactly as before. Momentum and spin default to
+  zero when not specified, so existing scripts and test commands are unaffected.
+</div>
+
+<!-- ============================================================ -->
+<h2 id="tests">Test Suite</h2>
+
+<p>
+  The test file <code>tests/test_bowen_york.c</code> contains <strong>9 tests with 29 individual
+  checks</strong>, organized from analytic unit tests through full binary evolution:
+</p>
+
+<table class="test-table">
+  <tr><th>Test</th><th>What it validates</th><th>Checks</th></tr>
+  <tr>
+    <td>1. A_ij analytic values</td>
+    <td>Single puncture with P_x = 1 evaluated at (2, 0, 0). Compares A_xx, A_yy, A_zz,
+        A_xy, A_xz, A_yz against closed-form expressions. Machine-precision agreement.</td>
+    <td>6</td>
+  </tr>
+  <tr>
+    <td>2. A_ij symmetry</td>
+    <td>Generic puncture (momentum + spin at off-origin position) evaluated at a random point.
+        Verifies |A_ij - A_ji| &lt; 1e-15 for all off-diagonal pairs.</td>
+    <td>1</td>
+  </tr>
+  <tr>
+    <td>3. Radial falloff</td>
+    <td>Momentum-only: ratio A(r=1)/A(r=2) = 4.0 (1/r<sup>2</sup>).
+        Spin-only: ratio A(r=1)/A(r=2) = 8.0 (1/r<sup>3</sup>).
+        Verifies correct power-law behavior.</td>
+    <td>2</td>
+  </tr>
+  <tr>
+    <td>4. Two-puncture superposition</td>
+    <td>A_ij(both punctures) == A_ij(BH1) + A_ij(BH2) to machine precision.
+        Confirms linearity of the Bowen-York construction.</td>
+    <td>1</td>
+  </tr>
+  <tr>
+    <td>5. CCZ4 conversion</td>
+    <td>Verifies chi = psi<sup>-4</sup>, A_CCZ4 = psi<sup>-6</sup> * A_phys,
+        h_ij = delta_ij, K = 0, lapse = sqrt(chi) at grid center.</td>
+    <td>6</td>
+  </tr>
+  <tr>
+    <td>6. Zero momentum (BL path)</td>
+    <td>With P=0, S=0: chi matches analytic BL, all A_ij = 0,
+        Hamiltonian constraint bounded. Verifies fast-path correctness.</td>
+    <td>3</td>
+  </tr>
+  <tr>
+    <td>7. Small momentum solver</td>
+    <td>P_x = 0.1: solver converges (||v||_L2 small), Hamiltonian constraint
+        bounded, chi &gt; 0 everywhere, A_ij non-trivial.</td>
+    <td>4</td>
+  </tr>
+  <tr>
+    <td>8. Convergence order</td>
+    <td>N=16 vs N=32 with same P_x = 0.1: Hamiltonian violation ratio &gt; 2
+        (effective convergence order &gt; 1.0). Limited by puncture singularity
+        at coarse resolution.</td>
+    <td>2</td>
+  </tr>
+  <tr>
+    <td>9. Binary orbit evolution</td>
+    <td>Two equal-mass BHs at z = +/-3 with tangential P_y = +/-0.1. Solver
+        converges, then evolve 10 steps: no NaN/Inf, Hamiltonian and momentum
+        constraints bounded.</td>
+    <td>4</td>
+  </tr>
+</table>
+
+<pre><code># Run the Bowen-York test suite
+make test-bowen-york</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="references">References</h2>
+
+<h3>Primary sources</h3>
+<ul>
+  <li><strong>Brandt &amp; Brugmann (1997)</strong>,
+      <a href="https://arxiv.org/abs/gr-qc/9703066">gr-qc/9703066</a>:
+      Puncture method for multiple black holes. Defines the decomposition
+      psi = psi_BL + u and the elliptic equation for u.</li>
+  <li><strong>Baumgarte &amp; Shapiro (2010)</strong>,
+      <em>Numerical Relativity</em>, Eqs. 3.43-3.44:
+      Bowen-York extrinsic curvature formulas for momentum and spin.</li>
+</ul>
+
+<h3>Solver method</h3>
+<ul>
+  <li><strong>Ruter et al. (2018)</strong>,
+      <a href="https://arxiv.org/abs/1708.07358">arXiv:1708.07358</a>:
+      Hyperbolic relaxation method for elliptic PDEs in numerical relativity.
+      Converts elliptic constraint to damped wave equation.</li>
+  <li><strong>NRPyElliptic (2021)</strong>,
+      <a href="https://arxiv.org/abs/2111.02424">arXiv:2111.02424</a>:
+      Practical implementation of hyperbolic relaxation. Section 3.2 provides
+      parameter tuning guidance (eta, CFL, wave speed).</li>
+</ul>
+
+<h3>Code cross-references</h3>
+<ul>
+  <li><strong>GRChombo</strong> <code>BoostedBH.impl.hpp:47-50</code>: BY A_ij formula for momentum</li>
+  <li><strong>GRChombo</strong> <code>BinaryBH.impl.hpp:53-68</code>: CCZ4 field conversion from psi</li>
+  <li><strong>TwoPunctures</strong> <code>Equations.cc:BY_Aijofxyz()</code>: Reference BY A_ij implementation (spin + momentum)</li>
+  <li><strong>B&amp;S</strong> Eq. 3.10: Conformal decomposition (psi<sup>-6</sup> rescaling of A_ij)</li>
+  <li><strong>B&amp;S</strong> Eq. 3.18: Relationship between physical and conformal extrinsic curvature</li>
+</ul>
+
+</main>
+</body>
+</html>
