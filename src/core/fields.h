@@ -47,7 +47,15 @@ enum {
     FIELD_B2,
     FIELD_B3,
 
-    NUM_FIELDS       /* = 25                                    */
+    FIELD_E1,        /* conformal electric field E^i            */
+    FIELD_E2,
+    FIELD_E3,
+
+    FIELD_BM1,       /* conformal magnetic field B^i            */
+    FIELD_BM2,       /* (BM prefix avoids clash with shift aux) */
+    FIELD_BM3,
+
+    NUM_FIELDS       /* = 31                                    */
 };
 
 /* First field index for symmetric tensor components */

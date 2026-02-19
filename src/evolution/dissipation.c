@@ -26,7 +26,7 @@
  * Ref: arXiv:2404.01137 — "epsilon_KO,CA = 0.99 for gauge, 0.3 for physical" */
 static inline int is_gauge_field(int f)
 {
-    return f >= FIELD_LAPSE;
+    return f >= FIELD_LAPSE && f <= FIELD_B3;
 }
 
 #ifdef LATTICE_GPU

@@ -1340,3 +1340,65 @@ test_amr_refine: 72/72 passed:
 
 Stage 5: Subcycling — fine levels advance with smaller dt for computational
 efficiency. Berger-Oliger time stepping with coarse-fine synchronization.
+
+---
+
+## Apparent Horizon Finder + Einstein-Maxwell (2026-02-18)
+
+### AH Finder (Step 1)
+
+Implemented hyperbolic flow AH finder inspired by BHaHAHA (arXiv:2505.15912).
+
+**New files:**
+- `src/numerics/interpolate.h` — 4th-order Lagrange interpolation at arbitrary
+  (x,y,z) from grid. 5-point stencil, 125-point tensor product. Value + derivative.
+- `src/diagnostics/ah_finder.h/c` — Full AH finder: expansion computation,
+  damped-wave flow solver, area/mass/spin diagnostics.
+- `tests/test_ah_finder.c` — 7 tests, 13 checks.
+
+**Algorithm:** Trial surface r=h(θ,φ) on angular grid, evolved via damped wave
+∂h/∂τ = v, ∂v/∂τ = -η·v - c²·Θ(h). Converges to Θ=0 (apparent horizon).
+34 field interpolations per surface point (chi, h_ij, K, A_ij + derivatives).
+
+**Test results (13/13 PASS):**
+- Interpolation exact to roundoff (3.6e-15)
+- Schwarzschild AH radius within 0.6% of M/2
+- Expansion positive outside, negative inside AH
+- Area = 50.28 (expected 50.27, 0.03% error)
+- M_irr = 1.000152 (0.015% error), spin = 0 for Schwarzschild
+- Angular convergence confirmed
+- Boosted BH: AH found, area matches Schwarzschild
+
+**CLI:** `--ah` enables, `--ah_every N` controls frequency, `--ah_guess R` sets initial radius.
+
+### Einstein-Maxwell (Step 2)
+
+Implemented 3+1 conformal Maxwell evolution (arXiv:0907.1151).
+
+**Changes:**
+- `src/core/fields.h` — 6 new fields: FIELD_E1..E3, FIELD_BM1..BM3 (NUM_FIELDS: 25→31)
+- `src/core/params.h` — `charge` in puncture_data_t, `em_enabled`/`kappa_em` in sim_params_t
+- `src/evolution/maxwell_rhs.h/c` — Maxwell RHS: conformal curl, advection, K coupling,
+  constraint damping. Combined ccz4_maxwell_rhs_point wrapper.
+- `src/evolution/ccz4_rhs.c` — EM stress-energy T^μν coupling (gated by em_enabled):
+  ρ_EM in Theta/K, j^i_EM in Gamma^i, S_ij in A_ij equations.
+- `src/evolution/dissipation.c` — EM fields not classified as gauge fields
+- `src/initial_data/puncture.c` — Initialize EM fields to 0 in flat/BL data
+- `src/initial_data/bowen_york.c` — Coulomb E^i for charged BHs, EM fields zeroed in HiSpID
+- `src/main.c` — `--em` flag, `--puncture ...,Q` charge parsing, AH finder integration
+
+**Test results (15/15 PASS):**
+- Field count: NUM_FIELDS = 31, positions correct
+- EM flat stability: E=B=0 stays zero for 1000 steps
+- Plane wave: propagates, energy bounded, Ham < 1e-6
+- Charged BH: Coulomb field initialized, constraints bounded after 50 steps
+- Constraint damping: div(E) reduced 10.88x
+- Energy conservation: bounded and non-negative
+
+**Backward compatibility:** All prior tests pass unchanged. Flat spacetime Ham L2 = 5.3e-14.
+Convergence order 5.4 (unchanged). EM fields zero by default, zero overhead when off.
+
+### What's next
+
+Step 3: XCTS + Superposed Kerr-Schild + Fill-the-Holes for chi ≤ 0.9997 initial data.
+Uses AH finder from Step 1 for excision boundary.

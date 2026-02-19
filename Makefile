@@ -23,10 +23,10 @@ endif
 
 # Source files (common to all backends)
 CORE_SRC    = src/core/grid.c
-EVOLUTION_SRC = src/evolution/ccz4_rhs.c src/evolution/dissipation.c
+EVOLUTION_SRC = src/evolution/ccz4_rhs.c src/evolution/dissipation.c src/evolution/maxwell_rhs.c
 NUMERICS_SRC  = src/numerics/rk4.c
 INITIAL_SRC   = src/initial_data/puncture.c src/initial_data/bowen_york.c src/initial_data/relaxation.c src/initial_data/kerr_quasi_isotropic.c
-DIAG_SRC      = src/diagnostics/constraints.c
+DIAG_SRC      = src/diagnostics/constraints.c src/diagnostics/ah_finder.c
 BOUNDARY_SRC  = src/boundary/sommerfeld.c
 IO_SRC        = src/io/output.c
 AMR_SRC       = src/amr/block.c src/amr/mesh.c src/amr/meshblock_pack.c src/amr/ghost_exchange.c \
@@ -75,7 +75,7 @@ LDFLAGS = $(BACKEND_LIBS) -lm
 BUILD = build
 
 # Targets
-.PHONY: all debug test test-single-bh test-convergence test-constraints test-head-on test-amr-mesh test-amr-ghost test-amr-prolong test-amr-refine test-amr-evolve test-pack-evolve test-subcycle test-bowen-york test-hispid clean
+.PHONY: all debug test test-single-bh test-convergence test-constraints test-head-on test-amr-mesh test-amr-ghost test-amr-prolong test-amr-refine test-amr-evolve test-pack-evolve test-subcycle test-bowen-york test-hispid test-maxwell test-ah clean
 
 all: $(BUILD)/lattice
 
@@ -100,11 +100,12 @@ $(BUILD)/test_single_bh: tests/test_single_bh.c $(ALL_SRC)
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS_OPT) -o $@ tests/test_single_bh.c $(ALL_SRC) $(LDFLAGS)
 
-test: $(BUILD)/test_flat $(BUILD)/test_convergence $(BUILD)/test_amr_evolve
+test: $(BUILD)/test_flat $(BUILD)/test_convergence $(BUILD)/test_amr_evolve $(BUILD)/test_maxwell
 	@echo "=== Running tests ==="
 	$(BUILD)/test_flat
 	$(BUILD)/test_convergence
 	$(BUILD)/test_amr_evolve
+	$(BUILD)/test_maxwell
 
 test-single-bh: $(BUILD)/test_single_bh
 	@echo "=== Running single BH test ==="
@@ -205,6 +206,22 @@ $(BUILD)/test_hispid: tests/test_hispid.c $(ALL_SRC)
 test-hispid: $(BUILD)/test_hispid
 	@echo "=== Running HiSpID test ==="
 	$(BUILD)/test_hispid
+
+$(BUILD)/test_maxwell: tests/test_maxwell.c $(ALL_SRC)
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS_OPT) -o $@ tests/test_maxwell.c $(ALL_SRC) $(LDFLAGS)
+
+test-maxwell: $(BUILD)/test_maxwell
+	@echo "=== Running Maxwell test ==="
+	$(BUILD)/test_maxwell
+
+$(BUILD)/test_ah_finder: tests/test_ah_finder.c $(ALL_SRC)
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS_OPT) -o $@ tests/test_ah_finder.c $(ALL_SRC) $(LDFLAGS)
+
+test-ah: $(BUILD)/test_ah_finder
+	@echo "=== Running AH finder test ==="
+	$(BUILD)/test_ah_finder
 
 clean:
 	rm -rf $(BUILD)

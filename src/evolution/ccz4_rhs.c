@@ -22,6 +22,7 @@
  */
 
 #include "ccz4_rhs.h"
+#include "maxwell_rhs.h"
 #include "../core/fields.h"
 #include "../numerics/finite_diff.h"
 #include "../geometry/tensor_utils.h"
@@ -393,6 +394,57 @@ void ccz4_rhs_point(double **rhs, const double *const *src,
 
     double rhs_Gamma[3];
     FOR1(ii) rhs_Gamma[ii] = advec_Gamma[ii] + Gammadot[ii];
+
+    /* ========== 9b. EM stress-energy source terms ========== */
+    /* Gate behind em_enabled: zero overhead when EM is off.
+     * T^{mu nu}_{EM} enters the CCZ4 RHS via:
+     *   Theta   += -8 pi rho_EM
+     *   K       += -8 pi alpha (rho_EM + S_EM) / 2    (actually -4 pi alpha (rho + S))
+     *   A_ij    += -8 pi alpha chi [S_ij - (1/3) gamma_ij S]^TF
+     *   Gamma^i += -16 pi alpha j^i_EM
+     *
+     * Note: K equation in CCZ4 contains a factor from the full Einstein equations.
+     * The standard 3+1 ADM K equation has:  dt(K) += -4 pi alpha (rho + S)
+     * The A_ij gets the TF part of -8 pi alpha chi S_ij.
+     *
+     * Ref: B&S Eq. (2.106)-(2.112) (matter terms in 3+1 evolution)
+     * Ref: arXiv:0907.1151 (Alcubierre et al.) Sec. III */
+    if (p->em_enabled) {
+        double rho_em, S_em_trace;
+        double j_em[3], S_em_dd[3][3];
+        em_stress_energy(src, g, idx, chi, h_UU, h,
+                         &rho_em, j_em, S_em_dd, &S_em_trace);
+
+        /* Theta equation: += -8*pi*rho_EM (Hamiltonian constraint source)
+         * Ref: B&S Eq. (2.107): Theta source = -8*pi*rho */
+        rhs_Theta += -8.0 * M_PI * rho_em;
+
+        /* K equation: += -4*pi*alpha*(rho + S)
+         * For EM: S = rho, so this is -8*pi*alpha*rho
+         * Ref: B&S Eq. (2.106) */
+        rhs_K += -4.0 * M_PI * lapse * (rho_em + S_em_trace);
+
+        /* A_ij equation: += -8*pi*alpha*chi * [S_ij - (1/3)*gamma_ij*S]^TF
+         * gamma_ij = h_ij/chi, so chi*gamma_ij = h_ij.
+         * The TF part is taken with respect to h_ij (conformal metric).
+         * Ref: B&S Eq. (2.109) */
+        double matter_A[3][3];
+        FOR2(ii2, jj2) {
+            /* chi * S_ij - (1/3) * h_ij * S_em_trace  (since chi*gamma = h) */
+            matter_A[ii2][jj2] = chi * S_em_dd[ii2][jj2]
+                                 - (1.0 / 3.0) * h[ii2][jj2] * S_em_trace;
+        }
+        make_trace_free(matter_A, h, h_UU);
+        FOR2(ii2, jj2) {
+            rhs_A[ii2][jj2] += -8.0 * M_PI * lapse * matter_A[ii2][jj2];
+        }
+
+        /* Gamma^i equation: += -16*pi*alpha*j^i_EM
+         * Ref: B&S Eq. (2.112) */
+        FOR1(ii2) {
+            rhs_Gamma[ii2] += -16.0 * M_PI * lapse * j_em[ii2];
+        }
+    }
 
     /* ========== 10. Moving puncture gauge ========== */
     /* Ref: GRChombo MovingPunctureGauge.hpp:54-65 */

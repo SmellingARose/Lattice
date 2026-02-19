@@ -14,9 +14,11 @@
 #include "initial_data/puncture.h"
 #include "initial_data/bowen_york.h"
 #include "evolution/ccz4_rhs.h"
+#include "evolution/maxwell_rhs.h"
 #include "boundary/sommerfeld.h"
 #include "numerics/rk4.h"
 #include "diagnostics/constraints.h"
+#include "diagnostics/ah_finder.h"
 #include "amr/mesh.h"
 #include "amr/refine.h"
 #include "backend/backend.h"
@@ -48,6 +50,13 @@ static void print_usage(void)
     fprintf(stderr, "  --regrid_every <int>  Regrid check interval (default 10)\n");
     fprintf(stderr, "\nInitial data options:\n");
     fprintf(stderr, "  --hispid            Force HiSpID (high-spin) initial data\n");
+    fprintf(stderr, "\nEinstein-Maxwell options:\n");
+    fprintf(stderr, "  --em                Enable Einstein-Maxwell coupling\n");
+    fprintf(stderr, "  --puncture M,x,y,z,Px,Py,Pz,Sx,Sy,Sz,Q  (with charge Q)\n");
+    fprintf(stderr, "\nApparent horizon options:\n");
+    fprintf(stderr, "  --ah                Enable AH finder\n");
+    fprintf(stderr, "  --ah_every <int>    Run AH finder every N steps (default 100)\n");
+    fprintf(stderr, "  --ah_guess <float>  Initial radius guess (default M/2)\n");
 }
 
 int main(int argc, char **argv)
@@ -58,6 +67,11 @@ int main(int argc, char **argv)
     puncture_data_t bhs[MAX_PUNCTURES];
     memset(bhs, 0, sizeof(bhs));
     int n_bh = 0;
+
+    /* AH finder options */
+    int ah_enabled = 0;
+    int ah_every = 100;
+    double ah_guess = -1.0; /* negative = auto from puncture mass */
 
     /* Parse CLI args */
     for (int a = 1; a < argc; a++) {
@@ -80,19 +94,21 @@ int main(int argc, char **argv)
             }
             char *s = argv[++a];
             puncture_data_t *bh = &bhs[n_bh];
-            /* Accept 4, 7, or 10 comma-separated values:
-             *   M,x,y,z                    (BL at rest)
-             *   M,x,y,z,Px,Py,Pz          (with momentum)
-             *   M,x,y,z,Px,Py,Pz,Sx,Sy,Sz (with momentum + spin) */
-            int nread = sscanf(s, "%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf",
+            /* Accept 4, 7, 10, or 11 comma-separated values:
+             *   M,x,y,z                         (BL at rest)
+             *   M,x,y,z,Px,Py,Pz               (with momentum)
+             *   M,x,y,z,Px,Py,Pz,Sx,Sy,Sz      (with momentum + spin)
+             *   M,x,y,z,Px,Py,Pz,Sx,Sy,Sz,Q    (with charge) */
+            int nread = sscanf(s, "%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf,%lf",
                                &bh->mass,
                                &bh->center[0], &bh->center[1], &bh->center[2],
                                &bh->momentum[0], &bh->momentum[1], &bh->momentum[2],
-                               &bh->spin[0], &bh->spin[1], &bh->spin[2]);
-            if (nread == 4 || nread == 7 || nread == 10) {
+                               &bh->spin[0], &bh->spin[1], &bh->spin[2],
+                               &bh->charge);
+            if (nread == 4 || nread == 7 || nread == 10 || nread == 11) {
                 n_bh++;
             } else {
-                fprintf(stderr, "Error: --puncture expects M,x,y,z[,Px,Py,Pz[,Sx,Sy,Sz]]\n");
+                fprintf(stderr, "Error: --puncture expects M,x,y,z[,Px,Py,Pz[,Sx,Sy,Sz[,Q]]]\n");
                 return 1;
             }
         } else if (strcmp(argv[a], "--rk") == 0 && a + 1 < argc) {
@@ -119,6 +135,14 @@ int main(int argc, char **argv)
             p.amr.chi_coarsen = atof(argv[++a]);
         } else if (strcmp(argv[a], "--regrid_every") == 0 && a + 1 < argc) {
             p.amr.regrid_every = atoi(argv[++a]);
+        } else if (strcmp(argv[a], "--ah") == 0) {
+            ah_enabled = 1;
+        } else if (strcmp(argv[a], "--ah_every") == 0 && a + 1 < argc) {
+            ah_every = atoi(argv[++a]);
+        } else if (strcmp(argv[a], "--ah_guess") == 0 && a + 1 < argc) {
+            ah_guess = atof(argv[++a]);
+        } else if (strcmp(argv[a], "--em") == 0) {
+            p.em_enabled = 1;
         } else if (strcmp(argv[a], "--hispid") == 0) {
             set_hispid_override(1);
         } else if (strcmp(argv[a], "--help") == 0 || strcmp(argv[a], "-h") == 0) {
@@ -231,9 +255,23 @@ int main(int argc, char **argv)
         double ham0 = compute_constraint_l2(g);
         printf("  Initial Ham L2 = %.6e\n", ham0);
 
+        /* Select RHS function: combined CCZ4+Maxwell if EM enabled */
+        rk4_rhs_func_t rhs_func = p.em_enabled
+            ? ccz4_maxwell_rhs_point : ccz4_rhs_point;
+
+        /* AH finder setup */
+        ah_workspace_t *ah_ws = NULL;
+        if (ah_enabled && n_bh > 0) {
+            double r0 = ah_guess > 0 ? ah_guess : bhs[0].mass / 2.0;
+            ah_ws = ah_alloc(16, 32, bhs[0].center, r0);
+            ah_ws->eta = 10.0;
+            printf("  AH finder: enabled, every %d steps, r_guess=%.4f\n",
+                   ah_every, r0);
+        }
+
         /* Time evolution */
         for (int step = 1; step <= p.num_steps; step++) {
-            rk4_step(g, &p, ccz4_rhs_point, apply_sommerfeld, p.dt);
+            rk4_step(g, &p, rhs_func, apply_sommerfeld, p.dt);
 
             if (step % 100 == 0 || step == p.num_steps) {
                 double ham = compute_constraint_l2(g);
@@ -244,8 +282,20 @@ int main(int argc, char **argv)
             if (p.output_every > 0 && step % p.output_every == 0) {
                 output_1d_slice(g, step, step * p.dt);
             }
+
+            /* AH finder */
+            if (ah_ws && ah_every > 0 && step % ah_every == 0) {
+                int conv = ah_find(ah_ws, g, 1e-6, 500, 0);
+                if (conv) {
+                    ah_result_t ahr = ah_compute_diagnostics(ah_ws, g);
+                    printf("  AH step %5d: A=%.4f M_irr=%.4f |J|=%.4e r=%.4f\n",
+                           step, ahr.area, ahr.mass_irr, ahr.spin_mag,
+                           ahr.mean_radius);
+                }
+            }
         }
 
+        ah_free(ah_ws);
         grid_free(g);
     }
 

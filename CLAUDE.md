@@ -82,7 +82,7 @@ Priority order:
 - Spatially varying KO dissipation
 - Full waveform catalog capability
 
-**Current status: Phase 1 — infrastructure + flat spacetime + single BH stable + head-on binary collision complete. AMR fully integrated: `./lattice --amr` runs multi-block mesh evolution with dynamic regridding. GPU batch kernels (Commits 1+2): packed mesh stepper with batched RHS/Sommerfeld/update kernels, device-side 5-phase ghost exchange on pack buffers (no unpack/repack). Berger-Oliger subcycling: each AMR level advances at its own CFL dt, with temporal interpolation for cross-level ghosts. Bowen-York initial data: `--puncture M,x,y,z,Px,Py,Pz,Sx,Sy,Sz` with hyperbolic relaxation solver for Hamiltonian constraint (Step 1 of plan1.md). HiSpID high-spin initial data (Step 2 of plan1.md): quasi-isotropic Kerr metric + 4-field coupled relaxation solver + `--hispid` CLI flag. Auto-detects chi>0.9 for HiSpID path. All tests passing (26/26 HiSpID, 29/29 Bowen-York, 7/7 subcycle, 8/8 pack evolve, 8/8 AMR evolution, 72/72 AMR refine, 16/16 AMR ghost, 15/15 AMR prolong).** Update as milestones are reached.
+**Current status: Phase 2 underway. Phase 1 complete. Apparent Horizon finder: hyperbolic flow method (BHaHAHA-inspired) with 4th-order off-grid interpolation, mass/spin/area extraction, `--ah` CLI flag (13/13 tests passing). Einstein-Maxwell: 6 new evolved fields (E^i, B^i), conformal Maxwell evolution with constraint damping, EM stress-energy coupling to CCZ4 (gated by `--em` flag), charged puncture initial data via `--puncture M,x,y,z,Px,Py,Pz,Sx,Sy,Sz,Q` (15/15 tests passing). All prior tests still passing: flat spacetime, convergence (order 5.4), AMR evolution. Total: 31 evolved fields (25 CCZ4 + 6 EM).** Update as milestones are reached.
 
 ## Project Structure
 
@@ -102,12 +102,14 @@ lattice/
 │   │   ├── backend_cpu.c       # OpenMP threads (CPU)
 │   │   └── backend_gpu.c       # OpenMP target offloading (GPU)
 │   ├── evolution/
-│   │   ├── ccz4_rhs.c          # CCZ4 right-hand-side
+│   │   ├── ccz4_rhs.c          # CCZ4 right-hand-side (+EM source terms)
+│   │   ├── maxwell_rhs.h/c     # Maxwell evolution equations (E^i, B^i)
 │   │   └── dissipation.c       # Kreiss-Oliger dissipation
 │   ├── geometry/
 │   │   └── tensor_utils.h      # inline tensor operations
 │   ├── numerics/
 │   │   ├── finite_diff.h       # FD_D1, FD_D2 macros (4th-order)
+│   │   ├── interpolate.h       # 4th-order off-grid Lagrange interpolation
 │   │   └── rk4.c               # RK4 time integrator (+mesh stepping)
 │   ├── initial_data/
 │   │   ├── puncture.c          # Brill-Lindquist puncture data
@@ -116,6 +118,7 @@ lattice/
 │   │   └── kerr_quasi_isotropic.h/c  # QI Kerr metric for HiSpID (high-spin data)
 │   ├── diagnostics/
 │   │   ├── constraints.c       # Hamiltonian + momentum constraints
+│   │   ├── ah_finder.h/c       # Apparent horizon finder (hyperbolic flow)
 │   │   └── psi4.c              # Weyl4 scalar extraction
 │   ├── boundary/
 │   │   └── sommerfeld.c        # radiative BCs (+block-aware variant)
@@ -145,6 +148,8 @@ lattice/
 │   ├── test_subcycle.c       # Berger-Oliger subcycling validation
 │   ├── test_bowen_york.c    # Bowen-York initial data (A_ij + solver + evolution)
 │   ├── test_hispid.c        # HiSpID high-spin initial data (QI Kerr + coupled solver)
+│   ├── test_ah_finder.c     # Apparent horizon finder tests (13/13)
+│   ├── test_maxwell.c       # Einstein-Maxwell tests (15/15)
 │   └── convergence.sh          # 3-resolution convergence check
 ├── docs/
 │   ├── physics.md              # variable-to-math mapping
@@ -171,6 +176,8 @@ make test-amr-refine    # oct-tree refinement + multi-level ghost exchange
 make test-subcycle      # Berger-Oliger subcycling validation
 make test-bowen-york   # Bowen-York initial data (A_ij, solver, evolution)
 make test-hispid       # HiSpID high-spin initial data (QI Kerr + coupled solver)
+make test-ah           # Apparent horizon finder (interpolation, Schwarzschild, diagnostics)
+make test-maxwell      # Einstein-Maxwell (flat EM, plane wave, charged BH, constraints)
 make clean
 ```
 
@@ -214,7 +221,7 @@ export GOMP_NVPTX_NATIVE_GPU_THREAD_STACK_SIZE=16384
   (1) the equation from arXiv:1106.2254 or B&S,
   (2) the corresponding GRChombo file:line for cross-reference.
 
-## Evolved Variables (Phase 1: 25 fields)
+## Evolved Variables (31 fields)
 
 | Variable | Count | Math | Description |
 |---|---|---|---|
@@ -227,8 +234,10 @@ export GOMP_NVPTX_NATIVE_GPU_THREAD_STACK_SIZE=16384
 | `lapse` | 1 | alpha | lapse function |
 | `shift[3]` | 3 | beta^i | shift vector |
 | `B[3]` | 3 | B^i | Gamma-driver auxiliary variable |
+| `E[3]` | 3 | E^i | conformal electric field |
+| `BM[3]` | 3 | B^i_mag | conformal magnetic field (BM prefix avoids clash with shift B^i) |
 
-Total: 25 evolved fields. Phase 2 adds E_i, B_i (6 more for Maxwell).
+Total: 31 evolved fields (25 CCZ4 + 6 EM). EM fields enabled with `--em` flag.
 
 ## Physics Conventions
 
@@ -353,9 +362,13 @@ design rationale. Every code addition should have a corresponding entry.
 - **gr-qc/0511048**: Moving punctures (Campanelli et al.)
 - **arXiv:2501.01055**: CCZ4 variants — CCZ3 stable to 10^5 M
 
-### Phase 2 References (for later)
-- **arXiv:0907.1151**: Einstein-Maxwell 3+1 (Alcubierre et al.)
-- **arXiv:1903.01036**: Charged puncture initial data (Bozzola & Paschalidis)
+### Phase 2 References (implemented)
+- **arXiv:0907.1151**: Einstein-Maxwell 3+1 (Alcubierre et al.) — **implemented**
+- **arXiv:1903.01036**: Charged puncture initial data (Bozzola & Paschalidis) — **implemented**
+- **arXiv:2505.15912**: BHaHAHA hyperbolic AH flow algorithm — **implemented**
+- **gr-qc/0512169**: AH finder review, expansion formula — **implemented**
+
+### Phase 2 References (planned)
 - **arXiv:2104.06978**: Charged binary inspiral
 - **arXiv:1004.1353**: N-puncture multigrid solver (Lousto et al.)
 - **arXiv:1003.0859**: Position-dependent eta (Muller & Brugmann)

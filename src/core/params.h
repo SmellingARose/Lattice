@@ -79,6 +79,7 @@ typedef struct {
     double center[3];
     double momentum[3];
     double spin[3];
+    double charge;        /* electric charge Q (default 0) */
 } puncture_data_t;
 
 /* Simulation parameters */
@@ -99,6 +100,9 @@ typedef struct {
     gauge_params_t gauge;
     amr_params_t   amr;
     noise_params_t noise;
+
+    int    em_enabled;    /* Einstein-Maxwell coupling (default 0)  */
+    double kappa_em;      /* EM constraint damping (default 0.1)    */
 } sim_params_t;
 
 /* Default parameter initialization */
@@ -151,6 +155,10 @@ static inline sim_params_t default_params(void)
     p.noise.ssl_h              = 0.6;
     p.noise.ssl_sigma_t        = 20.0;
     p.noise.ssl_total_mass     = 1.0;
+
+    /* Einstein-Maxwell defaults (disabled — vacuum CCZ4 by default) */
+    p.em_enabled = 0;
+    p.kappa_em   = 0.1;
 
     return p;
 }

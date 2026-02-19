@@ -116,10 +116,20 @@ void set_ccz4_from_psi(grid_t *g, const double *psi_arr,
      *   lapse    = sqrt(chi) = psi^{-2}
      *   shift    = 0
      *   B^i      = 0
+     *   E^i      = Coulomb field (if charged), else 0
+     *   B^i_mag  = 0
      *
      * Ref: GRChombo BinaryBH.impl.hpp:53-68
      * Ref: B&S Eq. 3.10 (conformal decomposition)
+     * Ref: arXiv:1903.01036 (Bozzola & Paschalidis) Eq. (12) (Coulomb field)
      */
+
+    /* Check if any BH has charge */
+    int has_charge = 0;
+    for (int n = 0; n < n_bh; n++) {
+        if (fabs(bhs[n].charge) > 1.0e-15) has_charge = 1;
+    }
+
     for (int k = 0; k < g->Ntotal; k++) {
         for (int j = 0; j < g->Ntotal; j++) {
             for (int i = 0; i < g->Ntotal; i++) {
@@ -174,6 +184,41 @@ void set_ccz4_from_psi(grid_t *g, const double *psi_arr,
                 g->fields[FIELD_B1][idx]     = 0.0;
                 g->fields[FIELD_B2][idx]     = 0.0;
                 g->fields[FIELD_B3][idx]     = 0.0;
+
+                /* EM fields: Coulomb E^i for charged BHs, B^i = 0.
+                 * Physical E^i = Q / (4 pi r^2) * n^i  (Coulomb)
+                 * Conformal E^i = chi^{3/2} * E^i_phys = psi^{-6} * E^i_phys
+                 *
+                 * In isotropic coordinates, the Coulomb field is:
+                 *   E^r_phys = Q / (4 pi r^2)  (coordinate r)
+                 * Conformal: E^i_conf = psi^{-6} * (Q / (4 pi r^2)) * n^i
+                 *
+                 * Ref: arXiv:1903.01036 Eq. (12) */
+                double Ex = 0.0, Ey = 0.0, Ez = 0.0;
+                if (has_charge) {
+                    for (int n = 0; n < n_bh; n++) {
+                        if (fabs(bhs[n].charge) < 1.0e-15) continue;
+                        double rx = x - bhs[n].center[0];
+                        double ry = y - bhs[n].center[1];
+                        double rz = z - bhs[n].center[2];
+                        double r2 = rx*rx + ry*ry + rz*rz;
+                        double r  = sqrt(r2);
+                        if (r < 1.0e-10) r = 1.0e-10;
+                        double Q = bhs[n].charge;
+                        double fac = Q / (4.0 * M_PI * r2 * r);  /* Q/(4pi r^3) */
+                        /* E^i_phys = Q/(4 pi r^2) * n^i = Q/(4 pi r^3) * r_i */
+                        /* E^i_conf = psi^{-6} * E^i_phys */
+                        Ex += psi6_inv * fac * rx;
+                        Ey += psi6_inv * fac * ry;
+                        Ez += psi6_inv * fac * rz;
+                    }
+                }
+                g->fields[FIELD_E1][idx]  = Ex;
+                g->fields[FIELD_E2][idx]  = Ey;
+                g->fields[FIELD_E3][idx]  = Ez;
+                g->fields[FIELD_BM1][idx] = 0.0;
+                g->fields[FIELD_BM2][idx] = 0.0;
+                g->fields[FIELD_BM3][idx] = 0.0;
             }
         }
     }
@@ -261,6 +306,14 @@ void set_ccz4_from_hispid(grid_t *g, const double *psi_arr,
                 g->fields[FIELD_B1][idx]     = 0.0;
                 g->fields[FIELD_B2][idx]     = 0.0;
                 g->fields[FIELD_B3][idx]     = 0.0;
+
+                /* EM fields: zero for HiSpID path (charge not yet supported) */
+                g->fields[FIELD_E1][idx]  = 0.0;
+                g->fields[FIELD_E2][idx]  = 0.0;
+                g->fields[FIELD_E3][idx]  = 0.0;
+                g->fields[FIELD_BM1][idx] = 0.0;
+                g->fields[FIELD_BM2][idx] = 0.0;
+                g->fields[FIELD_BM3][idx] = 0.0;
             }
         }
     }
