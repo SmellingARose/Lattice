@@ -35,8 +35,27 @@ double brill_lindquist_psi(double x, double y, double z,
 void set_ccz4_from_psi(grid_t *g, const double *psi_arr,
                         int n_bh, const puncture_data_t *bhs);
 
+/* Convert solved psi + V^i + non-flat h_ij to all 25 CCZ4 fields.
+ * psi_arr[npoints]: full conformal factor (BL + correction u).
+ * V_arr[3]: momentum correction arrays (may be NULL for V=0).
+ * h_ij from hispid_conformal_metric(), Gamma^i computed via FD.
+ *
+ * Key difference from set_ccz4_from_psi: h_ij != delta_ij, Gamma^i != 0.
+ * Ref: arXiv:1410.8607, GRChombo KerrBH.impl.hpp:86-93 */
+void set_ccz4_from_hispid(grid_t *g, const double *psi_arr,
+                           double *const *V_arr,
+                           int n_bh, const puncture_data_t *bhs);
+
 /* Top-level dispatch: if all P=0 and S=0, uses fast BL path.
- * Otherwise runs hyperbolic relaxation solver. */
+ * Otherwise runs hyperbolic relaxation solver.
+ * If hispid_override is set (via --hispid), forces coupled solver. */
 void set_bowen_york(grid_t *g, int n_bh, const puncture_data_t *bhs);
+
+/* Force HiSpID path (coupled solver with non-flat conformal metric).
+ * Called by set_bowen_york when high spin detected or --hispid flag set. */
+void set_hispid(grid_t *g, int n_bh, const puncture_data_t *bhs);
+
+/* Set --hispid CLI override (forces HiSpID even for low spin) */
+void set_hispid_override(int val);
 
 #endif /* LATTICE_BOWEN_YORK_H */

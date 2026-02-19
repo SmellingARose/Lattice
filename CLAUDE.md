@@ -82,7 +82,7 @@ Priority order:
 - Spatially varying KO dissipation
 - Full waveform catalog capability
 
-**Current status: Phase 1 — infrastructure + flat spacetime + single BH stable + head-on binary collision complete. AMR fully integrated: `./lattice --amr` runs multi-block mesh evolution with dynamic regridding. GPU batch kernels (Commits 1+2): packed mesh stepper with batched RHS/Sommerfeld/update kernels, device-side 5-phase ghost exchange on pack buffers (no unpack/repack). Berger-Oliger subcycling: each AMR level advances at its own CFL dt, with temporal interpolation for cross-level ghosts. Bowen-York initial data: `--puncture M,x,y,z,Px,Py,Pz,Sx,Sy,Sz` with hyperbolic relaxation solver for Hamiltonian constraint (Step 1 of plan1.md). All tests passing (29/29 Bowen-York, 7/7 subcycle, 8/8 pack evolve, 8/8 AMR evolution, 72/72 AMR refine, 16/16 AMR ghost, 15/15 AMR prolong).** Update as milestones are reached.
+**Current status: Phase 1 — infrastructure + flat spacetime + single BH stable + head-on binary collision complete. AMR fully integrated: `./lattice --amr` runs multi-block mesh evolution with dynamic regridding. GPU batch kernels (Commits 1+2): packed mesh stepper with batched RHS/Sommerfeld/update kernels, device-side 5-phase ghost exchange on pack buffers (no unpack/repack). Berger-Oliger subcycling: each AMR level advances at its own CFL dt, with temporal interpolation for cross-level ghosts. Bowen-York initial data: `--puncture M,x,y,z,Px,Py,Pz,Sx,Sy,Sz` with hyperbolic relaxation solver for Hamiltonian constraint (Step 1 of plan1.md). HiSpID high-spin initial data (Step 2 of plan1.md): quasi-isotropic Kerr metric + 4-field coupled relaxation solver + `--hispid` CLI flag. Auto-detects chi>0.9 for HiSpID path. All tests passing (26/26 HiSpID, 29/29 Bowen-York, 7/7 subcycle, 8/8 pack evolve, 8/8 AMR evolution, 72/72 AMR refine, 16/16 AMR ghost, 15/15 AMR prolong).** Update as milestones are reached.
 
 ## Project Structure
 
@@ -112,7 +112,8 @@ lattice/
 │   ├── initial_data/
 │   │   ├── puncture.c          # Brill-Lindquist puncture data
 │   │   ├── bowen_york.h/c      # BY A_ij (momentum+spin) + CCZ4 conversion
-│   │   └── relaxation.h/c      # Hyperbolic relaxation solver (Hamiltonian constraint)
+│   │   ├── relaxation.h/c      # Hyperbolic relaxation solver (1-field + 4-field coupled)
+│   │   └── kerr_quasi_isotropic.h/c  # QI Kerr metric for HiSpID (high-spin data)
 │   ├── diagnostics/
 │   │   ├── constraints.c       # Hamiltonian + momentum constraints
 │   │   └── psi4.c              # Weyl4 scalar extraction
@@ -143,6 +144,7 @@ lattice/
 │   ├── test_pack_evolve.c    # packed batch kernel validation
 │   ├── test_subcycle.c       # Berger-Oliger subcycling validation
 │   ├── test_bowen_york.c    # Bowen-York initial data (A_ij + solver + evolution)
+│   ├── test_hispid.c        # HiSpID high-spin initial data (QI Kerr + coupled solver)
 │   └── convergence.sh          # 3-resolution convergence check
 ├── docs/
 │   ├── physics.md              # variable-to-math mapping
@@ -168,6 +170,7 @@ make test-amr-prolong   # prolongation + noise reduction (CAKO/CAHD/SSL)
 make test-amr-refine    # oct-tree refinement + multi-level ghost exchange
 make test-subcycle      # Berger-Oliger subcycling validation
 make test-bowen-york   # Bowen-York initial data (A_ij, solver, evolution)
+make test-hispid       # HiSpID high-spin initial data (QI Kerr + coupled solver)
 make clean
 ```
 
@@ -272,6 +275,24 @@ constant `GR_SPACEDIM = 3`.
 | `shift_Gamma_coeff` | 0.75 | F in dt(beta^i) = F * B^i |
 | `eta` | 1.0 | Damping in Gamma-driver: dt(B^i) = dt(Gamma^i) - eta * B^i |
 | `rk_method` | `RK_CK45` | Time integrator: `RK_CLASSIC` (4 stages, 4 blocks) or `RK_CK45` (5 stages, 3 blocks) |
+
+### Relaxation Solver Tuning
+
+Both `relaxation_solve` (1-field BY) and `relaxation_solve_coupled` (4-field HiSpID)
+accept `tol` and `max_iter` parameters. The discretization floor is O(dx^4):
+
+| Grid N | ~Floor residual | Recommended `tol` |
+|--------|----------------|-------------------|
+| 24     | 1e-3           | 1e-4              |
+| 64     | 1e-5           | 1e-6              |
+| 128    | 1e-7           | 1e-8              |
+| 256    | 1e-9           | 1e-10             |
+
+No benefit going below the floor — stagnation detection stops the solver
+automatically when the residual plateaus (<5% improvement over 1000 iterations).
+The coupled solver is ~4x slower per iteration than the 1-field solver.
+For test purposes, `tol=1e-4, max_iter=2000` keeps tests fast (~10s each).
+For production, `tol=1e-10, max_iter=50000` is the default in `set_hispid()`.
 
 ## Workflow Rules
 

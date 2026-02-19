@@ -16,7 +16,10 @@
 
 #include "bowen_york.h"
 #include "relaxation.h"
+#include "kerr_quasi_isotropic.h"
 #include "../core/fields.h"
+#include "../numerics/finite_diff.h"
+#include "../geometry/tensor_utils.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -176,19 +179,206 @@ void set_ccz4_from_psi(grid_t *g, const double *psi_arr,
     }
 }
 
+/* Global flag for --hispid CLI override */
+static int hispid_force = 0;
+
+void set_hispid_override(int val) { hispid_force = val; }
+
+void set_ccz4_from_hispid(grid_t *g, const double *psi_arr,
+                           double *const *V_arr,
+                           int n_bh, const puncture_data_t *bhs)
+{
+    /* Convert solved psi + non-flat h_ij to CCZ4 variables:
+     *   chi      = psi^{-4}
+     *   h_ij     = h_ij^QI  (quasi-isotropic Kerr, NOT delta_ij)
+     *   K        = 0        (maximal slicing)
+     *   A_ij^CCZ4 = psi^{-6} * A_ij^phys
+     *   Theta    = 0
+     *   Gamma^i  = computed from d_j h^{ij} (NON-ZERO)
+     *   lapse    = sqrt(chi)
+     *   shift    = 0
+     *   B^i      = 0
+     *
+     * Key difference from set_ccz4_from_psi: h_ij != delta_ij.
+     * Gamma^i must be computed from the conformal metric via FD.
+     *
+     * Ref: arXiv:1410.8607, GRChombo KerrBH.impl.hpp:86-93 */
+
+    int N = g->Ntotal;
+
+    /* First pass: set chi, h_ij, K, A_ij, Theta, lapse, shift, B */
+    for (int k = 0; k < N; k++) {
+        for (int j = 0; j < N; j++) {
+            for (int i = 0; i < N; i++) {
+                int idx = IDX(g, i, j, k);
+                double x = COORD(g, i);
+                double y = COORD(g, j);
+                double z = COORD(g, k);
+
+                double psi = psi_arr[idx];
+                double psi4 = psi * psi * psi * psi;
+                double chi  = 1.0 / psi4;
+
+                g->fields[FIELD_CHI][idx] = chi;
+
+                /* Non-flat conformal metric from superposed QI Kerr */
+                double h[3][3];
+                hispid_conformal_metric(h, x, y, z, n_bh, bhs);
+
+                g->fields[FIELD_H11][idx] = h[0][0];
+                g->fields[FIELD_H12][idx] = h[0][1];
+                g->fields[FIELD_H13][idx] = h[0][2];
+                g->fields[FIELD_H22][idx] = h[1][1];
+                g->fields[FIELD_H23][idx] = h[1][2];
+                g->fields[FIELD_H33][idx] = h[2][2];
+
+                /* K = 0 (maximal slicing) */
+                g->fields[FIELD_K][idx] = 0.0;
+
+                /* A_ij^CCZ4 = psi^{-6} * A_ij^phys.
+                 * A_phys combines Kerr extrinsic curvature + BY momentum. */
+                double A_kerr[3][3];
+                hispid_extrinsic(A_kerr, x, y, z, n_bh, bhs);
+                double A_by[3][3];
+                bowen_york_Aij(A_by, x, y, z, n_bh, bhs);
+
+                double psi6 = psi4 * psi * psi;
+                double psi6_inv = 1.0 / psi6;
+
+                g->fields[FIELD_A11][idx] = psi6_inv * (A_kerr[0][0] + A_by[0][0]);
+                g->fields[FIELD_A12][idx] = psi6_inv * (A_kerr[0][1] + A_by[0][1]);
+                g->fields[FIELD_A13][idx] = psi6_inv * (A_kerr[0][2] + A_by[0][2]);
+                g->fields[FIELD_A22][idx] = psi6_inv * (A_kerr[1][1] + A_by[1][1]);
+                g->fields[FIELD_A23][idx] = psi6_inv * (A_kerr[1][2] + A_by[1][2]);
+                g->fields[FIELD_A33][idx] = psi6_inv * (A_kerr[2][2] + A_by[2][2]);
+
+                g->fields[FIELD_THETA][idx] = 0.0;
+                g->fields[FIELD_LAPSE][idx] = sqrt(chi);
+
+                g->fields[FIELD_SHIFT1][idx] = 0.0;
+                g->fields[FIELD_SHIFT2][idx] = 0.0;
+                g->fields[FIELD_SHIFT3][idx] = 0.0;
+                g->fields[FIELD_B1][idx]     = 0.0;
+                g->fields[FIELD_B2][idx]     = 0.0;
+                g->fields[FIELD_B3][idx]     = 0.0;
+            }
+        }
+    }
+
+    /* Second pass: compute Gamma^i = -d_j h^{ij} from the conformal metric.
+     * For non-flat h_ij, Gamma^i != 0.
+     * Uses the Chris contracted formula: Gamma^i = h^{jk} Gamma^i_{jk}
+     * computed from 4th-order FD of h_ij.
+     *
+     * Ref: GRChombo KerrBH.impl.hpp:90-93 (notes Gamma^i is NON ZERO) */
+    int gw = g->ghost;
+    double dx = g->dx;
+    int strides[3] = { STRIDE_X, STRIDE_Y(g), STRIDE_Z(g) };
+
+    static const int h_field_idx[3][3] = {
+        {FIELD_H11, FIELD_H12, FIELD_H13},
+        {FIELD_H12, FIELD_H22, FIELD_H23},
+        {FIELD_H13, FIELD_H23, FIELD_H33}
+    };
+
+    for (int k = gw; k < N - gw; k++) {
+        for (int j = gw; j < N - gw; j++) {
+            for (int i = gw; i < N - gw; i++) {
+                int idx = IDX(g, i, j, k);
+
+                /* Load h_ij */
+                double h[3][3];
+                h[0][0] = g->fields[FIELD_H11][idx];
+                h[0][1] = g->fields[FIELD_H12][idx];
+                h[0][2] = g->fields[FIELD_H13][idx];
+                h[1][0] = h[0][1];
+                h[1][1] = g->fields[FIELD_H22][idx];
+                h[1][2] = g->fields[FIELD_H23][idx];
+                h[2][0] = h[0][2];
+                h[2][1] = h[1][2];
+                h[2][2] = g->fields[FIELD_H33][idx];
+
+                double h_UU[3][3];
+                compute_inverse_sym(h, h_UU);
+
+                /* First derivatives of h_ij */
+                double d1_h[3][3][3];
+                for (int dir = 0; dir < 3; dir++) {
+                    int s = strides[dir];
+                    for (int a = 0; a < 3; a++)
+                        for (int b = a; b < 3; b++) {
+                            double val = fd_d1(
+                                g->fields[h_field_idx[a][b]], idx, s, dx);
+                            d1_h[a][b][dir] = val;
+                            d1_h[b][a][dir] = val;
+                        }
+                }
+
+                /* Christoffel symbols and contracted Gamma^i */
+                chris_t chris;
+                compute_christoffel(d1_h, h_UU, &chris);
+
+                g->fields[FIELD_GAMMA1][idx] = chris.contracted[0];
+                g->fields[FIELD_GAMMA2][idx] = chris.contracted[1];
+                g->fields[FIELD_GAMMA3][idx] = chris.contracted[2];
+            }
+        }
+    }
+
+    /* Ghost zones: Gamma^i = 0 (Sommerfeld will handle BCs during evolution) */
+    for (int k = 0; k < N; k++)
+        for (int j = 0; j < N; j++)
+            for (int i = 0; i < N; i++) {
+                if (i < gw || i >= N - gw ||
+                    j < gw || j >= N - gw ||
+                    k < gw || k >= N - gw) {
+                    int idx = IDX(g, i, j, k);
+                    g->fields[FIELD_GAMMA1][idx] = 0.0;
+                    g->fields[FIELD_GAMMA2][idx] = 0.0;
+                    g->fields[FIELD_GAMMA3][idx] = 0.0;
+                }
+            }
+
+    (void)V_arr; /* V^i correction applied in future refinement */
+}
+
+void set_hispid(grid_t *g, int n_bh, const puncture_data_t *bhs)
+{
+    /* Solver tuning:
+     *   tol      — target residual (lower = more accurate, slower).
+     *              Discretization floor is O(dx^4): ~1e-3 at N=24,
+     *              ~1e-5 at N=64, ~1e-7 at N=128. No point going below
+     *              the floor — stagnation detection will stop early.
+     *   max_iter — hard cap. Stagnation detection stops when residual
+     *              plateaus (<5% improvement over 1000 iters).
+     * For production at N≥64, tol=1e-10 is appropriate. */
+    double tol      = 1.0e-10;
+    int    max_iter = 50000;
+
+    printf("  HiSpID: solving coupled H + Mom constraints...\n");
+    double residual = relaxation_solve_coupled(g, n_bh, bhs,
+                                                tol, max_iter, 1);
+    printf("  HiSpID: solver converged, residual = %.6e\n", residual);
+}
+
 void set_bowen_york(grid_t *g, int n_bh, const puncture_data_t *bhs)
 {
     /* Check if all momenta and spins are zero — use fast BL path */
     int need_solver = 0;
+    int high_spin = 0;
     for (int n = 0; n < n_bh; n++) {
+        double S_mag = sqrt(bhs[n].spin[0] * bhs[n].spin[0]
+                          + bhs[n].spin[1] * bhs[n].spin[1]
+                          + bhs[n].spin[2] * bhs[n].spin[2]);
+        double chi_spin = S_mag / (bhs[n].mass * bhs[n].mass);
+        if (chi_spin > 0.9) high_spin = 1;
+
         for (int d = 0; d < 3; d++) {
             if (fabs(bhs[n].momentum[d]) > 1.0e-15 ||
                 fabs(bhs[n].spin[d]) > 1.0e-15) {
                 need_solver = 1;
-                break;
             }
         }
-        if (need_solver) break;
     }
 
     if (!need_solver) {
@@ -208,8 +398,11 @@ void set_bowen_york(grid_t *g, int n_bh, const puncture_data_t *bhs)
         }
         set_ccz4_from_psi(g, psi_arr, n_bh, bhs);
         free(psi_arr);
+    } else if (high_spin || hispid_force) {
+        /* High spin (chi > 0.9) or --hispid override: use coupled solver */
+        set_hispid(g, n_bh, bhs);
     } else {
-        /* Non-trivial momentum/spin: solve Hamiltonian constraint */
+        /* Moderate momentum/spin: standard BY solver (1-field) */
         printf("  Bowen-York: solving Hamiltonian constraint...\n");
         double residual = relaxation_solve(g, n_bh, bhs,
                                            1.0e-12, 50000, 1);

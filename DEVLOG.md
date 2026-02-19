@@ -3,6 +3,54 @@
 > **Note:** When adding/removing/renaming files or functions, also update
 > `docs/architecture.html` — the living map of the codebase structure.
 
+## 2026-02-18: HiSpID — High-Spin Initial Data (Step 2 of plan1.md)
+
+Implemented quasi-isotropic Kerr metric and a 4-field coupled relaxation solver
+for punctures with high spin (chi > ~0.9). Standard Bowen-York assumes conformally
+flat geometry (h_ij = delta_ij), which limits effective spin to chi ≤ 0.93 and
+radiates excess angular momentum as junk radiation. HiSpID replaces the flat
+conformal metric near each BH with the true quasi-isotropic Kerr geometry,
+capturing frame-dragging and reducing junk radiation.
+
+### What's new
+
+- **Quasi-isotropic Kerr metric** (`kerr_quasi_isotropic.c`): Computes the Kerr
+  spatial metric in semi-isotropic coordinates (Liu, Etienne, Shapiro 2010),
+  converts to Cartesian via Jacobian + Rodrigues rotation for arbitrary spin
+  direction. Extracts conformal metric (det=1) and conformal factor.
+  Ref: arXiv:1001.4077, GRChombo KerrBH.impl.hpp.
+- **Gaussian superposition** (`hispid_conformal_metric`): Blends N Kerr metrics
+  via h_ij = delta_ij + sum_n w_n * (h_kerr_n - delta_ij), with Gaussian weight
+  w_n = exp(-r_n^2 / sigma_n^2), sigma_n = 1.5*M_n. Unit determinant enforced.
+  Ref: arXiv:1410.8607 (Ruchlin et al.).
+- **4-field coupled relaxation** (`relaxation_solve_coupled`): Extends the 1-field
+  solver to 4 field pairs (psi, V^i) with 8 evolved arrays. Hamiltonian source
+  includes conformal Ricci scalar R_tilde (computed numerically from h_bg via
+  Christoffel symbols). Momentum sources from d_j A_bg^ij. Early stagnation
+  detection stops when residual plateaus.
+- **CCZ4 conversion for non-flat h_ij** (`set_ccz4_from_hispid`): Two-pass
+  conversion — pass 1 sets all fields including h_ij from hispid_conformal_metric
+  (NOT delta_ij), pass 2 computes Gamma^i from FD of h_ij via Christoffel symbols.
+- **Auto-dispatch** in `set_bowen_york()`: Three-way dispatch — BL (P=S=0),
+  standard BY (low spin), HiSpID (chi > 0.9 or `--hispid` flag).
+- **CLI**: `--hispid` flag forces HiSpID path even for low spin.
+
+### Test results
+
+- **26/26 HiSpID tests**: QI Kerr metric analytic, falloff, extrinsic curvature,
+  Gaussian superposition, zero-spin-matches-BY, moderate spin convergence,
+  constraint violation bounded, high-spin evolution, det(h)=1 enforcement.
+- **29/29 Bowen-York tests**: Backward compatible, unchanged.
+- **`make test`**: All existing tests pass.
+
+### Key numbers (N=24, L=20)
+
+- Zero spin: HiSpID matches BY chi to 5e-8 relative difference
+- Chi=0.5: Ham L2 = 8.6e-3, Mom L2 = 1.7e-3 (good for coarse grid)
+- Chi=0.9: Evolves 10 steps without NaN, Ham L2 = 1.3e-2
+
+---
+
 ## 2026-02-18: Bowen-York Initial Data + Hyperbolic Relaxation Solver
 
 Implemented Step 1 of `docs/plan1.md`: Bowen-York extrinsic curvature for

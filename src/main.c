@@ -46,6 +46,8 @@ static void print_usage(void)
     fprintf(stderr, "  --chi_refine <float>  Refinement threshold (default 0.1)\n");
     fprintf(stderr, "  --chi_coarsen <float> Coarsening threshold (default 0.01)\n");
     fprintf(stderr, "  --regrid_every <int>  Regrid check interval (default 10)\n");
+    fprintf(stderr, "\nInitial data options:\n");
+    fprintf(stderr, "  --hispid            Force HiSpID (high-spin) initial data\n");
 }
 
 int main(int argc, char **argv)
@@ -117,6 +119,8 @@ int main(int argc, char **argv)
             p.amr.chi_coarsen = atof(argv[++a]);
         } else if (strcmp(argv[a], "--regrid_every") == 0 && a + 1 < argc) {
             p.amr.regrid_every = atoi(argv[++a]);
+        } else if (strcmp(argv[a], "--hispid") == 0) {
+            set_hispid_override(1);
         } else if (strcmp(argv[a], "--help") == 0 || strcmp(argv[a], "-h") == 0) {
             print_usage();
             return 0;
