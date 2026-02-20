@@ -3,6 +3,27 @@
 > **Note:** When adding/removing/renaming files or functions, also update
 > `docs/architecture.html` — the living map of the codebase structure.
 
+## 2026-02-20: AMR Parity Gaps + Performance Optimizations
+
+**AMR parity gaps closed:**
+- **Output slices:** `output_mesh_1d_slice()` in output.c — iterates leaf blocks,
+  collects cells on y=0/z=0, deduplicates keeping finest level, writes CSV.
+- **AH finder on AMR:** `mesh_find_block_at()` for coordinate→block lookup,
+  `ah_find_amr()`/`ah_compute_diagnostics_amr()` for block-local interpolation.
+  Block caching exploits angular locality. Wired into main.c AMR loop (`--amr --ah`).
+
+**Performance optimizations (CPU):**
+- **Flattened packed kernel** (backend_cpu.c): Single OMP parallel region with
+  combined (block,k,j) iteration space. Eliminates N_blocks fork/joins per RHS call.
+- **restrict + omp simd** (rk4.c): All bulk array ops (axpy, accum, ck45_update)
+  now vectorize. `restrict` removes aliasing barrier, `omp simd` forces SIMD codegen.
+- **fast_inv_cbrt** (rk4.c): Newton-Raphson for `1/cbrt(det)` in enforce_algebraic.
+  2 iterations from Taylor start, exact to double precision when det≈1. ~4x faster
+  than libm `cbrt` on the hot path.
+- **timer.h**: `TIMER_START`/`TIMER_STOP` macros via `clock_gettime(CLOCK_MONOTONIC)`.
+
+**Verification:** All tests pass, convergence order 5.4 (threshold 4.0).
+
 ## 2026-02-20: Binary Inspiral AMR Convergence Test
 
 **Goal:** Demonstrate 4th-order self-convergence of the full CCZ4 evolution code

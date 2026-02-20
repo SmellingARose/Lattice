@@ -17,6 +17,7 @@
 #define LATTICE_AH_FINDER_H
 
 #include "../core/grid.h"
+#include "../amr/mesh.h"
 
 /* Workspace for the AH finder's angular grid and flow evolution.
  * The trial surface is r = h(theta_i, phi_j) on a 2D angular grid.
@@ -102,5 +103,22 @@ ah_result_t ah_compute_diagnostics(const ah_workspace_t *ws, const grid_t *g);
  * Fills ws->theta_arr with expansion values. Useful for testing expansion sign.
  */
 void ah_eval_expansion(ah_workspace_t *ws, const grid_t *g);
+
+/* ========================================================================
+ * AMR mesh variants — same algorithms, block-aware interpolation.
+ * Each mirrors its single-grid counterpart but takes const mesh_t *m
+ * instead of const grid_t *g. Uses mesh_find_block_at() to locate
+ * the finest-level block containing each surface point.
+ * ======================================================================== */
+
+struct mesh_s;  /* forward declaration */
+
+int ah_find_amr(ah_workspace_t *ws, const struct mesh_s *m,
+                double tol, int max_iter, int verbose);
+
+ah_result_t ah_compute_diagnostics_amr(const ah_workspace_t *ws,
+                                        const struct mesh_s *m);
+
+void ah_eval_expansion_amr(ah_workspace_t *ws, const struct mesh_s *m);
 
 #endif /* LATTICE_AH_FINDER_H */

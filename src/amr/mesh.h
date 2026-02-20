@@ -96,6 +96,13 @@ void mesh_remove_block(mesh_t *m, int id);
 void mesh_compact(mesh_t *m);
 
 /*
+ * Find the finest-level leaf block whose interior contains point (x,y,z).
+ * Linear scan of leaf blocks. Returns NULL if outside all blocks.
+ * O(n_blocks) per call — adequate for AH finder (~1000 calls × ~100 blocks).
+ */
+block_t *mesh_find_block_at(const mesh_t *m, double x, double y, double z);
+
+/*
  * Rebuild neighbor_ids and nblevel tables for all blocks.
  * Handles multi-level meshes: for each block, searches all 26 directions
  * for same-level neighbors, falls back to coarser-level blocks.
@@ -104,5 +111,15 @@ void mesh_compact(mesh_t *m);
  * Ref: Athena++ bvals_base.cpp SearchAndSetNeighbors
  */
 void mesh_rebuild_neighbors(mesh_t *m);
+
+/*
+ * Find the leaf block containing physical coordinates (x, y, z).
+ * Linear scan of leaf blocks; returns finest-level block when multiple
+ * blocks (coarse overlapping fine) contain the point.
+ * Returns NULL if point is outside the domain.
+ *
+ * Fine for <1000 blocks (same as mesh_find_block).
+ */
+block_t *mesh_find_block_at(const mesh_t *m, double x, double y, double z);
 
 #endif /* LATTICE_MESH_H */

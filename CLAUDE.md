@@ -84,16 +84,14 @@ Priority order:
 
 **AMR parity gaps** (single-grid path has all of these, AMR path does not yet):
 - EM-aware RHS in packed kernels (AMR hardcodes `ccz4_rhs_point`, ignores `--em`)
-- AH finder on AMR mesh (needs off-grid interpolation across block boundaries)
-- Output slices from AMR blocks
 - AMR initial data uses global uniform solve + copy (BY/HiSpID work; EM charge untested)
 
 **Current status: Phase 2 complete. Phase 3 (production) next.**
 - **N-body initial data:** FAS multigrid constraint solver (FMG + Newton-Gauss-Seidel, 8-color GPU-compatible), O(N³) solve to discretization accuracy, arbitrary puncture count. BY 1-field + HiSpID 4-field coupled solvers.
 - **Einstein-Maxwell:** 6 new evolved fields (E^i, B^i), conformal Maxwell evolution with constraint damping, EM stress-energy coupling to CCZ4 (gated by `--em` flag), charged puncture initial data via `--puncture M,x,y,z,Px,Py,Pz,Sx,Sy,Sz,Q`.
 - **Spin:** Bowen-York spinning punctures + HiSpID high-spin initial data (quasi-isotropic Kerr conformal metric, coupled 4-field relaxation).
-- **Apparent horizons:** Hyperbolic flow method (BHaHAHA-inspired) with 4th-order off-grid interpolation, mass/spin/area extraction, `--ah` CLI flag.
-- **AMR:** Block-structured Berger-Oliger with subcycling, Morton-ordered mesh, 4th-order prolongation/restriction, multi-level ghost exchange.
+- **Apparent horizons:** Hyperbolic flow method (BHaHAHA-inspired) with 4th-order off-grid interpolation, mass/spin/area extraction, `--ah` CLI flag. Works on both single-grid and AMR meshes.
+- **AMR:** Block-structured Berger-Oliger with subcycling, Morton-ordered mesh, 4th-order prolongation/restriction, multi-level ghost exchange. AMR-aware 1D output slices and AH finder.
 - **Tests:** All passing — flat spacetime, convergence (order 5.4), AMR evolution (8/8), Bowen-York (29/29), HiSpID (26/26), AH finder (13/13), Maxwell (15/15). Total: 31 evolved fields (25 CCZ4 + 6 EM).
 
 Update as milestones are reached.
@@ -110,7 +108,8 @@ lattice/
 │   ├── core/
 │   │   ├── grid.h / grid.c     # grid allocation, indexing, ghost zones
 │   │   ├── fields.h            # field enum, count
-│   │   └── params.h            # simulation parameters
+│   │   ├── params.h            # simulation parameters
+│   │   └── timer.h             # TIMER_START/STOP macros (clock_gettime)
 │   ├── backend/
 │   │   ├── backend.h           # abstract interface
 │   │   ├── backend_cpu.c       # OpenMP threads (CPU)

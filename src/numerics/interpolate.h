@@ -212,4 +212,135 @@ static inline void interp_field_deriv_at(const double *field, const grid_t *g,
     val[3] = dfdz / dx;
 }
 
+/* ========================================================================
+ * Block-aware interpolation for AMR meshes.
+ *
+ * Same 4th-order Lagrange interpolation as above, but uses an explicit
+ * block origin instead of the global -L/2 convention. The coordinate
+ * mapping for AMR blocks is:
+ *   BLOCK_COORD(blk, dir, i) = origin[dir] + (i - ghost + 0.5) * dx
+ *   ci = (x - origin[dir]) / dx - 0.5 + ghost
+ *
+ * Ref: block.h BLOCK_COORD macro.
+ * ======================================================================== */
+
+/*
+ * Interpolate a field at physical (x,y,z) within a block whose grid origin
+ * is given by origin[3].
+ *
+ * Coordinate mapping:
+ *   cell center i has coordinate origin[d] + (i - ghost + 0.5) * dx
+ *   → continuous index ci = (x - origin[d]) / dx - 0.5 + ghost
+ */
+static inline double interp_field_at_block(const double *field,
+                                            const grid_t *g,
+                                            const double origin[3],
+                                            double x, double y, double z)
+{
+    double dx = g->dx;
+    int ghost = g->ghost;
+
+    double cix = (x - origin[0]) / dx - 0.5 + ghost;
+    double ciy = (y - origin[1]) / dx - 0.5 + ghost;
+    double ciz = (z - origin[2]) / dx - 0.5 + ghost;
+
+    int ix = (int)round(cix);
+    int iy = (int)round(ciy);
+    int iz = (int)round(ciz);
+
+    double dx_frac = cix - ix;
+    double dy_frac = ciy - iy;
+    double dz_frac = ciz - iz;
+
+    if (ix - INTERP_HALF < 0 || ix + INTERP_HALF >= g->Ntotal ||
+        iy - INTERP_HALF < 0 || iy + INTERP_HALF >= g->Ntotal ||
+        iz - INTERP_HALF < 0 || iz + INTERP_HALF >= g->Ntotal) {
+        return 0.0 / 0.0;  /* NAN */
+    }
+
+    double wx[INTERP_STENCIL], wy[INTERP_STENCIL], wz[INTERP_STENCIL];
+    lagrange_basis_5(dx_frac, wx);
+    lagrange_basis_5(dy_frac, wy);
+    lagrange_basis_5(dz_frac, wz);
+
+    double val = 0.0;
+    for (int sk = 0; sk < INTERP_STENCIL; sk++) {
+        int kk = iz - INTERP_HALF + sk;
+        for (int sj = 0; sj < INTERP_STENCIL; sj++) {
+            int jj = iy - INTERP_HALF + sj;
+            double wkj = wz[sk] * wy[sj];
+            for (int si = 0; si < INTERP_STENCIL; si++) {
+                int ii = ix - INTERP_HALF + si;
+                val += wkj * wx[si] * field[IDX(g, ii, jj, kk)];
+            }
+        }
+    }
+
+    return val;
+}
+
+/*
+ * Interpolate a field and its derivatives at (x,y,z) within a block.
+ * val[0] = field value, val[1..3] = df/dx, df/dy, df/dz.
+ */
+static inline void interp_field_deriv_at_block(const double *field,
+                                                const grid_t *g,
+                                                const double origin[3],
+                                                double x, double y, double z,
+                                                double val[4])
+{
+    double dx = g->dx;
+    int ghost = g->ghost;
+
+    double cix = (x - origin[0]) / dx - 0.5 + ghost;
+    double ciy = (y - origin[1]) / dx - 0.5 + ghost;
+    double ciz = (z - origin[2]) / dx - 0.5 + ghost;
+
+    int ix = (int)round(cix);
+    int iy = (int)round(ciy);
+    int iz = (int)round(ciz);
+
+    double dx_frac = cix - ix;
+    double dy_frac = ciy - iy;
+    double dz_frac = ciz - iz;
+
+    if (ix - INTERP_HALF < 0 || ix + INTERP_HALF >= g->Ntotal ||
+        iy - INTERP_HALF < 0 || iy + INTERP_HALF >= g->Ntotal ||
+        iz - INTERP_HALF < 0 || iz + INTERP_HALF >= g->Ntotal) {
+        val[0] = val[1] = val[2] = val[3] = 0.0 / 0.0;
+        return;
+    }
+
+    double wx[INTERP_STENCIL], wy[INTERP_STENCIL], wz[INTERP_STENCIL];
+    double dwx[INTERP_STENCIL], dwy[INTERP_STENCIL], dwz[INTERP_STENCIL];
+    lagrange_basis_5(dx_frac, wx);
+    lagrange_basis_5(dy_frac, wy);
+    lagrange_basis_5(dz_frac, wz);
+    lagrange_basis_deriv_5(dx_frac, dwx);
+    lagrange_basis_deriv_5(dy_frac, dwy);
+    lagrange_basis_deriv_5(dz_frac, dwz);
+
+    double f = 0.0, dfdx = 0.0, dfdy = 0.0, dfdz = 0.0;
+
+    for (int sk = 0; sk < INTERP_STENCIL; sk++) {
+        int kk = iz - INTERP_HALF + sk;
+        for (int sj = 0; sj < INTERP_STENCIL; sj++) {
+            int jj = iy - INTERP_HALF + sj;
+            for (int si = 0; si < INTERP_STENCIL; si++) {
+                int ii = ix - INTERP_HALF + si;
+                double fv = field[IDX(g, ii, jj, kk)];
+                f    += wz[sk]  * wy[sj]  * wx[si]  * fv;
+                dfdx += wz[sk]  * wy[sj]  * dwx[si] * fv;
+                dfdy += wz[sk]  * dwy[sj] * wx[si]  * fv;
+                dfdz += dwz[sk] * wy[sj]  * wx[si]  * fv;
+            }
+        }
+    }
+
+    val[0] = f;
+    val[1] = dfdx / dx;
+    val[2] = dfdy / dx;
+    val[3] = dfdz / dx;
+}
+
 #endif /* LATTICE_INTERPOLATE_H */

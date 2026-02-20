@@ -240,6 +240,36 @@ block_t *mesh_find_block(const mesh_t *m, int level, int lx1, int lx2, int lx3)
     return NULL;
 }
 
+block_t *mesh_find_block_at(const mesh_t *m, double x, double y, double z)
+{
+    block_t *best = NULL;
+    int best_level = -1;
+
+    for (int i = 0; i < m->num_blocks; i++) {
+        block_t *b = m->blocks[i];
+        if (!b || !b->is_leaf) continue;
+
+        double dx = b->grid->dx;
+        int N = b->grid->N;
+
+        /* Check if (x,y,z) falls within this block's interior cell range */
+        int inside = 1;
+        for (int d = 0; d < 3; d++) {
+            double lo = b->origin[d];
+            double hi = b->origin[d] + N * dx;
+            double coord = (d == 0) ? x : (d == 1) ? y : z;
+            if (coord < lo || coord >= hi) { inside = 0; break; }
+        }
+
+        if (inside && b->loc.level > best_level) {
+            best = b;
+            best_level = b->loc.level;
+        }
+    }
+
+    return best;
+}
+
 int mesh_add_block(mesh_t *m, block_t *b)
 {
     /* Try to find an empty (NULL) slot first */
@@ -433,3 +463,4 @@ void mesh_rebuild_neighbors(mesh_t *m)
         }
     }
 }
+

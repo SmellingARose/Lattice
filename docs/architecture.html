@@ -347,6 +347,16 @@ Grid indexing:  IDX(g, i, j, k) = k * Ntotal^2 + j * Ntotal + i
 </details>
 
 <details>
+<summary>core/timer.h &mdash; Wall-clock timing macros</summary>
+<div class="detail-body">
+<p>Header-only timing via <code>clock_gettime(CLOCK_MONOTONIC)</code>. Provides <code>TIMER_START</code>/<code>TIMER_STOP</code> macros and <code>timer_accum_t</code> accumulator struct for profiling code sections.</p>
+
+<p><strong>Depends on:</strong> <code>&lt;time.h&gt;</code>, <code>&lt;stdio.h&gt;</code><br>
+<strong>Depended on by:</strong> (optional, included where profiling is needed)</p>
+</div>
+</details>
+
+<details>
 <summary>core/grid.h / grid.c &mdash; Grid allocation and indexing</summary>
 <div class="detail-body">
 <p>Defines the <code>grid_t</code> struct (SoA layout) and all indexing/coordinate macros. <code>grid.c</code> implements page-aligned contiguous block allocation. N is padded to the next multiple of 16. CK45 mode skips the 4th memory block (accum).</p>
@@ -448,9 +458,10 @@ Grid indexing:  IDX(g, i, j, k) = k * Ntotal^2 + j * Ntotal + i
 <tr><td><code>rk4_step(g, p, rhs_func, bc_func, dt)</code></td><td>Public interface: dispatches to CK45 or classic based on p->rk_method</td></tr>
 <tr><td><code>ck45_step(...)</code></td><td>Carpenter-Kennedy 2N low-storage: dU = A[s]*dU + dt*F; U += B[s]*dU</td></tr>
 <tr><td><code>classic_rk4_step(...)</code></td><td>Standard 4-stage: scratch + accumulator pattern</td></tr>
-<tr><td><code>enforce_algebraic(g)</code></td><td>det(h)=1, tr(A)=0, chi>0, lapse>0. OpenMP collapse(2).</td></tr>
+<tr><td><code>enforce_algebraic(g)</code></td><td>det(h)=1, tr(A)=0, chi>0, lapse>0. Uses fast_inv_cbrt (Newton-Raphson) for det&asymp;1.</td></tr>
+<tr><td><code>fast_inv_cbrt(det)</code></td><td>Newton-Raphson 1/cbrt(det) for det&asymp;1 (2 iterations from Taylor start). Falls back to libm for |det-1|&gt;0.5.</td></tr>
 <tr><td><code>ck45_update(...)</code></td><td>Fused dU/U update kernel. OpenMP parallel for.</td></tr>
-<tr><td><code>copy_fields, axpy_fields, accum_add, apply_accum, zero_fields</code></td><td>Helper array operations (all OpenMP parallelized)</td></tr>
+<tr><td><code>copy_fields, axpy_fields, accum_add, apply_accum, zero_fields</code></td><td>Helper array operations (restrict + omp simd for auto-vectorization)</td></tr>
 <tr><td colspan="2"><em>Mesh steppers (AMR production path)</em></td></tr>
 <tr><td><code>rk4_step_mesh(m, p, rhs_func, dt)</code></td><td>Packed batch: builds meshblock_pack from all leaves, dispatches to <code>ck45_step_mesh_packed</code> or <code>classic_rk4_step_mesh_packed</code>. One kernel per op for all blocks.</td></tr>
 <tr><td><code>rk4_step_mesh_perblock(m, p, rhs_func, dt)</code></td><td>Per-block fallback for debug/comparison. Same algorithm, one kernel per block per stage. Should produce identical results to packed path.</td></tr>
@@ -538,7 +549,7 @@ Grid indexing:  IDX(g, i, j, k) = k * Ntotal^2 + j * Ntotal + i
 <summary>backend/backend_cpu.c &mdash; CPU backend (OpenMP threads)</summary>
 <div class="detail-body">
 <p><strong>Legacy path:</strong> Triple loop with <code>#pragma omp parallel for collapse(2)</code> over z,y. Calls RHS via function pointer.</p>
-<p><strong>Packed path:</strong> All packed functions use <code>#pragma omp parallel for</code>. The batched RHS iterates over blocks, building per-field pointer arrays into the pack layout and a stack-local <code>grid_t</code>, then calls <code>ccz4_rhs_point</code> with <code>collapse(2)</code> over k,j. Map/unmap are no-ops. This enables full testing of packed infrastructure on macOS without GPU hardware.</p>
+<p><strong>Packed path:</strong> Single <code>#pragma omp parallel</code> region with flattened (block, k, j) iteration space. Per-thread block pointer caching avoids repeated dereference. Inner i-loop runs serially for SIMD vectorization. Map/unmap are no-ops.</p>
 <p><strong>Ghost exchange (Commit 2):</strong> Full 5-phase multilevel ghost exchange operating directly on pack buffers &mdash; no unpack/repack. Phase 0+1: same-level 26-neighbor exchange; Phase 2: restrict fine&rarr;coarse_buf; Phase 3: fill coarse_buf ghosts; Phase 3.5: boundary quadratic extrapolation; Phase 4: prolongate coarse_buf&rarr;fine ghosts.</p>
 
 <p><strong>Depends on:</strong> backend.h, ccz4_rhs.h, sommerfeld.h, block.h, restriction.h, prolongation.h<br>
@@ -607,6 +618,30 @@ Grid indexing:  IDX(g, i, j, k) = k * Ntotal^2 + j * Ntotal + i
 </div>
 </details>
 
+<details>
+<summary>diagnostics/ah_finder.h / ah_finder.c &mdash; Apparent horizon finder</summary>
+<div class="detail-body">
+<p>Hyperbolic flow method (BHaHAHA-inspired): evolves surface radius h(&theta;,&phi;) in pseudo-time to drive the expansion &Theta; to zero. 4th-order off-grid Lagrange interpolation for field access. Works on both single-grid and AMR meshes.</p>
+
+<table class="file-table">
+<tr><th>Function</th><th>Description</th></tr>
+<tr><td><code>ah_alloc(n_theta, n_phi, center, r_guess)</code></td><td>Allocate workspace for AH search</td></tr>
+<tr><td><code>ah_free(ws)</code></td><td>Free workspace</td></tr>
+<tr><td><code>ah_find(ws, g, tol, max_iter, verbose)</code></td><td>Find AH on single grid (hyperbolic flow)</td></tr>
+<tr><td><code>ah_compute_diagnostics(ws, g)</code></td><td>Area, M_irr, spin from converged surface (single grid)</td></tr>
+<tr><td><code>ah_eval_expansion(ws, g)</code></td><td>Evaluate expansion on current surface (single grid)</td></tr>
+<tr><td><code>ah_find_amr(ws, m, tol, max_iter, verbose)</code></td><td>Find AH on AMR mesh (block-local interpolation with caching)</td></tr>
+<tr><td><code>ah_compute_diagnostics_amr(ws, m)</code></td><td>Area, M_irr, spin from converged surface (AMR mesh)</td></tr>
+<tr><td><code>ah_eval_expansion_amr(ws, m)</code></td><td>Evaluate expansion on current surface (AMR mesh)</td></tr>
+</table>
+
+<p><strong>Ref:</strong> arXiv:2505.15912 (BHaHAHA), gr-qc/0512169 (expansion formula)</p>
+
+<p><strong>Depends on:</strong> grid.h, fields.h, finite_diff.h, tensor_utils.h, interpolate.h, mesh.h, block.h<br>
+<strong>Depended on by:</strong> main.c, test_ah_finder.c</p>
+</div>
+</details>
+
 <!-- ========================================== -->
 <h2 id="mod-boundary">Module: boundary/ <span class="badge badge-green">Implemented &amp; Tested</span></h2>
 
@@ -640,10 +675,11 @@ Grid indexing:  IDX(g, i, j, k) = k * Ntotal^2 + j * Ntotal + i
 
 <table class="file-table">
 <tr><th>Function</th><th>Description</th></tr>
-<tr><td><code>output_1d_slice(g, step, time)</code></td><td>Writes build/slice_NNNNNN.csv</td></tr>
+<tr><td><code>output_1d_slice(g, step, time)</code></td><td>Writes build/slice_NNNNNN.csv (single-grid path)</td></tr>
+<tr><td><code>output_mesh_1d_slice(m, step, time)</code></td><td>AMR-aware 1D slice: iterates leaf blocks, deduplicates keeping finest level, writes CSV</td></tr>
 </table>
 
-<p><strong>Depends on:</strong> grid.h, fields.h, constraints.h<br>
+<p><strong>Depends on:</strong> grid.h, fields.h, constraints.h, mesh.h, block.h<br>
 <strong>Depended on by:</strong> main.c (via extern declaration)</p>
 </div>
 </details>
@@ -792,6 +828,7 @@ Grid indexing:  IDX(g, i, j, k) = k * Ntotal^2 + j * Ntotal + i
 <tr><td><code>mesh_remove_block(m, id)</code></td><td>Set slot to NULL (caller frees)</td></tr>
 <tr><td><code>mesh_compact(m)</code></td><td>Compact NULL slots, remap all internal IDs (parent, child, neighbor)</td></tr>
 <tr><td><code>mesh_rebuild_neighbors(m)</code></td><td>Rebuild all 26 neighbors + nblevel for every block. Cross-level: floor-divides neighbor's fine-level coords to find coarse-level blocks (fixed in Stage 4.1)</td></tr>
+<tr><td><code>mesh_find_block_at(m, x, y, z)</code></td><td>Find finest leaf block containing physical coordinates (x,y,z). Linear scan, returns NULL if outside domain.</td></tr>
 </table>
 
 <p><strong>Stage 4.1 fix:</strong> <code>mesh_rebuild_neighbors()</code> previously mapped the block's own coordinates to coarser levels before adding the offset, which failed for edge/corner directions at coarse-fine boundaries. Now it first computes the neighbor's fine-level coordinates, then floor-divides those to coarser levels.</p>
@@ -969,7 +1006,7 @@ make clean                    # rm -rf build/</code></pre>
 <tr><td><code>EVOLUTION_SRC</code></td><td>src/evolution/ccz4_rhs.c src/evolution/dissipation.c</td></tr>
 <tr><td><code>NUMERICS_SRC</code></td><td>src/numerics/rk4.c</td></tr>
 <tr><td><code>INITIAL_SRC</code></td><td>src/initial_data/puncture.c</td></tr>
-<tr><td><code>DIAG_SRC</code></td><td>src/diagnostics/constraints.c</td></tr>
+<tr><td><code>DIAG_SRC</code></td><td>src/diagnostics/constraints.c src/diagnostics/ah_finder.c</td></tr>
 <tr><td><code>BOUNDARY_SRC</code></td><td>src/boundary/sommerfeld.c</td></tr>
 <tr><td><code>IO_SRC</code></td><td>src/io/output.c</td></tr>
 <tr><td><code>AMR_SRC</code></td><td>src/amr/block.c src/amr/mesh.c src/amr/meshblock_pack.c src/amr/ghost_exchange.c src/amr/prolongation.c src/amr/restriction.c src/amr/criterion.c src/amr/refine.c</td></tr>
@@ -1039,7 +1076,7 @@ make clean                    # rm -rf build/</code></pre>
 <tr><td>N-body initial data (multigrid solver)</td><td><span class="badge badge-gray">Future</span></td><td>Extending Brandt-Brugmann beyond 2-body</td></tr>
 <tr><td>Einstein-Maxwell (charge)</td><td><span class="badge badge-gray">Future</span></td><td>+6 fields (E_i, B_i)</td></tr>
 <tr><td>Spin (Bowen-York)</td><td><span class="badge badge-gray">Future</span></td><td>Spinning puncture initial data</td></tr>
-<tr><td>Apparent horizon finder</td><td><span class="badge badge-gray">Future</span></td><td>Remnant properties</td></tr>
+<tr><td>Apparent horizon finder</td><td><span class="badge badge-green">Done</span></td><td>Remnant properties (single-grid + AMR)</td></tr>
 <tr><td>AMR (oct-tree)</td><td><span class="badge badge-yellow">Stage 4.1/6</span></td><td>Stages 1&ndash;4.1 done (blocks, ghost exchange, prolongation, refinement, coarse-buffer architecture, 4th-order restriction). Stage 5: subcycling</td></tr>
 </table>
 

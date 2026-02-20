@@ -19,6 +19,7 @@
 
 #include "backend.h"
 #include "../evolution/ccz4_rhs.h"
+#include "../evolution/maxwell_rhs.h"
 #include "../boundary/sommerfeld.h"
 #include "../core/fields.h"
 #include "../amr/block.h"
@@ -219,9 +220,18 @@ void backend_compute_rhs_packed(meshblock_pack_t *pack, const sim_params_t *p)
                     g_local.dx      = dx_arr[b];
                     g_local.npoints = npts;
 
-                    ccz4_rhs_point(rhs_ptrs,
-                                   (const double *const *)src_ptrs,
-                                   &g_local, p, i, j, k);
+                    /* Dispatch: combined CCZ4+Maxwell if EM enabled.
+                     * Both functions are omp declare target — no function
+                     * pointers needed on GPU.
+                     * Ref: arXiv:0907.1151 (Einstein-Maxwell 3+1) */
+                    if (p->em_enabled)
+                        ccz4_maxwell_rhs_point(rhs_ptrs,
+                                               (const double *const *)src_ptrs,
+                                               &g_local, p, i, j, k);
+                    else
+                        ccz4_rhs_point(rhs_ptrs,
+                                       (const double *const *)src_ptrs,
+                                       &g_local, p, i, j, k);
                 }
             }
         }

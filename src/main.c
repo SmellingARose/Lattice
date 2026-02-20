@@ -26,8 +26,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Forward declaration for output */
+/* Forward declarations for output */
 extern void output_1d_slice(const grid_t *g, int step, double time);
+extern void output_mesh_1d_slice(const mesh_t *m, int step, double time);
 
 static void print_usage(void)
 {
@@ -245,6 +246,16 @@ int main(int argc, char **argv)
         rk4_rhs_func_t rhs_func = p.em_enabled
             ? ccz4_maxwell_rhs_point : ccz4_rhs_point;
 
+        /* AH finder setup (AMR path) */
+        ah_workspace_t *ah_ws = NULL;
+        if (ah_enabled && n_bh > 0) {
+            double r0 = ah_guess > 0 ? ah_guess : bhs[0].mass / 2.0;
+            ah_ws = ah_alloc(16, 32, bhs[0].center, r0);
+            ah_ws->eta = 10.0;
+            printf("  AH finder: enabled, every %d steps, r_guess=%.4f\n",
+                   ah_every, r0);
+        }
+
         /* Evolution loop.
          * p.time tracks the simulation time for subcycling's temporal
          * interpolation (Berger-Oliger). dt is the coarsest-level step. */
@@ -256,13 +267,28 @@ int main(int argc, char **argv)
             if (p.amr.regrid_every > 0 && step % p.amr.regrid_every == 0)
                 mesh_regrid(m, &p.amr);
 
+            if (p.output_every > 0 && step % p.output_every == 0)
+                output_mesh_1d_slice(m, step, p.time);
+
             if (step % 100 == 0 || step == p.num_steps) {
                 double ham = mesh_constraint_l2(m);
                 printf("  step %5d  t=%.4f  Ham L2=%.6e  blocks=%d\n",
                        step, p.time, ham, mesh_num_leaves(m));
             }
+
+            /* AH finder (AMR path) */
+            if (ah_ws && ah_every > 0 && step % ah_every == 0) {
+                int conv = ah_find_amr(ah_ws, m, 1e-6, 500, 0);
+                if (conv) {
+                    ah_result_t ahr = ah_compute_diagnostics_amr(ah_ws, m);
+                    printf("  AH step %5d: A=%.4f M_irr=%.4f |J|=%.4e r=%.4f\n",
+                           step, ahr.area, ahr.mass_irr, ahr.spin_mag,
+                           ahr.mean_radius);
+                }
+            }
         }
 
+        ah_free(ah_ws);
         mesh_free(m);
     } else {
         /* === Single-grid path (unchanged) === */

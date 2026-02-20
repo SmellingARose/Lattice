@@ -86,13 +86,13 @@ void backend_unmap_pack(meshblock_pack_t *pack);
 void backend_zero_packed(meshblock_pack_t *pack, int which);
 
 /*
- * Batched RHS evaluation: compute ccz4_rhs_point for all interior cells
- * of all blocks in one kernel launch.
+ * Batched RHS evaluation for all interior cells of all blocks in one
+ * kernel launch. Dispatches to ccz4_maxwell_rhs_point when p->em_enabled,
+ * otherwise ccz4_rhs_point (both are omp declare target).
  *
  * For each block b, constructs per-field pointer arrays into the pack
- * layout and a minimal grid_t (N, ghost, Ntotal, dx) for the CCZ4 RHS
- * function. Then evaluates ccz4_rhs_point(rhs, src, &g, p, i, j, k)
- * over the interior [ghost, ghost+N) × [ghost, ghost+N) × [ghost, ghost+N).
+ * layout and a minimal grid_t (N, ghost, Ntotal, dx) for the RHS
+ * function. Evaluates over [ghost, ghost+N)^3.
  *
  * GPU: collapse(4) over (block, k, j, i), ~5.3 KB stack per thread.
  * CPU: outer loop over blocks, OpenMP collapse(2) over (k, j) per block.
