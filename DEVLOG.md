@@ -13,20 +13,36 @@ on a binary BH inspiral using AMR, following standard NR methodology
 arXiv:0709.0838): m_bare=0.4824, d=10M, P_y=±0.0939 (3PN), L=64, CFL=0.25.
 
 **Methodology:** Self-convergence with 3 AMR resolutions at ratio r=1.5:
-- LOW:  N_block=32, N_root=4 → N_eff=128, dx_base=0.500
-- MED:  N_block=48, N_root=4 → N_eff=192, dx_base=0.333
-- HIGH: N_block=64, N_root=4 → N_eff=256, dx_base=0.250
+- LOW:  N_block=32, N_root=3 → N_eff=96,  dx=0.667
+- MED:  N_block=48, N_root=3 → N_eff=144, dx=0.444
+- HIGH: N_block=64, N_root=3 → N_eff=192, dx=0.333
 
-Same AMR parameters across all three: max_level=4, chi_refine=0.1,
-chi_coarsen=0.01, regrid_every=10.  Classic RK4 integrator (faster than CK45).
-6000 steps per resolution → t_final ≈ 750M (captures merger + ringdown).
+Uniform AMR mesh (max_level=0, no refinement): exercises the full AMR
+infrastructure (block decomposition, packed kernels, ghost exchange) without
+the memory explosion from dynamic refinement.  Classic RK4 integrator.
+6000 steps per resolution.
+
+**Memory:** Peak ~16 GB (HIGH run: 27 blocks + pack, classic RK4).  CK45 used
+for the temp initial-data grid to reduce peak during the FAS multigrid solve.
+
+**Memory lessons from earlier attempts:**
+- max_level=4 + classic RK4 (N_root=4): OOM killed at 31.6 GB during first
+  regrid (64 → 512 leaves, pack duplication doubled memory).
+- max_level=2 + CK45 (N_root=4): also OOM — subcycling + pack duplication for
+  512 blocks exceeded 32 GB.
+- Root cause: the packed batch stepper duplicates all block data into contiguous
+  GPU-mappable buffers.  With 64+ blocks and 4 RK buffers, that's 2× the block
+  memory.  Solution: N_root=3 (27 blocks), max_level=0, classic RK4.
 
 **Convergence criterion:** For 4th-order code with r=1.5:
   Q = |Ham(low) - Ham(med)| / |Ham(med) - Ham(high)| ≈ 1.5^4 = 5.06
 
+**Estimated runtime:** ~41 hours total (LOW ~3h, MED ~11h, HIGH ~27h).
+
 **Test file:** `tests/test_inspiral_convergence.c`
 **Build:** `make test-inspiral-convergence`
-**Run:** `nohup build/test_inspiral_convergence 2>&1 | tee inspiral.log &`
+**Run:** `nohup build/test_inspiral_convergence > inspiral.log 2>&1 &`
+**Monitor:** `tail -f inspiral.log`
 
 **Status:** Test written, compilation verified.  Run pending.
 

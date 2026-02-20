@@ -5,26 +5,29 @@
  * Standard equal-mass non-spinning quasi-circular binary (Brugmann et al.
  * 2008, arXiv:0709.0838):  m_bare = 0.4824, d = 10M, P_y = ±0.0939 (3PN).
  *
- * Self-convergence test: run 3 AMR resolutions with N_block = 32, 48, 64
- * (ratio 1.5x, N_root=4, effective base grids 128/192/256).  Same max_level
- * and refinement criterion across all three.  Classic RK4 integrator.
+ * Self-convergence test: run 3 resolutions with N_block = 32, 48, 64
+ * (ratio 1.5x, N_root=3, effective grids 96/144/192).  Uniform AMR mesh
+ * (max_level=0): no refinement, but exercises the full AMR infrastructure
+ * (block decomposition, packed kernels, ghost exchange).  Classic RK4.
  *
  * Measure: Hamiltonian constraint L2 norm every step.
  * Convergence check: for 4th-order code with ratio r=1.5,
  *   Q = |Ham(low) - Ham(med)| / |Ham(med) - Ham(high)| ≈ 1.5^4 = 5.06.
  *
  * Logs every step for live monitoring (stdout unbuffered).
- * Designed to run in background: nohup ./test_inspiral_convergence | tee log &
+ * Designed to run in background: nohup ./test_inspiral_convergence > log &
+ * Monitor with: tail -f inspiral.log
  *
- * 6000 steps at CFL=0.25 → t_final ≈ 750M (catches merger + ringdown).
+ * 6000 steps at CFL=0.25 → t_final varies by resolution (different dx).
+ *
+ * Memory: peak ~16 GB (HIGH run: 27 blocks + pack, classic RK4).
+ * Estimated runtime: ~41 hours total (LOW ~3h, MED ~11h, HIGH ~27h).
  *
  * Ref: arXiv:0709.0838 (Brugmann et al. 2008, BAM calibration binary)
  * Ref: arXiv:2409.10383 (AthenaK self-convergence methodology)
- * Ref: arXiv:2312.05438 (AMR refinement strategy comparison)
  */
 
 #include "../src/amr/mesh.h"
-#include "../src/amr/refine.h"
 #include "../src/amr/block.h"
 #include "../src/core/params.h"
 #include "../src/core/fields.h"
@@ -47,14 +50,11 @@
 #define P_Y        0.0939   /* 3PN quasi-circular tangential momentum  */
 #define L_DOMAIN   64.0     /* domain size [-32, 32]^3                 */
 #define CFL_FACTOR 0.25
-#define NUM_STEPS  6000     /* t_final ≈ 750M                          */
+#define NUM_STEPS  6000
 
 /* ── AMR parameters (fixed across resolutions) ────────────────────── */
-#define N_ROOT       4
-#define MAX_LEVEL    4
-#define CHI_REFINE   0.1
-#define CHI_COARSEN  0.01
-#define REGRID_EVERY 10
+#define N_ROOT       3
+#define MAX_LEVEL    0      /* uniform mesh — no refinement             */
 
 /* ── Resolution triplet (ratio 1.5x) ─────────────────────────────── */
 static const int N_BLOCKS[] = { 32, 48, 64 };
@@ -122,12 +122,12 @@ static double *run_resolution(int res_idx, int n_block)
 
     printf("\n");
     printf("================================================================\n");
-    printf("  RESOLUTION %s: N_block=%d, N_eff=%d, dx_base=%.6f\n",
+    printf("  RESOLUTION %s: N_block=%d, N_eff=%d, dx=%.6f\n",
            label, n_block, n_eff, L_DOMAIN / n_eff);
     printf("================================================================\n");
     fflush(stdout);
 
-    /* Create AMR mesh */
+    /* Create uniform AMR mesh (max_level=0, no refinement) */
     mesh_t *m = mesh_create(N_ROOT, n_block, L_DOMAIN, RK_CLASSIC);
 
     sim_params_t p = default_params();
@@ -137,22 +137,19 @@ static double *run_resolution(int res_idx, int n_block)
     p.dx = m->dx_base;
     p.dt = p.CFL * p.dx;
     p.sigma = 0.3;
-    p.amr.enabled = 1;
-    p.amr.max_level = MAX_LEVEL;
-    p.amr.N_block = n_block;
-    p.amr.N_root = N_ROOT;
-    p.amr.chi_refine = CHI_REFINE;
-    p.amr.chi_coarsen = CHI_COARSEN;
-    p.amr.regrid_every = REGRID_EVERY;
+
+    double t_final = NUM_STEPS * p.dt;
 
     printf("  L=%.1f, dx=%.6f, dt=%.6f, CFL=%.2f, rk=classic\n",
            p.L, p.dx, p.dt, p.CFL);
-    printf("  max_level=%d, chi_refine=%.4f, chi_coarsen=%.4f\n",
-           MAX_LEVEL, CHI_REFINE, CHI_COARSEN);
-    printf("  steps=%d, t_final=%.1fM\n", NUM_STEPS, NUM_STEPS * p.dt);
+    printf("  max_level=%d (uniform), blocks=%d\n",
+           MAX_LEVEL, mesh_num_leaves(m));
+    printf("  steps=%d, t_final=%.1fM\n", NUM_STEPS, t_final);
     fflush(stdout);
 
-    /* Solve initial data on uniform grid at base resolution */
+    /* Solve initial data on uniform grid at base resolution.
+     * Use CK45 for the temp grid to save memory during solve
+     * (solver doesn't use RK scratch buffers). */
     puncture_data_t bhs[2];
     setup_punctures(bhs);
 
@@ -160,13 +157,13 @@ static double *run_resolution(int res_idx, int n_block)
     fflush(stdout);
     time_t t0 = time(NULL);
 
-    grid_t *tmp = grid_alloc(n_eff, L_DOMAIN, RK_CLASSIC);
+    grid_t *tmp = grid_alloc(n_eff, L_DOMAIN, RK_CK45);
     set_bowen_york(tmp, 2, bhs);
 
     printf("  ID solve done (%.0f sec)\n", difftime(time(NULL), t0));
     fflush(stdout);
 
-    /* Copy to AMR blocks */
+    /* Copy to AMR blocks, then free temp grid */
     copy_id_to_mesh(m, tmp);
     grid_free(tmp);
 
@@ -183,16 +180,13 @@ static double *run_resolution(int res_idx, int n_block)
     printf("  -------------------------------------------------------\n");
     fflush(stdout);
 
-    /* Evolution */
+    /* Evolution — no regridding (max_level=0) */
     p.time = 0.0;
     for (int step = 1; step <= NUM_STEPS; step++) {
         time_t step_t0 = time(NULL);
 
         rk4_step_mesh(m, &p, ccz4_rhs_point, p.dt);
         p.time += p.dt;
-
-        if (p.amr.regrid_every > 0 && step % p.amr.regrid_every == 0)
-            mesh_regrid(m, &p.amr);
 
         double ham = mesh_constraint_l2(m);
         ham_history[step] = ham;
@@ -216,13 +210,11 @@ static void analyze_convergence(double *ham[3])
     printf("================================================================\n");
     printf("\n");
 
-    /* Find common step range where all three are valid.
-     * The different resolutions have different dt, so we compare at
-     * the same step number (same number of RK4 steps taken).
-     * Note: physical time differs between resolutions at the same step
-     * because dt = CFL * dx_base and dx_base differs.  For constraint
-     * convergence, comparing at the same step is the standard approach
-     * (all codes do this — same number of time integrator steps). */
+    /* Each resolution has different dt (dt = CFL * dx), so the same step
+     * number corresponds to different physical times.  For self-convergence,
+     * we compare at the same step number — the standard approach when
+     * varying only spatial resolution with a fixed CFL.
+     * Ref: arXiv:2409.10383 Section III.B */
 
     printf("  step      Ham_low        Ham_med        Ham_high       "
            "|L-M|          |M-H|          Q\n");
@@ -261,7 +253,8 @@ static void analyze_convergence(double *ham[3])
            (q_avg > 0) ? log(q_avg) / log(1.5) : 0.0);
     printf("\n");
 
-    /* Pass/fail */
+    /* Pass/fail: accept order in [2.5, 6.0] — binary dynamics can
+     * degrade order slightly during merger, overshoot during gauge settling */
     double measured_order = (q_avg > 0) ? log(q_avg) / log(1.5) : 0.0;
     int passed = (measured_order > 2.5 && measured_order < 6.0);
     printf("  RESULT: %s (order %.2f, range [2.5, 6.0])\n",
@@ -281,8 +274,7 @@ int main(void)
     printf("  Physics: equal-mass non-spinning, d=10M, P_y=%.4f (3PN)\n", P_Y);
     printf("  Ref: Brugmann et al. 2008, arXiv:0709.0838\n");
     printf("  Resolutions: N_block = 32, 48, 64 (ratio 1.5x)\n");
-    printf("  AMR: max_level=%d, chi_refine=%.4f, regrid_every=%d\n",
-           MAX_LEVEL, CHI_REFINE, REGRID_EVERY);
+    printf("  N_root=%d, max_level=%d (uniform AMR mesh)\n", N_ROOT, MAX_LEVEL);
     printf("  Integrator: classic RK4, CFL=%.2f\n", CFL_FACTOR);
     printf("  Steps: %d per resolution\n", NUM_STEPS);
     printf("================================================================\n");
@@ -295,8 +287,9 @@ int main(void)
     for (int r = 0; r < N_RES; r++) {
         time_t res_start = time(NULL);
         ham[r] = run_resolution(r, N_BLOCKS[r]);
-        printf("  [%s] completed in %.0f sec\n",
-               RES_LABELS[r], difftime(time(NULL), res_start));
+        printf("  [%s] completed in %.0f sec (%.1f hours)\n",
+               RES_LABELS[r], difftime(time(NULL), res_start),
+               difftime(time(NULL), res_start) / 3600.0);
         fflush(stdout);
     }
 
