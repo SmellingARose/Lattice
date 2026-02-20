@@ -189,7 +189,7 @@ table.test-table td:last-child {
 
     <li><a class="section-header">Solver</a></li>
     <li><a href="#hamiltonian">Hamiltonian Constraint</a></li>
-    <li><a href="#relaxation">Hyperbolic Relaxation</a></li>
+    <li><a href="#relaxation">FAS Multigrid Solver</a></li>
     <li><a href="#convergence">Convergence Monitoring</a></li>
 
     <li><a class="section-header">Implementation</a></li>
@@ -326,83 +326,107 @@ table.test-table td:last-child {
 </ul>
 
 <p>
-  The <code>psi^{-7}</code> nonlinearity makes this PDE challenging. Traditional multigrid solvers
-  work well but are complex to implement. We use <strong>hyperbolic relaxation</strong> instead.
+  The <code>psi^{-7}</code> nonlinearity makes this PDE challenging. We solve it using
+  <strong>FAS multigrid</strong> (Full Approximation Scheme), achieving discretization accuracy
+  in O(N<sup>3</sup>) total work.
 </p>
 
 <!-- ============================================================ -->
-<h2 id="relaxation">Hyperbolic Relaxation Solver</h2>
+<h2 id="relaxation">FAS Multigrid Solver</h2>
 
 <p>
-  Following <a href="https://arxiv.org/abs/1708.07358">Ruter et al. (2018)</a> and the
-  <a href="https://arxiv.org/abs/2111.02424">NRPyElliptic</a> implementation, we convert
-  the elliptic PDE into a damped wave equation in pseudo-time <code>tau</code>:
+  The constraint is solved using Full Multigrid (FMG) with FAS V-cycles and
+  Newton-Gauss-Seidel smoothing. This is the same approach used by production
+  NR codes (BAM, GRTresna, AMRMG).
+  Ref: <a href="https://arxiv.org/abs/0705.1486">Natchu &amp; Matzner (2007)</a>,
+  <a href="https://arxiv.org/abs/2510.11152">GPU FAS multigrid (2025)</a>.
 </p>
 
+<h3>FMG outer loop</h3>
+<p>
+  FMG starts on the coarsest grid (N<sub>min</sub> = 16), solves there with many
+  Newton-GS sweeps, then ascends &mdash; each solved level provides the initial guess
+  (via 4th-order Lagrange prolongation) for the next finer level. One V-cycle per
+  level during the ascent. Total work &asymp; 1.14 V-cycles, achieving discretization
+  accuracy in a single pass.
+</p>
+
+<h3>FAS V-cycle</h3>
+<p>
+  At each level: pre-smooth (4 Newton-GS sweeps), restrict solution + residual to
+  the coarse grid with FAS tau correction
+  (<code>f_coarse = L_coarse(R(u)) + R(f - L(u))</code>),
+  recursive coarse solve, prolongate correction (trilinear) back to fine grid,
+  post-smooth (4 sweeps). The coarse grid solves for the full solution, not just
+  a correction &mdash; this is the key feature of FAS for nonlinear problems.
+</p>
+
+<h3>Newton-GS smoother</h3>
+
 <div class="equation">
-  <div class="label">Damped wave system (arXiv:1708.07358)</div><br>
-  d_tau u = v<br>
-  d_tau v = -eta * v + c<sup>2</sup> * [ nabla<sup>2</sup>(u) + (1/8) * A<sup>2</sup> * (psi_BL + u)<sup>-7</sup> ]
+  <div class="label">Newton point update</div><br>
+  residual = Lap(u) + (1/8) A<sup>2</sup> (psi_BL + u)<sup>-7</sup> - f<br>
+  J_diag = -7.5/dx<sup>2</sup> - (7/8) A<sup>2</sup> (psi_BL + u)<sup>-8</sup><br>
+  u -= residual / J_diag
 </div>
 
 <p>
-  The auxiliary field <code>v</code> acts as the pseudo-time velocity of <code>u</code>.
-  As the system relaxes to steady state, <code>v -> 0</code> everywhere, which means
-  <code>d_tau u = 0</code> and the original elliptic equation is satisfied.
+  8-color ordering: <code>color = (i%2) + 2*(j%2) + 4*(k%2)</code>.
+  All points within a color are independent at &plusmn;1 distance &mdash; fully
+  parallelizable on GPU. Colors processed sequentially (0..7), each color parallel.
 </p>
+
+<h3>Transfer operators</h3>
+
+<table class="file-table">
+  <tr><th>Operator</th><th>Order</th><th>Description</th></tr>
+  <tr><td>Restriction</td><td>2nd</td><td>Cell-centered 8-child volume average (2&times;2&times;2 fine cells per coarse cell)</td></tr>
+  <tr><td>V-cycle prolongation</td><td>2nd</td><td>Trilinear (0.75/0.25 weights), ADD to fine grid</td></tr>
+  <tr><td>FMG prolongation</td><td>4th</td><td>5-point Lagrange stencil, OVERWRITE fine grid</td></tr>
+</table>
 
 <h3>Solver parameters</h3>
 
 <table class="file-table">
   <tr><th>Parameter</th><th>Value</th><th>Description</th></tr>
-  <tr><td>c</td><td>1.0</td><td>Wave propagation speed in pseudo-time</td></tr>
-  <tr><td>eta</td><td>6.0 / L</td><td>Damping coefficient (scales with domain size)</td></tr>
-  <tr><td>CFL_relax</td><td>0.5</td><td>CFL factor for pseudo-time step: dt = 0.5 * dx</td></tr>
-  <tr><td>sigma_ko</td><td>0.1</td><td>Kreiss-Oliger dissipation on u for numerical stability</td></tr>
-  <tr><td>tol</td><td>1e-12</td><td>Convergence tolerance on ||v||_L2</td></tr>
-  <tr><td>max_iter</td><td>50000</td><td>Maximum pseudo-time steps before giving up</td></tr>
+  <tr><td>N_min</td><td>16</td><td>Coarsest grid interior points per side</td></tr>
+  <tr><td>nu_pre</td><td>4</td><td>Pre-smoothing Newton-GS sweeps per V-cycle</td></tr>
+  <tr><td>nu_post</td><td>4</td><td>Post-smoothing Newton-GS sweeps per V-cycle</td></tr>
+  <tr><td>nu_coarse</td><td>50</td><td>Coarsest-level sweeps</td></tr>
+  <tr><td>tol</td><td>1e-12</td><td>Target ||f - L(u)||_L2 residual</td></tr>
+  <tr><td>max_iter</td><td>50000</td><td>Maximum post-FMG V-cycles (typically 0-9 needed)</td></tr>
 </table>
 
-<h3>Mini-RK4 integrator</h3>
-
 <p>
-  The relaxation system is integrated with a standalone classic 4-stage RK4, completely
-  independent of the main 25-field <code>rk4_step()</code>. The solver operates on only
-  2 scalar fields (<code>u</code>, <code>v</code>) with a dedicated
-  <code>relax_workspace_t</code> holding 10 working arrays plus precomputed
-  <code>psi_BL</code> and <code>A^2</code> (12 arrays total).
-</p>
-
-<p>
-  Boundary conditions: zero-Dirichlet in ghost zones (<code>u = 0, v = 0</code>).
-  This is valid because the correction <code>u ~ 1/r</code> at large distances and the
-  computational domain is sufficiently large.
+  Boundary conditions: zero-Dirichlet in ghost zones (<code>u = 0</code>).
+  Valid because the correction <code>u ~ 1/r</code> at large distances.
 </p>
 
 <!-- ============================================================ -->
-<h2 id="convergence">Convergence Monitoring</h2>
+<h2 id="convergence">Convergence</h2>
 
 <p>
-  Convergence is monitored via the L2 norm of the velocity field <code>v</code>:
+  Convergence is monitored via the L2 norm of the residual:
 </p>
 
 <div class="equation">
   <div class="label">Convergence criterion</div><br>
-  ||v||_L2 = sqrt( SUM(v<sup>2</sup>) / N_interior )
+  ||f - L(u)||_L2 = sqrt( SUM(residual<sup>2</sup>) / N_interior )
 </div>
 
 <p>
-  When <code>||v||_L2 &lt; tol</code>, the wave has damped to steady state and
-  <code>u</code> satisfies the elliptic equation to the requested tolerance. The residual
-  is checked every 500 iterations, with verbose output every 2000 iterations.
+  FMG typically achieves residuals near the discretization floor (~O(dx<sup>4</sup>))
+  in a single pass. Post-FMG V-cycles polish below the FMG residual with a convergence
+  factor of ~0.1-0.3 per cycle. Example at N=64, L=16 (3 levels: 64&rarr;32&rarr;16):
 </p>
 
-<div class="info-box">
-  <strong>Why hyperbolic relaxation?</strong> Compared to multigrid solvers (used by TwoPunctures),
-  hyperbolic relaxation is simple to implement (just a wave equation + RK4), naturally parallelizable,
-  and requires no complex coarsening/prolongation infrastructure. The tradeoff is more iterations,
-  but for the grid sizes used in Lattice the wall-clock time is acceptable.
-</div>
+<table class="file-table">
+  <tr><th>Stage</th><th>Residual</th></tr>
+  <tr><td>FMG done</td><td>7.1e-7</td></tr>
+  <tr><td>V-cycle 1</td><td>2.0e-7</td></tr>
+  <tr><td>V-cycle 5</td><td>3.4e-10</td></tr>
+  <tr><td>V-cycle 9</td><td>6.7e-13</td></tr>
+</table>
 
 <!-- ============================================================ -->
 <h2 id="ccz4-conversion">CCZ4 Field Conversion</h2>
@@ -487,8 +511,8 @@ table.test-table td:last-child {
   </div>
   <div class="pipeline-arrow">&#x2192;</div>
   <div class="pipeline-step step-solver">
-    <strong>Relax Solve</strong>
-    <span>Damped wave RK4</span>
+    <strong>FMG Solve</strong>
+    <span>FAS multigrid</span>
   </div>
   <div class="pipeline-arrow">&#x2192;</div>
   <div class="pipeline-step">
@@ -499,8 +523,8 @@ table.test-table td:last-child {
 
 <p>
   The solver path precomputes <code>psi_BL</code> and <code>A^2 = A_ij A^ij</code> at every
-  grid point once (these are fixed throughout the relaxation), then iterates the damped wave
-  system until convergence. Finally, <code>set_ccz4_from_psi()</code> fills all 25 CCZ4 fields.
+  grid point once (these are fixed throughout the solve), then runs FMG (Full Multigrid)
+  with FAS V-cycles until convergence. Finally, <code>set_ccz4_from_psi()</code> fills all 25 CCZ4 fields.
 </p>
 
 <!-- ============================================================ -->
@@ -521,13 +545,15 @@ table.test-table td:last-child {
   </tr>
   <tr>
     <td>src/initial_data/relaxation.h</td>
-    <td>Public API: <code>relaxation_solve()</code></td>
+    <td>Public API: <code>relaxation_solve()</code>, <code>relaxation_solve_coupled()</code>,
+        <code>mg_level_t</code> hierarchy</td>
   </tr>
   <tr>
     <td>src/initial_data/relaxation.c</td>
-    <td>Hyperbolic relaxation solver: workspace management, RHS evaluation with
-        4th-order Laplacian + KO dissipation, mini-RK4 integrator, Robin/Dirichlet BCs,
-        convergence monitoring via ||v||_L2</td>
+    <td>FAS multigrid constraint solver: <code>mg_level_t</code> grid hierarchy,
+        Newton-Gauss-Seidel smoother (8-color ordering), FAS V-cycles with
+        tau correction, FMG outer loop, cell-centered restriction/prolongation,
+        convergence monitoring via ||f&minus;L(u)||<sub>L2</sub></td>
   </tr>
   <tr>
     <td>tests/test_bowen_york.c</td>
@@ -680,14 +706,18 @@ make test-bowen-york</code></pre>
 
 <h3>Solver method</h3>
 <ul>
-  <li><strong>Ruter et al. (2018)</strong>,
-      <a href="https://arxiv.org/abs/1708.07358">arXiv:1708.07358</a>:
-      Hyperbolic relaxation method for elliptic PDEs in numerical relativity.
-      Converts elliptic constraint to damped wave equation.</li>
-  <li><strong>NRPyElliptic (2021)</strong>,
-      <a href="https://arxiv.org/abs/2111.02424">arXiv:2111.02424</a>:
-      Practical implementation of hyperbolic relaxation. Section 3.2 provides
-      parameter tuning guidance (eta, CFL, wave speed).</li>
+  <li><strong>Natchu &amp; Matzner (2007)</strong>,
+      <a href="https://arxiv.org/abs/0705.1486">arXiv:0705.1486</a>:
+      4th-order FAS multigrid for black hole initial data.
+      Demonstrates convergence to discretization accuracy with O(N^3) work.</li>
+  <li><strong>Trottenberg, Oosterlee &amp; Sch&uuml;ller</strong>,
+      <em>Multigrid Methods</em> (Academic Press, 2001):
+      Textbook reference for FAS (Full Approximation Scheme) and FMG
+      (Full Multigrid) algorithms.</li>
+  <li><strong>Brandt (1977)</strong>,
+      <em>Math. Comp.</em> 31, 333&ndash;390:
+      Original multigrid paper introducing the FAS framework for nonlinear
+      elliptic equations.</li>
 </ul>
 
 <h3>Code cross-references</h3>

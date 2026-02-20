@@ -1,5 +1,12 @@
 # Milestone 5: Binary Inspiral — Initial Data Research & Plan
 
+> **Note (2026-02-19):** The hyperbolic relaxation solver described in Section 5
+> was superseded by an FAS multigrid solver (FMG + FAS V-cycles +
+> Newton-Gauss-Seidel smoother). See DEVLOG.md entry for 2026-02-19 and the
+> updated `docs/bowen_york.html` for the current algorithm. The Bowen-York
+> initial data formulation (Sections 3-4) and the implementation roadmap
+> (Section 8) remain accurate.
+
 ## Status: Research complete, implementation pending
 
 ---

@@ -155,6 +155,7 @@ int main(int argc, char **argv)
         }
     }
 
+    setbuf(stdout, NULL);
     backend_init();
 
     printf("Lattice — 3D Numerical Relativity\n");
@@ -177,37 +178,79 @@ int main(int argc, char **argv)
         printf("  blocks = %d (leaves = %d)\n",
                m->num_blocks, mesh_num_leaves(m));
 
-        /* Set initial data on all leaf blocks (AMR uses BL for now) */
-        double amr_masses[MAX_PUNCTURES];
-        double amr_centers[MAX_PUNCTURES][3];
-        for (int n = 0; n < n_bh; n++) {
-            amr_masses[n] = bhs[n].mass;
-            for (int d = 0; d < 3; d++)
-                amr_centers[n][d] = bhs[n].center[d];
-        }
-        for (int bid = 0; bid < m->num_blocks; bid++) {
-            block_t *b = m->blocks[bid];
-            if (!b || !b->is_leaf) continue;
-            if (n_bh > 0)
-                set_brill_lindquist_global(b->grid, b->origin, n_bh,
-                                           amr_masses,
-                                           (const double(*)[3])amr_centers);
-            else
-                set_flat_spacetime(b->grid);
-        }
+        /* Set initial data: solve on temporary uniform grid, copy to blocks.
+         * The constraint solve (FAS multigrid) needs the full domain, so we
+         * solve globally at base AMR resolution, then distribute to blocks. */
+        if (n_bh > 0) {
+            printf("  Initial data: Bowen-York, %d puncture(s)\n", n_bh);
 
-        printf("  Initial data: %s\n",
-               n_bh > 0 ? "Brill-Lindquist (AMR)" : "flat spacetime (AMR)");
+            /* Solve initial data on temporary uniform grid at N_eff */
+            grid_t *tmp = grid_alloc(N_eff, p.L, RK_CK45);
+            set_bowen_york(tmp, n_bh, bhs);
+
+            /* Copy solved fields from temp grid to each leaf block.
+             * Both grids have the same dx at level 0. Block origin gives
+             * the physical offset: i_temp = ghost + (i_block - ghost) + offset
+             * where offset = round((origin - (-L/2)) / dx). */
+            int ghost = GHOST_WIDTH;
+            for (int bid = 0; bid < m->num_blocks; bid++) {
+                block_t *b = m->blocks[bid];
+                if (!b || !b->is_leaf) continue;
+
+                /* Compute cell offset of this block in the global grid */
+                int off[3];
+                for (int d = 0; d < 3; d++)
+                    off[d] = (int)((b->origin[d] + p.L * 0.5) / tmp->dx + 0.5);
+
+                int Nt_b = b->grid->Ntotal;
+                int Nt_g = tmp->Ntotal;
+
+                for (int f = 0; f < NUM_FIELDS; f++) {
+                    double *dst = b->grid->fields[f];
+                    const double *src = tmp->fields[f];
+                    /* Copy interior + ghost zones (clamp to temp grid bounds) */
+                    for (int k = 0; k < Nt_b; k++) {
+                        int kg = k - ghost + off[2] + ghost;
+                        if (kg < 0) kg = 0;
+                        if (kg >= Nt_g) kg = Nt_g - 1;
+                        for (int j = 0; j < Nt_b; j++) {
+                            int jg = j - ghost + off[1] + ghost;
+                            if (jg < 0) jg = 0;
+                            if (jg >= Nt_g) jg = Nt_g - 1;
+                            for (int i = 0; i < Nt_b; i++) {
+                                int ig = i - ghost + off[0] + ghost;
+                                if (ig < 0) ig = 0;
+                                if (ig >= Nt_g) ig = Nt_g - 1;
+                                dst[k * Nt_b * Nt_b + j * Nt_b + i] =
+                                    src[kg * Nt_g * Nt_g + jg * Nt_g + ig];
+                            }
+                        }
+                    }
+                }
+            }
+            grid_free(tmp);
+        } else {
+            printf("  Initial data: flat spacetime (AMR)\n");
+            for (int bid = 0; bid < m->num_blocks; bid++) {
+                block_t *b = m->blocks[bid];
+                if (!b || !b->is_leaf) continue;
+                set_flat_spacetime(b->grid);
+            }
+        }
 
         double ham0 = mesh_constraint_l2(m);
         printf("  Initial Ham L2 = %.6e\n", ham0);
+
+        /* Select RHS function: combined CCZ4+Maxwell if EM enabled */
+        rk4_rhs_func_t rhs_func = p.em_enabled
+            ? ccz4_maxwell_rhs_point : ccz4_rhs_point;
 
         /* Evolution loop.
          * p.time tracks the simulation time for subcycling's temporal
          * interpolation (Berger-Oliger). dt is the coarsest-level step. */
         p.time = 0.0;
         for (int step = 1; step <= p.num_steps; step++) {
-            rk4_step_mesh(m, &p, ccz4_rhs_point, p.dt);
+            rk4_step_mesh(m, &p, rhs_func, p.dt);
             p.time += p.dt;
 
             if (p.amr.regrid_every > 0 && step % p.amr.regrid_every == 0)

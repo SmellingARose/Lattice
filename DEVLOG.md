@@ -3,6 +3,42 @@
 > **Note:** When adding/removing/renaming files or functions, also update
 > `docs/architecture.html` — the living map of the codebase structure.
 
+## 2026-02-20: AMR + Bowen-York Initial Data, Binary Inspiral
+
+**AMR initial data upgrade:** The AMR path in `main.c` previously only supported
+Brill-Lindquist (BHs at rest). Now supports full Bowen-York initial data
+(momentum, spin, HiSpID) by solving the constraint on a temporary uniform grid
+at base AMR resolution (N_eff = N_root * N_block), then copying solved fields to
+each leaf block. Also wired up EM-aware RHS selection (`ccz4_maxwell_rhs_point`)
+for AMR evolution when `--em` is enabled.
+
+**Remaining AMR parity gaps** (single-grid has all, AMR does not yet):
+- EM-aware RHS in packed kernels (packed path hardcodes `ccz4_rhs_point`)
+- AH finder on AMR mesh (needs cross-block interpolation)
+- Output slices from AMR blocks
+
+**Binary inspiral test command** (standard equal-mass non-spinning quasi-circular,
+matching Brugmann et al. 2008, arXiv:0709.0838):
+
+```bash
+./build/lattice --N 128 --L 64 --steps 4000 --CFL 0.25 \
+    --ah --ah_every 200 \
+    --puncture 0.4824,0,0,5,0,0.0939,0 \
+    --puncture 0.4824,0,0,-5,0,-0.0939,0
+```
+
+Parameters: d=10M separation, m_bare=0.4824 each (M_ADM≈1.0), P_y=±0.0939
+(3PN quasi-circular). N=128 → dx=0.5, dt=0.125, t_final=500M.
+
+Expected results to compare against published NR data:
+- Final remnant mass: M_f/M ≈ 0.9516
+- Final spin: a/M_f ≈ 0.6864
+- Radiated energy: ~3.5% of M_ADM
+- Merger time: ~500-700M (depends on eccentricity)
+
+Initial solver output (verified): FAS multigrid converges in 11 V-cycles,
+residual 6.4e-13. Initial Ham L2 = 6.95e-3. ~4.5 sec/step on M4.
+
 ## 2026-02-19: FAS Multigrid Constraint Solver
 
 Replaced the hyperbolic relaxation solver (`relaxation.c`) with a Full Multigrid
