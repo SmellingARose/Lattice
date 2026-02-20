@@ -82,11 +82,12 @@ Priority order:
 - Spatially varying KO dissipation
 - Full waveform catalog capability
 
-**AMR parity gaps** (single-grid path has all of these, AMR path does not yet):
-- EM-aware RHS in packed kernels (AMR hardcodes `ccz4_rhs_point`, ignores `--em`)
-- AMR initial data uses global uniform solve + copy (BY/HiSpID work; EM charge untested)
+**AMR parity gaps:** All closed. Both packed kernels (CPU + GPU) branch on
+`p->em_enabled` to call `ccz4_maxwell_rhs_point`. Initial data copy loop
+is field-agnostic (copies all NUM_FIELDS including EM). AH finder and
+output slices work on AMR meshes.
 
-**Current status: Phase 2 complete. Phase 3 (production) next.**
+**Current status: Phase 2 complete, AMR at parity. Phase 3 (production) next.**
 - **N-body initial data:** FAS multigrid constraint solver (FMG + Newton-Gauss-Seidel, 8-color GPU-compatible), O(N³) solve to discretization accuracy, arbitrary puncture count. BY 1-field + HiSpID 4-field coupled solvers.
 - **Einstein-Maxwell:** 6 new evolved fields (E^i, B^i), conformal Maxwell evolution with constraint damping, EM stress-energy coupling to CCZ4 (gated by `--em` flag), charged puncture initial data via `--puncture M,x,y,z,Px,Py,Pz,Sx,Sy,Sz,Q`.
 - **Spin:** Bowen-York spinning punctures + HiSpID high-spin initial data (quasi-isotropic Kerr conformal metric, coupled 4-field relaxation).
