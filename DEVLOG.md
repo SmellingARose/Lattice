@@ -3,6 +3,83 @@
 > **Note:** When adding/removing/renaming files or functions, also update
 > `docs/architecture.html` — the living map of the codebase structure.
 
+## 2026-02-19: FAS Multigrid Constraint Solver
+
+Replaced the hyperbolic relaxation solver (`relaxation.c`) with a Full Multigrid
+(FMG) solver using Full Approximation Scheme (FAS) V-cycles and Newton-Gauss-Seidel
+smoothing. The old solver was O(N^4) — each RK4 step is O(N^3) and O(N) steps
+needed for information propagation. The new solver is O(N^3) total and achieves
+discretization accuracy in a single FMG pass.
+
+### Algorithm
+
+- **FMG outer loop**: Start on coarsest grid (N_min=16), solve there, then ascend —
+  each solved level provides the initial guess (via 4th-order Lagrange prolongation)
+  for the next finer level. One V-cycle per level during ascent.
+- **FAS V-cycles**: Pre-smooth (4 Newton-GS sweeps), restrict solution + residual to
+  coarse grid with tau correction, recursive coarse solve, prolongate correction
+  (trilinear) back to fine, post-smooth (4 sweeps).
+- **Newton-GS smoother**: 8-color ordering (color = (i%2) + 2*(j%2) + 4*(k%2)),
+  GPU-compatible — all points within a color are independent at ±1 distance.
+  Newton step: `psi -= residual / J_diag` where `J_diag = -7.5/dx^2 + dS/dpsi`.
+- **Cell-centered restriction**: 8-child volume average (2x2x2 fine cells per coarse
+  cell). Standard for cell-centered grids where coarse cell centers sit between fine cells.
+- **Two prolongation operators**: Trilinear (0.75/0.25) for V-cycle corrections (add
+  to fine), 4th-order Lagrange (5-point stencil from AMR `prolong_w`) for FMG initial
+  guess (overwrite fine).
+
+### What was replaced
+
+- `relax_workspace_t`, `coupled_workspace_t` structs → `mg_level_t` (unified per-level)
+- `relax_rhs()`, `coupled_rhs()` (RK4 wave equation RHS) → `newton_gs_sweep_1field/4field()`
+- `relax_rk4_step()`, `coupled_rk4_step()` (RK4 time-stepping) → `mg_vcycle()` + `mg_fmg()`
+- All RK4 scratch/accumulator arrays (8 per field pair) → eliminated
+
+### Bug fix: cell-centered restriction
+
+Initial implementation used a vertex-centered "half-weighted" restriction
+(0.5*center + 1/12*face_neighbors, Natchu & Matzner Eq. 18). This is correct for
+vertex-centered grids where coarse points coincide with fine points. Our grid is
+cell-centered (MG_COORD uses +0.5 offset), so coarse cell centers sit BETWEEN 8
+fine children. The wrong restriction corrupted the FAS tau correction, causing V-cycle
+divergence at 3+ multigrid levels (N=64→32→16). Fixed by replacing with standard
+cell-centered 8-child volume average (0.125 * sum of 2x2x2 children).
+
+Ref: HPGMG finite-volume restriction, Zingale Computational Astrophysics MG tutorial.
+
+### Performance
+
+At N=64, L=16 (3 levels: 64→32→16):
+- FMG pass: residual 7.1e-7 (instant, <1s)
+- 9 post-FMG V-cycles: residual drops to 6.7e-13
+- Old solver: ~50k iterations, minutes of wall time
+
+### Public API unchanged
+
+`relaxation_solve()` and `relaxation_solve_coupled()` signatures identical.
+`max_iter` now means max post-FMG V-cycles (typically 0-9 needed) instead of
+max RK4 iterations (typically 2000-50000 needed).
+
+### Test results
+
+- **29/29 Bowen-York tests**: All pass, convergence order preserved
+- **26/26 HiSpID tests**: All pass
+- **13/13 AH finder tests**: All pass (Test 7 Boosted BH was the divergence trigger)
+- **15/15 Maxwell tests**: All pass
+- **Convergence**: Order 5.4 (unchanged)
+- **Flat spacetime**: Ham L2 = 5.3e-14 (unchanged)
+- **AMR**: 8/8 (unchanged)
+
+### References
+
+- arXiv:0705.1486 (Natchu & Matzner): 4th-order MG for BH initial data
+- arXiv:2510.11152: GPU FAS multigrid, 8-color MCGS, 61x speedup
+- arXiv:2501.13046 (GRTresna): open-source NR MG constraint solver
+- HPGMG finite-volume/source/mg.c: FMG + FAS V-cycle reference
+- PETSc SNESFAS: FAS V-cycle reference implementation
+
+---
+
 ## 2026-02-18: HiSpID — High-Spin Initial Data (Step 2 of plan1.md)
 
 Implemented quasi-isotropic Kerr metric and a 4-field coupled relaxation solver

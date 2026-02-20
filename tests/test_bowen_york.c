@@ -495,6 +495,7 @@ static void test_binary_orbit(void)
 /* ================================================================ */
 int main(void)
 {
+    setbuf(stdout, NULL);  /* unbuffered for progress visibility */
     printf("=== Bowen-York Initial Data Test Suite ===\n");
     backend_init();
 

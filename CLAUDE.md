@@ -82,7 +82,7 @@ Priority order:
 - Spatially varying KO dissipation
 - Full waveform catalog capability
 
-**Current status: Phase 2 underway. Phase 1 complete. Apparent Horizon finder: hyperbolic flow method (BHaHAHA-inspired) with 4th-order off-grid interpolation, mass/spin/area extraction, `--ah` CLI flag (13/13 tests passing). Einstein-Maxwell: 6 new evolved fields (E^i, B^i), conformal Maxwell evolution with constraint damping, EM stress-energy coupling to CCZ4 (gated by `--em` flag), charged puncture initial data via `--puncture M,x,y,z,Px,Py,Pz,Sx,Sy,Sz,Q` (15/15 tests passing). All prior tests still passing: flat spacetime, convergence (order 5.4), AMR evolution. Total: 31 evolved fields (25 CCZ4 + 6 EM).** Update as milestones are reached.
+**Current status: Phase 2 underway. Phase 1 complete. Constraint solver: FAS multigrid (FMG + Newton-Gauss-Seidel, 8-color GPU-compatible), O(N^3) solve to discretization accuracy. Apparent Horizon finder: hyperbolic flow method (BHaHAHA-inspired) with 4th-order off-grid interpolation, mass/spin/area extraction, `--ah` CLI flag (13/13 tests passing). Einstein-Maxwell: 6 new evolved fields (E^i, B^i), conformal Maxwell evolution with constraint damping, EM stress-energy coupling to CCZ4 (gated by `--em` flag), charged puncture initial data via `--puncture M,x,y,z,Px,Py,Pz,Sx,Sy,Sz,Q` (15/15 tests passing). All prior tests still passing: flat spacetime, convergence (order 5.4), AMR evolution. Total: 31 evolved fields (25 CCZ4 + 6 EM).** Update as milestones are reached.
 
 ## Project Structure
 
@@ -114,7 +114,7 @@ lattice/
 │   ├── initial_data/
 │   │   ├── puncture.c          # Brill-Lindquist puncture data
 │   │   ├── bowen_york.h/c      # BY A_ij (momentum+spin) + CCZ4 conversion
-│   │   ├── relaxation.h/c      # Hyperbolic relaxation solver (1-field + 4-field coupled)
+│   │   ├── relaxation.h/c      # FAS multigrid constraint solver (1-field + 4-field coupled)
 │   │   └── kerr_quasi_isotropic.h/c  # QI Kerr metric for HiSpID (high-spin data)
 │   ├── diagnostics/
 │   │   ├── constraints.c       # Hamiltonian + momentum constraints
@@ -285,23 +285,27 @@ constant `GR_SPACEDIM = 3`.
 | `eta` | 1.0 | Damping in Gamma-driver: dt(B^i) = dt(Gamma^i) - eta * B^i |
 | `rk_method` | `RK_CK45` | Time integrator: `RK_CLASSIC` (4 stages, 4 blocks) or `RK_CK45` (5 stages, 3 blocks) |
 
-### Relaxation Solver Tuning
+### FAS Multigrid Solver Tuning
 
 Both `relaxation_solve` (1-field BY) and `relaxation_solve_coupled` (4-field HiSpID)
-accept `tol` and `max_iter` parameters. The discretization floor is O(dx^4):
+use FMG (Full Multigrid) with FAS V-cycles and Newton-Gauss-Seidel smoothing.
+`tol` is the target residual; `max_iter` is the max post-FMG V-cycles (usually 0-9).
+
+The discretization floor is O(dx^4):
 
 | Grid N | ~Floor residual | Recommended `tol` |
 |--------|----------------|-------------------|
 | 24     | 1e-3           | 1e-4              |
-| 64     | 1e-5           | 1e-6              |
-| 128    | 1e-7           | 1e-8              |
-| 256    | 1e-9           | 1e-10             |
+| 64     | 1e-7           | 1e-8              |
+| 128    | 1e-9           | 1e-10             |
+| 256    | 1e-11          | 1e-12             |
 
-No benefit going below the floor — stagnation detection stops the solver
-automatically when the residual plateaus (<5% improvement over 1000 iterations).
-The coupled solver is ~4x slower per iteration than the 1-field solver.
-For test purposes, `tol=1e-4, max_iter=2000` keeps tests fast (~10s each).
-For production, `tol=1e-10, max_iter=50000` is the default in `set_hispid()`.
+FMG achieves discretization accuracy in a single pass (~1.14 V-cycles of work).
+Post-FMG V-cycles polish below the FMG residual; typically 0-9 needed.
+Multigrid hierarchy: N, N/2, N/4, ... down to N_min=16.
+For production, `tol=1e-12, max_iter=50000` is the default in `set_bowen_york()`.
+
+Ref: arXiv:0705.1486 (Natchu & Matzner), arXiv:2510.11152 (GPU FAS multigrid).
 
 ## Workflow Rules
 

@@ -4,7 +4,7 @@
  *
  * Computes the physical traceless extrinsic curvature A_ij^phys for
  * punctures with linear momentum P_i and spin S_i, then solves the
- * Hamiltonian constraint for the conformal factor via hyperbolic relaxation.
+ * Hamiltonian constraint for the conformal factor via FAS multigrid.
  *
  * Ref: gr-qc/9703066 (Brandt-Brugmann puncture method)
  * Ref: GRChombo BoostedBH.impl.hpp:47-50 (BY A_ij formula)
@@ -47,7 +47,7 @@ void set_ccz4_from_hispid(grid_t *g, const double *psi_arr,
                            int n_bh, const puncture_data_t *bhs);
 
 /* Top-level dispatch: if all P=0 and S=0, uses fast BL path.
- * Otherwise runs hyperbolic relaxation solver.
+ * Otherwise runs FAS multigrid constraint solver.
  * If hispid_override is set (via --hispid), forces coupled solver. */
 void set_bowen_york(grid_t *g, int n_bh, const puncture_data_t *bhs);
 
