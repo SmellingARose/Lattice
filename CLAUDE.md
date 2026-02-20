@@ -167,11 +167,8 @@ lattice/
 │   ├── test_inspiral_convergence.c  # AMR binary inspiral convergence (3 resolutions)
 │   └── convergence.sh          # 3-resolution convergence check
 ├── docs/
-│   ├── physics.md              # variable-to-math mapping
-│   ├── architecture.html       # interactive codebase map
-│   ├── gpu_batch_kernels.html  # GPU batch kernel optimization explainer
-│   ├── bowen_york.html         # Bowen-York initial data explainer
-│   └── plan1.md                # Milestone 5 research & implementation plan
+│   ├── architecture.html       # consolidated architecture & design reference
+│   └── archive/                # older deep-dive guides (preserved, not primary)
 └── tools/
     └── plot_convergence.py
 ```
