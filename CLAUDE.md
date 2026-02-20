@@ -214,14 +214,8 @@ on both CPU and GPU.
 - `GOMP_NVPTX_NATIVE_GPU_THREAD_STACK_SIZE=16384` env var (required — the CCZ4
   RHS kernel uses ~4 KB stack per thread for derivative tensors, Christoffel
   symbols, and Ricci tensor locals; GCC 13's default stack is too small)
-- **Recommended:** HPC-class GPU with 1:2 FP64:FP32 ratio (V100, A100, H100,
-  MI250X, MI300X). These give 20-100x speedup over M4 CPU.
-- **Marginal:** Tesla P40 and similar 1:32 FP64 GPUs (367 GFLOPS FP64, 346 GB/s).
-  All physics is FP64, so the 1:32 ratio limits throughput. Expect ~2-4x speedup
-  over M4 CPU — better than nothing, but not transformative. 24 GB VRAM is useful
-  for larger grids (N=256+).
-- **Not recommended:** Consumer GPUs (RTX 3090/4090 etc.) — same 1:32 FP64 ratio,
-  and GDDR6X bandwidth doesn't compensate. Stick with CPU for these.
+- HPC-class GPU with 1:2 FP64:FP32 ratio (V100, A100, H100, MI250X, MI300X).
+  Consumer GPUs (1:32 ratio) have negligible FP64 throughput.
 
 ```bash
 # Example: GPU build on Linux with GCC 15 targeting NVIDIA
@@ -360,11 +354,6 @@ Measured performance: ~4.5 sec/step at N=128 (~23 GFLOPS effective FP64).
 **GPU production targets:** NVIDIA V100/A100/H100 via OpenMP target offloading.
 Estimated 20-100x speedup over M4 CPU (0.05-0.2 sec/step at N=128).
 N=256 requires 40+ GB GPU memory. N=512 requires H200 (141 GB) or multi-GPU.
-
-**Tesla P40 (available):** 367 GFLOPS FP64 peak, 346 GB/s, 24 GB GDDR5X.
-~2.7x M4's theoretical FP64 peak, ~3.5x M4's memory bandwidth.
-Expect ~2-4x effective speedup (1-2 sec/step at N=128). Pascal (sm_61),
-requires GCC 15 nvptx. Useful for N=128-256 runs where M4 is too slow.
 
 No platform-specific code outside `src/backend/`. Physics kernels are pure C
 with `#pragma omp declare target` guards for GPU compilation.
