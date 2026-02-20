@@ -164,6 +164,7 @@ lattice/
 │   ├── test_hispid.c        # HiSpID high-spin initial data (QI Kerr + coupled solver)
 │   ├── test_ah_finder.c     # Apparent horizon finder tests (13/13)
 │   ├── test_maxwell.c       # Einstein-Maxwell tests (15/15)
+│   ├── test_inspiral_convergence.c  # AMR binary inspiral convergence (3 resolutions)
 │   └── convergence.sh          # 3-resolution convergence check
 ├── docs/
 │   ├── physics.md              # variable-to-math mapping
@@ -192,6 +193,7 @@ make test-bowen-york   # Bowen-York initial data (A_ij, solver, evolution)
 make test-hispid       # HiSpID high-spin initial data (QI Kerr + coupled solver)
 make test-ah           # Apparent horizon finder (interpolation, Schwarzschild, diagnostics)
 make test-maxwell      # Einstein-Maxwell (flat EM, plane wave, charged BH, constraints)
+make test-inspiral-convergence  # AMR binary inspiral convergence (long run, ~hours)
 make clean
 ```
 

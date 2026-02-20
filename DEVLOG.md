@@ -3,6 +3,35 @@
 > **Note:** When adding/removing/renaming files or functions, also update
 > `docs/architecture.html` — the living map of the codebase structure.
 
+## 2026-02-20: Binary Inspiral AMR Convergence Test
+
+**Goal:** Demonstrate 4th-order self-convergence of the full CCZ4 evolution code
+on a binary BH inspiral using AMR, following standard NR methodology
+(arXiv:2409.10383 AthenaK, arXiv:2312.05438 AMR strategy comparison).
+
+**Setup:** Equal-mass non-spinning quasi-circular binary (Brugmann et al. 2008,
+arXiv:0709.0838): m_bare=0.4824, d=10M, P_y=±0.0939 (3PN), L=64, CFL=0.25.
+
+**Methodology:** Self-convergence with 3 AMR resolutions at ratio r=1.5:
+- LOW:  N_block=32, N_root=4 → N_eff=128, dx_base=0.500
+- MED:  N_block=48, N_root=4 → N_eff=192, dx_base=0.333
+- HIGH: N_block=64, N_root=4 → N_eff=256, dx_base=0.250
+
+Same AMR parameters across all three: max_level=4, chi_refine=0.1,
+chi_coarsen=0.01, regrid_every=10.  Classic RK4 integrator (faster than CK45).
+6000 steps per resolution → t_final ≈ 750M (captures merger + ringdown).
+
+**Convergence criterion:** For 4th-order code with r=1.5:
+  Q = |Ham(low) - Ham(med)| / |Ham(med) - Ham(high)| ≈ 1.5^4 = 5.06
+
+**Test file:** `tests/test_inspiral_convergence.c`
+**Build:** `make test-inspiral-convergence`
+**Run:** `nohup build/test_inspiral_convergence 2>&1 | tee inspiral.log &`
+
+**Status:** Test written, compilation verified.  Run pending.
+
+---
+
 ## 2026-02-20: AMR + Bowen-York Initial Data, Binary Inspiral
 
 **AMR initial data upgrade:** The AMR path in `main.c` previously only supported

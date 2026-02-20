@@ -75,7 +75,7 @@ LDFLAGS = $(BACKEND_LIBS) -lm
 BUILD = build
 
 # Targets
-.PHONY: all debug test test-single-bh test-convergence test-constraints test-head-on test-amr-mesh test-amr-ghost test-amr-prolong test-amr-refine test-amr-evolve test-pack-evolve test-subcycle test-bowen-york test-hispid test-maxwell test-ah clean
+.PHONY: all debug test test-single-bh test-convergence test-constraints test-head-on test-amr-mesh test-amr-ghost test-amr-prolong test-amr-refine test-amr-evolve test-pack-evolve test-subcycle test-bowen-york test-hispid test-maxwell test-ah test-inspiral-convergence clean
 
 all: $(BUILD)/lattice
 
@@ -222,6 +222,14 @@ $(BUILD)/test_ah_finder: tests/test_ah_finder.c $(ALL_SRC)
 test-ah: $(BUILD)/test_ah_finder
 	@echo "=== Running AH finder test ==="
 	$(BUILD)/test_ah_finder
+
+$(BUILD)/test_inspiral_convergence: tests/test_inspiral_convergence.c $(ALL_SRC)
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS_OPT) -o $@ tests/test_inspiral_convergence.c $(ALL_SRC) $(LDFLAGS)
+
+test-inspiral-convergence: $(BUILD)/test_inspiral_convergence
+	@echo "=== Running inspiral convergence test ==="
+	$(BUILD)/test_inspiral_convergence
 
 clean:
 	rm -rf $(BUILD)
