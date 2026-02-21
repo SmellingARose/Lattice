@@ -607,16 +607,46 @@ For LISA / 3G (SNR ~1000):   requirement is ~10^-5  -->  <span class="warn">INSU
 <tr><td>5</td><td>SpECTRE CCE integration scripts</td><td>~100 lines Python</td><td>Worldtube HDF5</td><td>J<sup>+</sup> waveforms</td></tr>
 </table>
 
+<h3>The Real Bottleneck: Evolution Accuracy, Not Extraction Method</h3>
+
+<div class="card" style="border-color: #d29922;">
+<div class="card-header"><span class="card-title">Garbage In, Garbage Out</span> <span class="tag tag-alt">Critical insight</span></div>
+<p>CCE eliminates <em>extraction</em> artifacts, but it cannot fix <em>evolution</em> errors. If the Cauchy data on the worldtube has large truncation error, SpECTRE's CCE will faithfully propagate that error to null infinity. The total waveform error is a chain:</p>
+<pre style="text-align: center; border: none; background: none; color: #c9d1d9;">
+FD truncation error  &rarr;  AMR prolongation error  &rarr;  interpolation error  &rarr;  extraction error
+   O(dx^p)               O(dx^q) at boundaries       O(dx^4) on sphere        O(1/r) or 0 (CCE)
+     ^                          ^                           ^                        ^
+     |                          |                           |                        |
+  DOMINATES               can bottleneck              usually small           CCE removes this
+  at current              6th-order FD if
+  resolutions             prolongation is 4th
+</pre>
+<p>For next-generation detectors (LISA, Cosmic Explorer, Einstein Telescope), <strong>every link in this chain must be addressed</strong>:</p>
+</div>
+
+<h3>The Full Accuracy Chain for Next-Gen Quality</h3>
+<table>
+<tr><th>Link</th><th>Current State</th><th>Required Upgrade</th><th>Why</th></tr>
+<tr><td><strong>1. FD order</strong></td><td class="warn">4th-order (O(dx<sup>4</sup>))</td><td class="good">6th-order (O(dx<sup>6</sup>))</td><td>Reduces truncation error by dx<sup>2</sup> at every point, including worldtube. Ghost=4 already sufficient.</td></tr>
+<tr><td><strong>2. AMR prolongation</strong></td><td class="warn">4th-order Lagrange</td><td class="good">6th-order Lagrange</td><td>4th-order prolongation injects O(dx<sup>4</sup>) error at refinement boundaries, bottlenecking the 6th-order evolution.</td></tr>
+<tr><td><strong>3. Wave zone resolution</strong></td><td class="warn">Extraction at r=50-100M on coarse root level</td><td class="good">Extra AMR level in wave zone, or worldtube at r=25M in refined region</td><td>Root-level dx~1-2M gives O(1) truncation error at the extraction sphere. Useless for precision.</td></tr>
+<tr><td><strong>4. Extraction method</strong></td><td class="warn">Not yet implemented</td><td class="good">Worldtube output + CCE (via SpECTRE)</td><td>Gauge-invariant strain at J<sup>+</sup>, GW memory, no finite-radius artifacts.</td></tr>
+</table>
+
+<div class="evidence">
+<strong>The AMR insight:</strong> With AMR, the extraction sphere at r=50-100M sits on the coarsest grid level. The truncation error <em>at the extraction radius</em> is set by dx_coarse, not dx_fine. This is why CCE with a worldtube at r=20-25M (in the refined region) is superior for AMR codes &mdash; it sidesteps the wave zone resolution problem entirely. The characteristic solver propagates the waveform from r=25M to infinity without needing a resolved Cauchy grid in the wave zone.
+</div>
+
 <h3>The Bottom Line</h3>
 
 <div class="vs">
 <div>
-<strong>For Lattice's Current Science Goals</strong>
-<p style="margin-top: 6px;">Fixed-radius extraction with polynomial extrapolation is the right choice. It is simple, self-contained, well-tested, and accurate enough for any binary inspiral waveform that will be compared to LIGO observations at current sensitivity. Every published NR waveform before ~2020 used this method. It works.</p>
+<strong>For Current LIGO Science</strong>
+<p style="margin-top: 6px;">Fixed-radius extraction with polynomial extrapolation works. Truncation error dominates extraction error at current resolutions. Implement this first for quick diagnostics and debugging.</p>
 </div>
 <div>
-<strong>For Future-Proofing</strong>
-<p style="margin-top: 6px;">Design the extraction sphere infrastructure to also output worldtube data for CCE. The marginal cost is small (same interpolation, just more quantities stored to disk). When precision science demands gauge-invariant waveforms at J<sup>+</sup> &mdash; GW memory, LISA, 3G detectors &mdash; the CCE pipeline is ready to plug in via SpECTRE's standalone module.</p>
+<strong>For Next-Gen Detectors (LISA / 3G)</strong>
+<p style="margin-top: 6px;">The full chain is required: 6th-order FD + 6th-order prolongation + worldtube at r~25M (in the AMR-refined region) + CCE via SpECTRE. Fixing only the extraction without fixing the evolution accuracy is pointless &mdash; and fixing only the evolution without CCE leaves gauge artifacts and missing GW memory.</p>
 </div>
 </div>
 

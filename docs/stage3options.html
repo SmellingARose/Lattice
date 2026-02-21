@@ -285,15 +285,34 @@ rhs_Gamma[i] += ... - <span class="num">2.0</span> * kappa1_times_lapse * Z_over
 <h3>Extraction Method Comparison</h3>
 <div class="vs">
 <div>
-<strong>Fixed-radius + extrapolation</strong> <span class="tag tag-best">Recommended</span><br>
+<strong>Fixed-radius + extrapolation</strong> <span class="tag tag-rec">Diagnostics + current LIGO</span><br>
 <p>Compute Psi4 on spheres at 4-6 radii, extrapolate to r&rarr;&infin;. Accuracy &lt;1% for BBH. Standard approach — what all codes used for first production waveforms.</p>
 <p>Requires: sphere interpolation, s=-2 Y_lm decomposition, Gauss-Legendre quadrature.</p>
+<p class="warn">Limitation: extraction spheres at r=50-100M sit on the coarsest AMR level. Truncation error there is O(dx_coarse^p), which can be large.</p>
 </div>
 <div>
-<strong>Cauchy-Characteristic Extraction (CCE)</strong> <span class="tag tag-future">Long-term</span><br>
-<p>Evolve Einstein equations on null characteristics to future null infinity. Eliminates all finite-radius artifacts, captures GW memory. AthenaK feeds worldtube data to SpECTRE's CCE module.</p>
-<p>Essentially a separate PDE solver. Defer to Phase 3+.</p>
+<strong>CCE via SpECTRE worldtube</strong> <span class="tag tag-best">Next-gen detectors</span><br>
+<p>Output metric data on a worldtube at r=20-25M (in the AMR-refined region), feed to SpECTRE's CCE module. Gauge-invariant strain at J<sup>+</sup>, captures GW memory.</p>
+<p>We don't build CCE — we output worldtube data (~300 LOC C), SpECTRE does the rest. This is exactly what AthenaK does (arXiv:2506.06838).</p>
+<p class="good">Advantage: worldtube sits where AMR resolution is fine, sidestepping the wave zone resolution problem.</p>
 </div>
+</div>
+
+<h3>The Accuracy Chain: Extraction Is Not Enough</h3>
+<div class="card" style="border-color: #d29922;">
+<div class="card-header"><span class="card-title">Every link matters for next-gen quality</span> <span class="tag tag-alt">Critical</span></div>
+<p>CCE removes extraction artifacts, but cannot fix evolution errors. The waveform error is a chain:</p>
+<pre>FD truncation  &rarr;  AMR prolongation  &rarr;  worldtube interpolation  &rarr;  extraction
+  O(dx^p)          O(dx^q) at boundaries     O(dx^4) on sphere         O(1/r) or 0
+  <span class="warn">DOMINATES</span>        <span class="warn">can bottleneck</span>            usually small           CCE fixes this</pre>
+<p>For LISA/3G detectors, <strong>all four</strong> must be addressed:</p>
+<ul>
+<li><strong>6th-order FD</strong> — reduces truncation error at every point including the worldtube</li>
+<li><strong>6th-order prolongation</strong> — prevents AMR boundaries from injecting 4th-order error into a 6th-order solution</li>
+<li><strong>Worldtube at r~25M</strong> — in the refined AMR region, not on the coarse root grid at r=100M</li>
+<li><strong>CCE</strong> — gauge-invariant propagation to J<sup>+</sup>, GW memory, no finite-radius artifacts</li>
+</ul>
+<p>Fixing only the extraction without the evolution accuracy is pointless. Fixing only the evolution without CCE leaves gauge artifacts and missing GW memory. <strong>Both are required.</strong></p>
 </div>
 
 <h3>Mode Decomposition</h3>
