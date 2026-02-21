@@ -1,0 +1,678 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gravitational Waveform Extraction: Fixed-Radius vs CCE</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; background: #0d1117; color: #c9d1d9; line-height: 1.6; max-width: 980px; margin: 0 auto; padding: 24px 20px; }
+  h1 { font-size: 1.7em; color: #f0f6fc; margin-bottom: 4px; }
+  .subtitle { color: #8b949e; font-size: 0.95em; margin-bottom: 28px; }
+  h2 { font-size: 1.25em; margin: 36px 0 14px 0; padding-bottom: 6px; border-bottom: 1px solid #21262d; color: #f0f6fc; }
+  h3 { font-size: 1.05em; color: #d2a8ff; margin: 20px 0 8px 0; }
+  .card { background: #161b22; border: 1px solid #21262d; border-radius: 8px; padding: 16px 18px; margin-bottom: 14px; }
+  .card-header { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
+  .card-title { font-size: 1.05em; font-weight: 600; color: #f0f6fc; }
+  .tag { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 0.75em; font-weight: 600; }
+  .tag-rec { background: #23883050; color: #3fb950; border: 1px solid #23883080; }
+  .tag-alt { background: #9e6a0050; color: #d29922; border: 1px solid #9e6a0080; }
+  .tag-future { background: #8b1d3250; color: #f47067; border: 1px solid #8b1d3280; }
+  .tag-best { background: #1f6feb50; color: #58a6ff; border: 1px solid #1f6feb80; }
+  p, li { font-size: 0.9em; color: #b1bac4; }
+  ul, ol { padding-left: 20px; margin: 6px 0; }
+  li { margin-bottom: 3px; }
+  pre { background: #0d1117; border: 1px solid #21262d; border-radius: 6px; padding: 10px 12px; overflow-x: auto; font-size: 0.8em; line-height: 1.45; color: #e6edf3; margin: 8px 0; font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace; }
+  code { font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace; font-size: 0.88em; background: #161b22; padding: 1px 5px; border-radius: 3px; }
+  .kw { color: #ff7b72; } .fn { color: #d2a8ff; } .cm { color: #8b949e; } .num { color: #79c0ff; } .str { color: #a5d6ff; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 0.85em; }
+  th { text-align: left; padding: 6px 8px; border-bottom: 2px solid #30363d; color: #8b949e; font-size: 0.85em; }
+  td { padding: 5px 8px; border-bottom: 1px solid #21262d; }
+  tr:hover { background: #161b22; }
+  .vs { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 8px 0; }
+  .vs > div { background: #0d1117; border: 1px solid #21262d; border-radius: 6px; padding: 12px; }
+  .vs > div > strong { color: #8b949e; font-size: 0.8em; text-transform: uppercase; letter-spacing: 0.5px; }
+  .evidence { border-left: 3px solid #30363d; padding-left: 12px; margin: 8px 0; font-size: 0.85em; color: #8b949e; }
+  hr { border: none; border-top: 1px solid #21262d; margin: 32px 0; }
+  .warn { color: #f47067; } .good { color: #3fb950; } .note { color: #d29922; }
+  details { margin: 8px 0; }
+  summary { cursor: pointer; color: #58a6ff; font-size: 0.9em; }
+  summary:hover { text-decoration: underline; }
+  a { color: #58a6ff; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .ascii-art { background: #0d1117; border: 1px solid #21262d; border-radius: 6px; padding: 14px 16px; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.72em; line-height: 1.35; color: #8b949e; overflow-x: auto; white-space: pre; margin: 10px 0; }
+  .eq { font-family: 'Times New Roman', serif; font-size: 1.05em; color: #e6edf3; text-align: center; display: block; margin: 10px 0; padding: 8px; background: #161b22; border-radius: 6px; }
+  .toc { background: #161b22; border: 1px solid #21262d; border-radius: 8px; padding: 14px 18px; margin: 16px 0; }
+  .toc ol { counter-reset: toc; padding-left: 0; }
+  .toc li { counter-increment: toc; list-style: none; margin: 3px 0; }
+  .toc li::before { content: counter(toc) ". "; color: #8b949e; font-size: 0.85em; }
+  .toc a { font-size: 0.9em; }
+</style>
+</head>
+<body>
+
+<h1>Gravitational Waveform Extraction</h1>
+<p class="subtitle">Fixed-Radius Extrapolation vs Cauchy-Characteristic Extraction (CCE) &mdash; a practical comparison for Lattice. February 2026.</p>
+
+<div class="toc">
+<strong style="color: #f0f6fc; font-size: 0.9em;">Contents</strong>
+<ol>
+<li><a href="#background">Background: From Psi4 to h(t)</a></li>
+<li><a href="#fixed-radius">Method 1: Fixed-Radius Extraction + Extrapolation</a></li>
+<li><a href="#cce">Method 2: Cauchy-Characteristic Extraction (CCE)</a></li>
+<li><a href="#comparison">Head-to-Head Comparison</a></li>
+<li><a href="#accuracy">Accuracy Requirements: What Do Detectors Need?</a></li>
+<li><a href="#hybrid">Hybrid Approaches</a></li>
+<li><a href="#emerging">Emerging Alternative: Hyperboloidal Extraction</a></li>
+<li><a href="#lattice">What Lattice Needs for Each Approach</a></li>
+<li><a href="#recommendation">Recommendation for Lattice</a></li>
+<li><a href="#references">References</a></li>
+</ol>
+</div>
+
+<!-- ================================================================ -->
+<h2 id="background">1. Background: From Psi4 to h(t)</h2>
+
+<p>Gravitational wave detectors measure the <strong>strain</strong> h(t) = h<sub>+</sub> - i h<sub>x</sub>, the fractional change in arm length. Numerical relativity simulations compute the <strong>Weyl scalar</strong> Psi4, a curvature invariant. The two are related by a double time integral:</p>
+
+<span class="eq">Psi4 = d<sup>2</sup>h / dt<sup>2</sup> &nbsp;&nbsp;&rArr;&nbsp;&nbsp; h(t) = &int;&int; Psi4 dt dt</span>
+
+<p>Equivalently, the Bondi news function N(t) = dh/dt satisfies Psi4 = dN/dt. CCE gives the news N directly at future null infinity; fixed-radius extraction gives Psi4 at finite radius, requiring both integration and extrapolation.</p>
+
+<p>The fundamental problem: <strong>Psi4 is only cleanly defined at future null infinity</strong> (denoted J<sup>+</sup> or "scri+"), where the spacetime is asymptotically flat. At any finite radius r, the measured Psi4 contains:</p>
+<ul>
+<li><strong>The physical radiation:</strong> Falls off as 1/r (the piece we want)</li>
+<li><strong>Near-field contamination:</strong> Coulomb-like terms falling as 1/r<sup>2</sup>, 1/r<sup>3</sup>, ... (the piece we don't want)</li>
+<li><strong>Gauge artifacts:</strong> Coordinate-dependent contributions that vanish only at J<sup>+</sup></li>
+</ul>
+
+<p>Both extraction methods attempt to isolate the physical radiation. They differ in <em>how</em>.</p>
+
+<h3>Spherical Harmonic Decomposition</h3>
+<p>Both methods decompose the signal into angular modes using spin-weight -2 spherical harmonics:</p>
+<span class="eq">Psi4(t,r,theta,phi) = &sum;<sub>l,m</sub> Psi4<sup>lm</sup>(t,r) &middot; <sub>-2</sub>Y<sub>lm</sub>(theta,phi)</span>
+<p>The dominant mode is (l,m)=(2,2). Subdominant modes (2,1), (3,3), (4,4) matter for parameter estimation. The m=0 modes carry the <strong>gravitational wave memory</strong> &mdash; a permanent displacement that only CCE captures correctly.</p>
+
+<!-- ================================================================ -->
+<hr>
+<h2 id="fixed-radius">2. Method 1: Fixed-Radius Extraction + Extrapolation</h2>
+
+<h3>How It Works</h3>
+
+<div class="ascii-art">
+              Cauchy Evolution Grid
+   +-----------------------------------------+
+   |                                         |
+   |    ****        ****                     |
+   |   * BH *------* BH *    (binary orbit)  |
+   |    ****        ****                     |
+   |         \    /                           |
+   |          \/  GW radiation propagates     |
+   |          /\  outward through grid        |
+   |         /    \                           |
+   |   - - -[r=50M]- - - - extraction sphere |
+   |                                         |
+   |   - - - - [r=75M] - - - extraction sphere
+   |                                         |
+   |   - - - - - [r=100M]- - extraction sphere
+   |                                         |
+   |   - - - - - - [r=150M] - extraction sphere
+   |                                         |
+   |   - - - - - - - [r=200M]  extraction sphere
+   |                                         |
+   +-------[Sommerfeld BC at outer boundary]-+
+                     |
+                     v
+         Polynomial extrapolation in 1/r
+         to approximate r -> infinity
+</div>
+
+<h3>Step-by-Step Pipeline</h3>
+<div class="card">
+<ol>
+<li><strong>Compute Psi4 on the Cartesian grid.</strong> At each timestep, construct the Weyl tensor projection using the evolved CCZ4 fields (metric, extrinsic curvature, Christoffel symbols). This requires first and second spatial derivatives of the metric, plus a null tetrad constructed from the unit radial vector.</li>
+<li><strong>Interpolate onto extraction spheres.</strong> Place 4-6 coordinate spheres at radii r = {50, 75, 100, 150, 200} M. At each timestep, interpolate Psi4 (real and imaginary parts) from the Cartesian grid onto N<sub>theta</sub> x N<sub>phi</sub> angular points on each sphere. Typical: 20 x 40 = 800 points per sphere, using Gauss-Legendre nodes in theta and uniform nodes in phi.</li>
+<li><strong>Decompose into (l,m) modes.</strong> At each angular point, multiply by conj(<sub>-2</sub>Y<sub>lm</sub>) and integrate over the sphere using quadrature weights. Output: the complex time series r*Psi4<sup>lm</sup>(t) at each extraction radius.</li>
+<li><strong>Extrapolate to r -> infinity.</strong> For each mode and each time sample, fit the value at multiple radii to a polynomial in 1/r and evaluate at 1/r = 0. Typically use polynomial orders N=2,3,4 and compare for convergence:
+<span class="eq">r &middot; Psi4<sup>lm</sup>(t,r) = a<sub>0</sub>(t) + a<sub>1</sub>(t)/r + a<sub>2</sub>(t)/r<sup>2</sup> + ... </span>
+The coefficient a<sub>0</sub>(t) is the extrapolated value at infinity.</li>
+<li><strong>Integrate to strain.</strong> Convert Psi4<sup>lm</sup>(t) to strain h<sup>lm</sup>(t) via Fixed Frequency Integration (FFI): transform to frequency domain, divide by -omega<sup>2</sup>, apply a low-frequency cutoff f<sub>0</sub> to suppress drift, transform back. The cutoff f<sub>0</sub> is chosen slightly below the orbital frequency.</li>
+</ol>
+</div>
+
+<h3>Finite-Radius Error Budget</h3>
+<table>
+<tr><th>Error Source</th><th>Scaling</th><th>Typical Magnitude</th><th>Mitigated By</th></tr>
+<tr><td>Near-field (Coulomb) terms</td><td>O(1/r<sup>2</sup>)</td><td>Phase: ~0.1 rad at r=100M</td><td>Extrapolation in 1/r</td></tr>
+<tr><td>Gauge artifacts</td><td>O(1/r), gauge-dependent</td><td>Mode-dependent, worst for m=0</td><td>Partially by extrapolation</td></tr>
+<tr><td>Extrapolation polynomial error</td><td>O(1/r<sup>N+1</sup>)</td><td>~3 x 10<sup>-4</sup> mismatch (N=4)</td><td>Higher polynomial order, more radii</td></tr>
+<tr><td>Interpolation onto spheres</td><td>O(dx<sup>p</sup>)</td><td>Negligible with 4th-order interp</td><td>Higher-order interpolation</td></tr>
+<tr><td>Quadrature (mode coupling)</td><td>O(N<sub>theta</sub><sup>-q</sup>)</td><td>Negligible with 2x oversampling</td><td>More angular points</td></tr>
+<tr><td>FFI integration drift</td><td>Low-frequency</td><td class="warn">Can dominate if f<sub>0</sub> poorly chosen</td><td>Careful choice of cutoff frequency</td></tr>
+</table>
+
+<h3>Strengths</h3>
+<ul>
+<li><span class="good">Simple to implement</span> &mdash; ~300 lines of C for the in-simulation part, ~200 lines of Python for post-processing</li>
+<li><span class="good">Well-tested</span> &mdash; every NR code has used this for 15+ years</li>
+<li><span class="good">No external dependencies</span> &mdash; the entire pipeline is self-contained</li>
+<li><span class="good">Fast at runtime</span> &mdash; interpolation + quadrature is negligible cost compared to evolution</li>
+<li><span class="good">Good enough for most science</span> &mdash; produced every waveform in the first LIGO/Virgo catalogs</li>
+</ul>
+
+<h3>Limitations</h3>
+<ul>
+<li><span class="warn">Cannot capture gravitational wave memory</span> &mdash; the m=0 modes carry a permanent displacement that is suppressed by the extrapolation procedure and by the FFI integration cutoff</li>
+<li><span class="warn">Residual gauge dependence</span> &mdash; Taylor et al. (2013) showed that running the same physics with two different gauge conditions produces the same CCE waveforms but <em>different</em> extrapolated waveforms</li>
+<li><span class="warn">Polynomial extrapolation can diverge</span> &mdash; the 1/r expansion is asymptotic, not convergent. High polynomial orders may oscillate. Typical practice: use N=2 to N=4 and take the spread as an error bar</li>
+<li><span class="warn">Requires large grids</span> &mdash; extraction spheres at r=200M need the grid to extend that far, eating into resolution budget. AMR helps but adds complexity.</li>
+</ul>
+
+<!-- ================================================================ -->
+<hr>
+<h2 id="cce">3. Method 2: Cauchy-Characteristic Extraction (CCE)</h2>
+
+<h3>The Core Idea</h3>
+
+<p>Instead of extrapolating finite-radius data with a polynomial fit, CCE <strong>solves Einstein's equations on null (light-cone) slices</strong> from a finite worldtube all the way to future null infinity. The waveform is read off at J<sup>+</sup>, where it is gauge-invariant by definition.</p>
+
+<div class="ascii-art">
+   Cauchy Domain                 Characteristic Domain
+   (3+1 spacelike slices)        (null slices u = const)
+
+   +-----------------------+
+   |                       |
+   |   ****     ****       |       Null slices foliate
+   |  * BH *---* BH *      |       from worldtube to
+   |   ****     ****       |       future null infinity
+   |       \  /            |
+   |     GW radiation      |       u=t3  /
+   |       / \             |            /   -----> J+ (scri+)
+   |      /   \            |       u=t2  /
+   |     /     \           |            /   -----> J+
+   +----[worldtube r=R]----+       u=t1  /
+         |    ^    |              /   -----> J+
+         |    |    |         worldtube
+         |  metric data      (inner boundary)
+         |  stored here
+         v
+   Cauchy code writes        CCE code reads worldtube,
+   g_ij, K_ij, alpha,       evolves Bondi-Sachs equations
+   beta^i on the worldtube   on null slices out to J+
+</div>
+
+<h3>Step-by-Step Pipeline</h3>
+<div class="card">
+<ol>
+<li><strong>Choose a worldtube.</strong> A coordinate sphere at radius R (typically 50-200 M). During the Cauchy evolution, store the full 3-metric g<sub>ij</sub>, lapse alpha, shift beta<sup>i</sup>, and their time/spatial derivatives on this sphere at every output timestep. Store as spherical harmonic coefficients up to l<sub>max</sub> ~ 20.</li>
+<li><strong>Transform to Bondi-Sachs gauge.</strong> The Cauchy data is in 3+1 coordinates (Cartesian, with 1+log lapse and Gamma-driver shift). The characteristic code needs data in Bondi-Sachs null coordinates. This transformation involves Jacobians, spectral decomposition, and solving a system of ODEs on each angular patch. SpECTRE's <code>PreprocessCceWorldtube</code> handles this automatically.</li>
+<li><strong>Evolve the Bondi-Sachs equations.</strong> The characteristic evolution solves a hierarchical system of hypersurface equations on each null slice u = const:
+<ul style="margin: 4px 0 4px 8px;">
+<li>Start at the worldtube (inner boundary) with known data</li>
+<li>Integrate outward along null rays toward r -> infinity</li>
+<li>The equations are a nested sequence of ODEs + angular differential operators</li>
+<li>The Bondi-Sachs variables: J (shear), U (angular metric), Q (gauge), W (mass aspect), Beta, H, R</li>
+</ul>
+</li>
+<li><strong>Compactify.</strong> The radial coordinate is compactified so that J<sup>+</sup> is at a finite grid point. SpECTRE uses a spectral method (Chebyshev in the compactified radial coordinate) so the entire domain from R to infinity is resolved with ~30-50 radial points.</li>
+<li><strong>Read off the waveform at J<sup>+</sup>.</strong> At the outermost grid point (r = infinity), the Bondi news N and strain h are directly available. No extrapolation needed. No integration of Psi4 needed &mdash; the strain is a primary output.</li>
+</ol>
+</div>
+
+<h3>The Bondi-Sachs Formulation</h3>
+<p>The metric in Bondi-Sachs coordinates takes the form:</p>
+<span class="eq">ds<sup>2</sup> = -(e<sup>2Beta</sup> V/r - r<sup>2</sup> h<sub>AB</sub> U<sup>A</sup> U<sup>B</sup>) du<sup>2</sup> - 2 e<sup>2Beta</sup> du dr - 2 r<sup>2</sup> h<sub>AB</sub> U<sup>B</sup> du dx<sup>A</sup> + r<sup>2</sup> h<sub>AB</sub> dx<sup>A</sup> dx<sup>B</sup></span>
+<p>where u is retarded time (labels null hypersurfaces), r is the luminosity distance, and x<sup>A</sup> = (theta, phi) are angular coordinates. The key feature: the Einstein equations on these null slices decompose into a <strong>nested hierarchy</strong> of equations that can be integrated radially, one variable at a time, given data at the inner boundary. This is fundamentally different from (and cheaper than) the hyperbolic Cauchy evolution.</p>
+
+<h3>What SpECTRE's CCE Module Does</h3>
+<div class="card">
+<div class="card-header"><span class="card-title">SpECTRE CCE (arXiv:2110.08635)</span> <span class="tag tag-best">State of the art</span></div>
+<p>The SpECTRE CCE module is the current standard implementation. Key features:</p>
+<ul>
+<li><strong>Standalone mode:</strong> Accepts worldtube data from <em>any</em> Cauchy code (not just SpECTRE) via HDF5 files. AthenaK, GR-Athena++, and Einstein Toolkit have all used it.</li>
+<li><strong>Input formats:</strong> Cartesian metric (nodal or modal), ADM variables (with extrinsic curvature), or native Bondi-Sachs. A preprocessing utility handles conversion.</li>
+<li><strong>Spectral convergence:</strong> Uses spectral methods in both radial and angular directions. Free of pure-gauge logarithms that plagued earlier implementations.</li>
+<li><strong>Outputs:</strong> Strain h, news N, all five Weyl scalars (Psi0 through Psi4), all at J<sup>+</sup> and decomposed into spherical harmonic modes.</li>
+<li><strong>Angular resolution:</strong> Typically l<sub>max</sub> = 20 with filter at l = 18. No improvement above l<sub>max</sub> = 24.</li>
+<li><strong>Speed:</strong> Fast enough to be a post-processing step. For a typical BBH simulation, CCE takes minutes to hours (compared to days-weeks for the Cauchy evolution itself).</li>
+</ul>
+</div>
+
+<h3>Strengths</h3>
+<ul>
+<li><span class="good">Gauge-invariant by construction</span> &mdash; the waveform at J<sup>+</sup> is physically unambiguous</li>
+<li><span class="good">Captures gravitational wave memory</span> &mdash; the m=0 modes and the non-oscillatory displacement are correctly extracted</li>
+<li><span class="good">No extrapolation error</span> &mdash; the waveform is computed at infinity, not fitted there</li>
+<li><span class="good">Produces strain directly</span> &mdash; no need for FFI integration of Psi4 (avoids integration drift entirely)</li>
+<li><span class="good">Standalone module exists</span> &mdash; SpECTRE's CCE is freely available and accepts data from external codes</li>
+</ul>
+
+<h3>Limitations</h3>
+<ul>
+<li><span class="warn">Worldtube radius sensitivity</span> &mdash; CCE waveforms show "stronger dependence on the radius of the CCE worldtube" than extrapolation on extraction radius (Taylor et al. 2013). Must test multiple radii.</li>
+<li><span class="warn">Data volume</span> &mdash; storing full metric + derivatives on the worldtube at every output step generates large files (GBs to tens of GBs for long inspirals)</li>
+<li><span class="warn">Implementation complexity</span> &mdash; writing a CCE code from scratch is a multi-year effort. The Bondi-Sachs equations are intricate (spectral angular operators, compactified radial domain, gauge transformations).</li>
+<li><span class="warn">Junk radiation</span> &mdash; initial data artifacts ("junk radiation") pass through the worldtube and produce spurious oscillations in the CCE output. Must discard the first ~100-200 M of CCE data.</li>
+<li><span class="warn">C++ dependency</span> &mdash; SpECTRE is a large C++ codebase. Using it as a library or standalone tool adds a build dependency.</li>
+</ul>
+
+<!-- ================================================================ -->
+<hr>
+<h2 id="comparison">4. Head-to-Head Comparison</h2>
+
+<h3>Accuracy Metrics</h3>
+<table>
+<tr><th>Metric</th><th>Fixed-Radius + Extrapolation</th><th>CCE</th><th>Source</th></tr>
+<tr>
+<td>Mismatch (mutual)</td>
+<td>~3 x 10<sup>-4</sup></td>
+<td>~3 x 10<sup>-4</sup></td>
+<td><a href="https://arxiv.org/abs/1512.06800">1512.06800</a></td>
+</tr>
+<tr>
+<td>Phase error (l=2,m=2)</td>
+<td>~0.01-0.1 rad at r=100M before extrap</td>
+<td class="good">Gauge-invariant at J<sup>+</sup></td>
+<td><a href="https://arxiv.org/abs/1309.3605">1309.3605</a></td>
+</tr>
+<tr>
+<td>Amplitude error</td>
+<td>0.2-0.4% (extrap to infinity)</td>
+<td>0.2-0.4% (at J<sup>+</sup>)</td>
+<td><a href="https://arxiv.org/abs/2506.06838">2506.06838</a></td>
+</tr>
+<tr>
+<td>GW memory (m=0 modes)</td>
+<td class="warn">Missing &mdash; suppressed by procedure</td>
+<td class="good">Correctly captured</td>
+<td><a href="https://arxiv.org/abs/1309.3605">1309.3605</a></td>
+</tr>
+<tr>
+<td>Gauge dependence</td>
+<td class="warn">Different gauges give different waveforms</td>
+<td class="good">Gauge-invariant</td>
+<td><a href="https://arxiv.org/abs/1309.3605">1309.3605</a></td>
+</tr>
+<tr>
+<td>Robustness to truncation error</td>
+<td class="note">Has tail of outlier mismatches</td>
+<td class="good">Fewer outliers, more robust</td>
+<td><a href="https://arxiv.org/abs/1512.06800">1512.06800</a></td>
+</tr>
+<tr>
+<td>Sensitivity to radius choice</td>
+<td>Moderate (extraction radii)</td>
+<td class="note">Stronger (worldtube radius)</td>
+<td><a href="https://arxiv.org/abs/1512.06800">1512.06800</a></td>
+</tr>
+</table>
+
+<div class="evidence">
+Key finding from Taylor et al. (2013) and Chu et al. (2016): for the dominant (2,2) mode of equal-mass non-spinning BBH mergers, the two methods agree to within ~3 x 10<sup>-4</sup> in noise-weighted mismatch. At this level, <strong>truncation error from the Cauchy evolution itself typically dominates over extraction error</strong>. The methods diverge most significantly for (a) m=0 memory modes, (b) subdominant modes at large mass ratio, and (c) long inspirals where small phase errors accumulate.
+</div>
+
+<h3>Side-by-Side: What You Get</h3>
+<div class="vs">
+<div>
+<strong>Fixed-Radius Extrapolation Output</strong>
+<ul style="margin-top: 6px;">
+<li>r * Psi4<sup>lm</sup>(t) at each extraction radius</li>
+<li>Extrapolated Psi4<sup>lm</sup>(t) at r -> infinity</li>
+<li>Strain h<sup>lm</sup>(t) via FFI (post-processing)</li>
+<li><span class="warn">No memory modes</span></li>
+<li><span class="warn">Gauge-dependent</span></li>
+</ul>
+</div>
+<div>
+<strong>CCE Output</strong>
+<ul style="margin-top: 6px;">
+<li>Strain h<sup>lm</sup>(t) directly at J<sup>+</sup></li>
+<li>News N<sup>lm</sup>(t) = dh/dt at J<sup>+</sup></li>
+<li>All five Weyl scalars at J<sup>+</sup></li>
+<li><span class="good">Memory modes included</span></li>
+<li><span class="good">Gauge-invariant</span></li>
+</ul>
+</div>
+</div>
+
+<h3>Cost Comparison</h3>
+<table>
+<tr><th>Aspect</th><th>Fixed-Radius Extrapolation</th><th>CCE (using SpECTRE standalone)</th></tr>
+<tr><td>In-simulation cost</td><td class="good">Negligible (interpolation)</td><td>Worldtube I/O: ~1-5% overhead</td></tr>
+<tr><td>Post-processing time</td><td class="good">Seconds (Python FFI + extrap)</td><td>Minutes to hours (characteristic evolution)</td></tr>
+<tr><td>Storage</td><td class="good">~MB (mode time series)</td><td class="note">~GB (full worldtube data)</td></tr>
+<tr><td>Implementation effort (new code)</td><td class="good">~500 lines (C + Python)</td><td class="warn">Use SpECTRE externally OR multi-year from scratch</td></tr>
+<tr><td>External dependencies</td><td class="good">None</td><td class="note">SpECTRE (C++), HDF5, Python scri package</td></tr>
+</table>
+
+<h3>What Do Production Codes Use?</h3>
+<table>
+<tr><th>Code</th><th>Primary Extraction</th><th>CCE?</th><th>Notes</th></tr>
+<tr><td><strong>SXS/SpEC</strong></td><td>Both</td><td class="good">Yes (SpECTRE)</td><td>Ext-CCE catalog has 13 simulations with both. Extrapolation still primary for most catalog entries.</td></tr>
+<tr><td><strong>AthenaK</strong></td><td>CCE</td><td class="good">Yes (SpECTRE)</td><td>GW150914 simulation used worldtube at r=50M fed to SpECTRE CCE (<a href="https://arxiv.org/abs/2506.06838">2506.06838</a>).</td></tr>
+<tr><td><strong>GR-Athena++</strong></td><td>Both</td><td class="good">Yes (SpECTRE)</td><td>BBH waveforms at multiple resolutions (<a href="https://arxiv.org/abs/2411.11989">2411.11989</a>).</td></tr>
+<tr><td><strong>Einstein Toolkit</strong></td><td>Extrapolation</td><td class="note">Possible</td><td>WeylScal4 + Multipoles thorns. CCE via external pipeline.</td></tr>
+<tr><td><strong>GRChombo</strong></td><td>Extrapolation</td><td class="note">Planned</td><td>Psi4 at finite radii with extrapolation. CCE interface in development.</td></tr>
+<tr><td><strong>BAM</strong></td><td>Extrapolation</td><td>No</td><td>Established extrapolation pipeline.</td></tr>
+</table>
+
+<div class="evidence">
+The trend is clear: <strong>new codes (AthenaK, GR-Athena++) are adopting CCE from the start</strong> via SpECTRE's standalone module. Established codes (Einstein Toolkit, GRChombo, BAM) still primarily use extrapolation, with CCE being added gradually. The SXS collaboration maintains both methods in parallel.
+</div>
+
+<!-- ================================================================ -->
+<hr>
+<h2 id="accuracy">5. Accuracy Requirements: What Do Detectors Need?</h2>
+
+<h3>Lindblom Criteria (arXiv:0809.3844)</h3>
+<p>Lindblom (2009) derived the fundamental accuracy standards for gravitational wave data analysis. A model waveform h<sub>model</sub> must satisfy:</p>
+
+<table>
+<tr><th>Application</th><th>Mismatch Requirement</th><th>What This Means</th></tr>
+<tr><td><strong>Detection</strong></td><td>Mismatch &lt; 0.03 (3%)</td><td>Lose &lt;10% of events due to template inaccuracy</td></tr>
+<tr><td><strong>Parameter estimation</strong> (current LIGO)</td><td>Mismatch &lt; 1/(2 * SNR<sup>2</sup>)</td><td>At SNR=20: mismatch &lt; 1.25 x 10<sup>-3</sup></td></tr>
+<tr><td><strong>Parameter estimation</strong> (design LIGO)</td><td>Mismatch &lt; 2 x 10<sup>-4</sup></td><td>At SNR=80 (loudest expected events)</td></tr>
+<tr><td><strong>LISA / 3G detectors</strong></td><td class="warn">Mismatch &lt; 10<sup>-6</sup> to 10<sup>-5</sup></td><td>SNR up to ~1000. Tenfold accuracy increase needed.</td></tr>
+</table>
+
+<h3>Where Does Extraction Error Sit?</h3>
+
+<div class="card">
+<div class="card-header"><span class="card-title">The Error Hierarchy</span></div>
+<pre>
+Total waveform error = truncation error + extraction error + modeling error
+
+For current production simulations:
+
+  Truncation error (finite grid spacing):     ~10^-3 to 10^-4  mismatch
+  Extraction error (finite radius / method):  ~3 x 10^-4       mismatch
+  Modeling error (PN hybridization, etc.):    ~10^-4 to 10^-5  mismatch
+                                              ________________
+  Combined:                                   ~10^-3           mismatch
+
+For current LIGO (SNR ~20):  requirement is ~10^-3  -->  <span class="good">ADEQUATE</span>
+For design LIGO (SNR ~80):   requirement is ~2x10^-4 --> <span class="note">MARGINAL</span>
+For LISA / 3G (SNR ~1000):   requirement is ~10^-5  -->  <span class="warn">INSUFFICIENT</span>
+</pre>
+<p>At current LIGO sensitivity, <strong>truncation error and extraction error are comparable</strong>. Improving one without the other gives diminishing returns. For 3G detectors and LISA, both must improve by 1-2 orders of magnitude &mdash; which is where CCE (or hyperboloidal methods) becomes essential.</p>
+</div>
+
+<h3>When Does Extraction Method Matter?</h3>
+<table>
+<tr><th>Scenario</th><th>Extrapolation Sufficient?</th><th>CCE Needed?</th><th>Why</th></tr>
+<tr><td>Equal-mass BBH, dominant mode, current LIGO</td><td class="good">Yes</td><td>No</td><td>Extraction error below detector threshold</td></tr>
+<tr><td>Unequal mass (q &gt; 4), subdominant modes</td><td class="note">Marginal</td><td class="note">Helpful</td><td>Higher modes are weaker, near-field effects relatively larger</td></tr>
+<tr><td>Gravitational wave memory measurement</td><td class="warn">No</td><td class="good">Essential</td><td>Extrapolation cannot capture memory</td></tr>
+<tr><td>High-precision ringdown (QNM testing)</td><td class="note">Usually OK</td><td class="good">Better</td><td>Gauge artifacts near merger can bias QNM fits</td></tr>
+<tr><td>LISA / 3G detector science</td><td class="warn">No</td><td class="good">Essential</td><td>SNR ~1000 demands ~10<sup>-5</sup> mismatch</td></tr>
+<tr><td>Quick look / debugging / development</td><td class="good">Yes</td><td>No</td><td>Speed matters more than last digit of accuracy</td></tr>
+</table>
+
+<!-- ================================================================ -->
+<hr>
+<h2 id="hybrid">6. Hybrid Approaches</h2>
+
+<p>In practice, nobody runs <em>only</em> CCE or <em>only</em> extrapolation. The standard workflow is layered:</p>
+
+<div class="ascii-art">
+    Development Cycle                Production Catalog
+    ========================         ========================
+
+    1. Evolve with Cauchy code       1. Same Cauchy evolution
+           |                                |
+           v                                v
+    2. Quick-look Psi4 at             2. Store worldtube data
+       r=100M (real-time diagnostic)     (full metric on sphere)
+           |                                |
+           v                                v
+    3. Extrapolate to infinity         3. Run SpECTRE CCE
+       (minutes of post-processing)     (hours of post-processing)
+           |                                |
+           v                                v
+    4. "Is the physics right?"         4. Final strain at J+
+       (gauge wave test, convergence)     (gauge-invariant, with memory)
+           |                                |
+           v                                v
+    5. Iterate on parameters          5. Package for catalog
+                                        (LIGO HDF5 format)
+</div>
+
+<div class="card">
+<div class="card-header"><span class="card-title">The AthenaK Model (arXiv:2506.06838)</span> <span class="tag tag-best">Best current practice</span></div>
+<p>AthenaK's GW150914 simulation demonstrates the modern hybrid workflow:</p>
+<ul>
+<li>During evolution: output full metric data on a cylindrical worldtube at r = 49-51 M</li>
+<li>Also extract Psi4 at multiple finite radii for quick comparison</li>
+<li>Post-simulation: convert worldtube data with scripts, feed to SpECTRE CCE</li>
+<li>Apply <code>scri</code> package to transform to super rest frame of the binary</li>
+<li>Result: phase accuracy ~0.12-0.35 rad vs SXS reference (dominated by resolution, not extraction)</li>
+<li>Amplitude accuracy: 0.2-0.4%</li>
+</ul>
+<p>Total CCE pipeline adds negligible cost compared to the Cauchy evolution itself.</p>
+</div>
+
+<h3>Middle Ground: Memory Correction</h3>
+<p>The SXS catalog applies a <strong>memory correction</strong> to extrapolated waveforms: compute the expected memory from the energy flux of the (l &ge; 2, m &ne; 0) modes using the Christodoulou formula, then add it to the m=0 modes. This recovers most of the memory signal without running CCE. The <code>scri</code> Python package implements this. It is an approximation &mdash; the correction assumes only leading-order memory and misses memory-of-memory effects &mdash; but it bridges the gap for catalogs that lack full CCE.</p>
+
+<!-- ================================================================ -->
+<hr>
+<h2 id="emerging">7. Emerging Alternative: Perturbative Hyperboloidal Extraction (PHE)</h2>
+
+<div class="card">
+<div class="card-header"><span class="card-title">arXiv:2508.05743 (2025)</span> <span class="tag tag-alt">New approach</span></div>
+<p>A third method is emerging: <strong>perturbative hyperboloidal extraction</strong>. The idea: use NR data at a finite worldtube as the inner boundary for a <em>perturbative</em> (linearized) time-domain evolution on hyperboloidal slices that reach J<sup>+</sup>.</p>
+<ul>
+<li>Solves the Regge-Wheeler-Zerilli equations (linearized Einstein equations for perturbations of Schwarzschild) on hyperboloidal coordinates</li>
+<li>Much simpler than full Bondi-Sachs evolution &mdash; 1D radial equations per (l,m) mode</li>
+<li>Demonstrated to match CCE waveforms for BBH mergers, gravitational collapse, and neutron star mergers</li>
+<li>"Can sometimes provide even more robust predictions than CCE, reducing unphysical features"</li>
+<li>Captures memory effects (hyperboloidal slices reach J<sup>+</sup>)</li>
+<li>Implementation: 1D PDE solver per mode &mdash; much more tractable than full CCE</li>
+</ul>
+<p>Too early to call this production-ready, but it may become the practical middle ground between extrapolation and full CCE in the next 2-3 years.</p>
+</div>
+
+<!-- ================================================================ -->
+<hr>
+<h2 id="lattice">8. What Lattice Needs for Each Approach</h2>
+
+<h3>Current State</h3>
+<p>Lattice currently has the infrastructure for fixed-radius extraction but not yet the extraction pipeline itself:</p>
+
+<table>
+<tr><th>Component</th><th>Status</th><th>Location</th></tr>
+<tr><td>CCZ4 evolved fields (metric, curvature)</td><td class="good">Implemented</td><td><code>src/evolution/ccz4_rhs.c</code></td></tr>
+<tr><td>4th-order off-grid interpolation</td><td class="good">Implemented</td><td><code>src/numerics/interpolate.h</code></td></tr>
+<tr><td>Block-aware interpolation (AMR)</td><td class="good">Implemented</td><td><code>src/numerics/interpolate.h</code></td></tr>
+<tr><td>Derivative interpolation (df/dx at arbitrary point)</td><td class="good">Implemented</td><td><code>src/numerics/interpolate.h</code></td></tr>
+<tr><td>Constraint diagnostics (Ham, Mom)</td><td class="good">Implemented</td><td><code>src/diagnostics/constraints.c</code></td></tr>
+<tr><td>Apparent horizon finder</td><td class="good">Implemented</td><td><code>src/diagnostics/ah_finder.c</code></td></tr>
+<tr><td>Psi4 computation</td><td class="warn">Not yet implemented</td><td>Planned: <code>src/diagnostics/psi4.c</code></td></tr>
+<tr><td>Sphere interpolation + mode decomposition</td><td class="warn">Not yet implemented</td><td>Planned: extraction pipeline</td></tr>
+<tr><td>Worldtube data output (for CCE)</td><td class="warn">Not yet implemented</td><td>Future</td></tr>
+</table>
+
+<h3>Path A: Fixed-Radius Extraction (Recommended First)</h3>
+
+<div class="card">
+<div class="card-header"><span class="card-title">Implementation Plan</span> <span class="tag tag-rec">Phase 3 priority</span></div>
+
+<p><strong>Step 1: Psi4 computation</strong> (~200 lines of C)</p>
+<p>Compute the Newman-Penrose scalar Psi4 = C<sub>abcd</sub> n<sup>a</sup> mbar<sup>b</sup> n<sup>c</sup> mbar<sup>d</sup> at each grid point. Requires:</p>
+<ul>
+<li>Physical Riemann tensor from evolved CCZ4 variables</li>
+<li>Null tetrad (l, n, m, mbar) constructed from the unit radial vector and the spatial metric</li>
+<li>Second spatial derivatives of the conformal metric (already computed in RHS, but need them independently for diagnostics)</li>
+</ul>
+<p>Reference: GRChombo <code>Source/CCZ4/Weyl4.impl.hpp</code></p>
+
+<p><strong>Step 2: Extraction sphere interpolation</strong> (~100 lines of C)</p>
+<p>Lattice already has 4th-order Lagrange interpolation at arbitrary (x,y,z) in <code>interpolate.h</code>, including the block-aware AMR variant. The 5-point stencil (125 source points per interpolation) is already implemented and tested. Need to add:</p>
+<ul>
+<li>Sphere sampling: generate N<sub>theta</sub> x N<sub>phi</sub> points at (r sin(theta) cos(phi), r sin(theta) sin(phi), r cos(theta))</li>
+<li>Gauss-Legendre nodes and weights for theta quadrature</li>
+<li>Uniform nodes for phi (with trapezoidal rule)</li>
+</ul>
+
+<p><strong>Step 3: Spin-weighted spherical harmonic decomposition</strong> (~50 lines of C)</p>
+<p>The spin-weight s=-2 spherical harmonics can be computed from the Goldberg formula. For l<sub>max</sub>=4, need:</p>
+<span class="eq"><sub>-2</sub>Y<sub>lm</sub>(theta,phi) = (-1)<sup>m</sup> sqrt((2l+1)/4pi) d<sup>l</sup><sub>-m,-2</sub>(theta) e<sup>im*phi</sup></span>
+<p>where d<sup>l</sup><sub>m,s</sub> is the Wigner d-matrix. Precompute and store for all angular points.</p>
+
+<p><strong>Step 4: Mode output</strong> (~30 lines of C)</p>
+<p>Write r*Psi4<sup>lm</sup>(t) to ASCII files, one per (l,m) mode per extraction radius. Format: <code>t Re(Psi4) Im(Psi4)</code> per line.</p>
+
+<p><strong>Step 5: Post-processing</strong> (~200 lines of Python)</p>
+<ul>
+<li>FFI integration: Psi4<sup>lm</sup>(t) -> h<sup>lm</sup>(t) using frequency-domain integration with low-frequency cutoff</li>
+<li>Extrapolation: fit r*Psi4<sup>lm</sup>(t,r) vs 1/r at each time step, evaluate at 1/r=0</li>
+<li>Optional: memory correction via Christodoulou formula</li>
+</ul>
+
+<p><strong>Total estimate: ~500 lines of C + ~200 lines of Python.</strong></p>
+</div>
+
+<h3>Path B: CCE-Ready Worldtube Output</h3>
+
+<div class="card">
+<div class="card-header"><span class="card-title">Future Addition</span> <span class="tag tag-alt">After fixed-radius works</span></div>
+
+<p>To feed SpECTRE CCE, Lattice needs to output worldtube data. SpECTRE accepts several formats; the simplest for Lattice is <strong>"metric nodal"</strong> (Cartesian metric on collocation points).</p>
+
+<p><strong>What to store on the worldtube:</strong></p>
+<ul>
+<li>Spatial metric components: g<sub>xx</sub>, g<sub>xy</sub>, g<sub>xz</sub>, g<sub>yy</sub>, g<sub>yz</sub>, g<sub>zz</sub> (recover from chi and h<sub>ij</sub>)</li>
+<li>Lapse alpha and shift beta<sup>i</sup></li>
+<li>Time derivatives of the above (use the RHS values from the evolution)</li>
+<li>Spatial derivatives (use the finite difference stencils)</li>
+</ul>
+
+<p><strong>Angular sampling:</strong> Gauss-Legendre in cos(theta), uniform in phi. l<sub>max</sub> = 20 requires ~21 x 40 = 840 points per timestep.</p>
+
+<p><strong>Output format:</strong> HDF5 file following SpECTRE's worldtube conventions. Each timestep writes the metric data as spin-weighted spherical harmonic coefficients (or nodal values on the collocation grid).</p>
+
+<p><strong>Storage estimate:</strong> For a worldtube at r=100M, outputting every 0.1M in time over 1000M of evolution: ~10,000 time steps x ~20 metric quantities x 840 points x 8 bytes = ~1.3 GB. Manageable.</p>
+
+<p><strong>Implementation effort:</strong> ~300 lines of C for the worldtube output + conversion script. Requires HDF5 library (or a custom binary format with a Python converter to HDF5).</p>
+</div>
+
+<h3>Path C: Perturbative Hyperboloidal Extraction (Future)</h3>
+
+<div class="card">
+<div class="card-header"><span class="card-title">Long-Term Option</span> <span class="tag tag-future">Research-stage</span></div>
+<p>If PHE matures, it could be implemented directly in C within Lattice:</p>
+<ul>
+<li>Solve 1D Regge-Wheeler-Zerilli equations per (l,m) mode on a hyperboloidal grid</li>
+<li>Inner boundary: Psi4 mode data at the extraction sphere (same as fixed-radius extraction)</li>
+<li>Outer boundary: J<sup>+</sup> is at a finite grid point (compactified coordinate)</li>
+<li>No external dependencies (pure C, 1D PDE solver)</li>
+<li>Would capture memory and be gauge-invariant, without the complexity of full CCE</li>
+</ul>
+<p>Estimated effort: ~1000 lines of C. But the method is too new (2025) to commit to implementing.</p>
+</div>
+
+<!-- ================================================================ -->
+<hr>
+<h2 id="recommendation">9. Recommendation for Lattice</h2>
+
+<div class="card" style="border-color: #238636;">
+<div class="card-header"><span class="card-title">Two-Phase Strategy</span></div>
+
+<h3 style="margin-top: 4px;">Phase 3a: Fixed-Radius Extraction (implement now)</h3>
+<ol>
+<li>Implement Psi4 computation at grid points (<code>src/diagnostics/psi4.c</code>)</li>
+<li>Interpolate onto 4-6 extraction spheres using existing <code>interpolate.h</code> infrastructure</li>
+<li>Decompose into (l,m) modes with spin-weight -2 spherical harmonics</li>
+<li>Output r*Psi4<sup>lm</sup>(t) time series per radius</li>
+<li>Python post-processing: FFI integration + polynomial extrapolation</li>
+</ol>
+<p>This gives Lattice <strong>waveform catalog capability</strong> immediately. Sufficient for current LIGO science, debugging, convergence testing, and most publications.</p>
+
+<h3>Phase 3b: CCE-Ready Worldtube Output (implement after 3a works)</h3>
+<ol>
+<li>Add worldtube data output: full metric + derivatives on a coordinate sphere</li>
+<li>Write conversion script to SpECTRE CCE input format</li>
+<li>Validate: compare CCE waveforms with extrapolated waveforms for a test case</li>
+</ol>
+<p>This gives Lattice <strong>access to gauge-invariant waveforms at J<sup>+</sup></strong> for precision science and GW memory studies, using SpECTRE's existing CCE implementation as a post-processing tool. No need to reimplement characteristic evolution.</p>
+</div>
+
+<h3>Implementation Priority Within Lattice</h3>
+<table>
+<tr><th>Priority</th><th>Component</th><th>Effort</th><th>Depends On</th><th>Enables</th></tr>
+<tr><td>1</td><td>Psi4 at grid points</td><td>~200 lines C</td><td>CCZ4 fields</td><td>Everything below</td></tr>
+<tr><td>2</td><td>Extraction spheres + mode decomposition</td><td>~150 lines C</td><td>Psi4 + interpolate.h</td><td>Waveform output</td></tr>
+<tr><td>3</td><td>FFI + extrapolation (Python)</td><td>~200 lines Python</td><td>Mode time series</td><td>Strain h(t)</td></tr>
+<tr><td>4</td><td>Worldtube output (for CCE)</td><td>~300 lines C</td><td>Metric + interp</td><td>CCE pipeline</td></tr>
+<tr><td>5</td><td>SpECTRE CCE integration scripts</td><td>~100 lines Python</td><td>Worldtube HDF5</td><td>J<sup>+</sup> waveforms</td></tr>
+</table>
+
+<h3>The Bottom Line</h3>
+
+<div class="vs">
+<div>
+<strong>For Lattice's Current Science Goals</strong>
+<p style="margin-top: 6px;">Fixed-radius extraction with polynomial extrapolation is the right choice. It is simple, self-contained, well-tested, and accurate enough for any binary inspiral waveform that will be compared to LIGO observations at current sensitivity. Every published NR waveform before ~2020 used this method. It works.</p>
+</div>
+<div>
+<strong>For Future-Proofing</strong>
+<p style="margin-top: 6px;">Design the extraction sphere infrastructure to also output worldtube data for CCE. The marginal cost is small (same interpolation, just more quantities stored to disk). When precision science demands gauge-invariant waveforms at J<sup>+</sup> &mdash; GW memory, LISA, 3G detectors &mdash; the CCE pipeline is ready to plug in via SpECTRE's standalone module.</p>
+</div>
+</div>
+
+<!-- ================================================================ -->
+<hr>
+<h2 id="references">10. References</h2>
+
+<h3>Fixed-Radius Extraction</h3>
+<ul style="font-size: 0.8em; color: #8b949e;">
+<li><a href="https://arxiv.org/abs/0910.3656">arXiv:0910.3656</a> &mdash; Boyle &amp; Mroue: Asymptotic falloff of local waveform measurements in NR</li>
+<li><a href="https://arxiv.org/abs/1006.1632">arXiv:1006.1632</a> &mdash; Reisswig &amp; Pollney: Notes on the integration of NR waveforms (FFI method)</li>
+<li><a href="https://arxiv.org/abs/1503.00718">arXiv:1503.00718</a> &mdash; Nakano et al.: Perturbative extraction of GW generated with NR</li>
+<li><a href="https://arxiv.org/abs/1606.02532">arXiv:1606.02532</a> &mdash; Bishop &amp; Rezzolla: Extraction of gravitational waves in NR (Living Review)</li>
+</ul>
+
+<h3>Cauchy-Characteristic Extraction</h3>
+<ul style="font-size: 0.8em; color: #8b949e;">
+<li><a href="https://arxiv.org/abs/2110.08635">arXiv:2110.08635</a> &mdash; Moxon et al.: The SpECTRE CCE system for rapid, precise waveform extraction</li>
+<li><a href="https://arxiv.org/abs/1309.3605">arXiv:1309.3605</a> &mdash; Taylor et al.: Comparing extrapolation to CCE in BBH simulations</li>
+<li><a href="https://arxiv.org/abs/1512.06800">arXiv:1512.06800</a> &mdash; Chu et al.: On the accuracy and precision of NR waveforms (extraction methodology)</li>
+<li><a href="https://arxiv.org/abs/0912.1285">arXiv:0912.1285</a> &mdash; Reisswig et al.: CCE in NR &mdash; binary black hole merger</li>
+<li><a href="https://link.springer.com/article/10.12942/lrr-2012-2">Living Rev. Rel. 15 (2012) 2</a> &mdash; Winicour: Characteristic Evolution and Matching</li>
+<li><a href="https://arxiv.org/abs/1609.01731">arXiv:1609.01731</a> &mdash; Madler &amp; Winicour: Bondi-Sachs Formalism (review)</li>
+</ul>
+
+<h3>Production Implementations</h3>
+<ul style="font-size: 0.8em; color: #8b949e;">
+<li><a href="https://arxiv.org/abs/2506.06838">arXiv:2506.06838</a> &mdash; AthenaK simulations of GW150914 (CCE pipeline with SpECTRE)</li>
+<li><a href="https://arxiv.org/abs/2411.11989">arXiv:2411.11989</a> &mdash; GR-Athena++ BBH waveforms (high resolution + CCE)</li>
+<li><a href="https://data.black-holes.org/waveforms/extcce_catalog.html">SXS Ext-CCE Catalog</a> &mdash; Paired CCE + extrapolated waveforms for 13 BBH simulations</li>
+<li><a href="https://arxiv.org/abs/2505.13378">arXiv:2505.13378</a> &mdash; SXS third catalog of BBH simulations</li>
+</ul>
+
+<h3>Accuracy Requirements</h3>
+<ul style="font-size: 0.8em; color: #8b949e;">
+<li><a href="https://arxiv.org/abs/0809.3844">arXiv:0809.3844</a> &mdash; Lindblom et al.: Model waveform accuracy standards for GW data analysis</li>
+<li><a href="https://arxiv.org/abs/2006.04272">arXiv:2006.04272</a> &mdash; Ferguson et al.: Assessing readiness of NR for LISA and 3G detectors</li>
+<li><a href="https://arxiv.org/abs/2312.10241">arXiv:2312.10241</a> &mdash; Pompili et al.: Accuracy limitations of existing NR waveforms for current and future detectors</li>
+</ul>
+
+<h3>Gravitational Wave Memory</h3>
+<ul style="font-size: 0.8em; color: #8b949e;">
+<li><a href="https://arxiv.org/abs/1003.3486">arXiv:1003.3486</a> &mdash; Favata: The gravitational-wave memory effect (review)</li>
+<li><a href="https://arxiv.org/abs/1807.00990">arXiv:1807.00990</a> &mdash; Talbot et al.: GW memory &mdash; waveforms and phenomenology</li>
+</ul>
+
+<h3>Emerging Methods</h3>
+<ul style="font-size: 0.8em; color: #8b949e;">
+<li><a href="https://arxiv.org/abs/2508.05743">arXiv:2508.05743</a> &mdash; Perturbative Hyperboloidal Extraction of GW in 3+1 NR (2025)</li>
+<li><a href="https://arxiv.org/abs/2508.03799">arXiv:2508.03799</a> &mdash; Covariant and gauge-invariant metric-based GW extraction in NR (2025)</li>
+</ul>
+
+<hr>
+<p style="text-align: center; color: #484f58; font-size: 0.8em; margin-top: 20px;">
+  Lattice Waveform Extraction Reference &mdash; compiled from literature survey, February 2026.
+</p>
+
+</body>
+</html>
