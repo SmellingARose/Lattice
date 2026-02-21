@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lattice Performance Optimization Proposals</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; background: #0d1117; color: #c9d1d9; line-height: 1.55; max-width: 960px; margin: 0 auto; padding: 24px 20px; }
+  h1 { font-size: 1.7em; color: #f0f6fc; margin-bottom: 6px; }
+  .subtitle { color: #8b949e; font-size: 0.95em; margin-bottom: 28px; }
+  h2 { font-size: 1.15em; margin: 32px 0 14px 0; padding-bottom: 6px; border-bottom: 1px solid #21262d; }
+  .tier-label { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 0.78em; font-weight: 600; vertical-align: middle; margin-left: 8px; }
+  .tier-easy   { background: #23883050; color: #3fb950; border: 1px solid #23883080; }
+  .tier-mod    { background: #9e6a0050; color: #d29922; border: 1px solid #9e6a0080; }
+  .tier-sig    { background: #bd561d50; color: #f0883e; border: 1px solid #bd561d80; }
+  .tier-long   { background: #8b1d3250; color: #f47067; border: 1px solid #8b1d3280; }
+  .tier-no     { background: #21262d;   color: #8b949e; border: 1px solid #30363d; }
+  .opt { background: #161b22; border: 1px solid #21262d; border-radius: 8px; padding: 16px 18px; margin-bottom: 14px; }
+  .opt-header { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
+  .opt-num { font-size: 0.85em; font-weight: 700; color: #8b949e; min-width: 22px; }
+  .opt-title { font-size: 1.05em; font-weight: 600; color: #f0f6fc; }
+  .opt-speedup { font-size: 0.82em; color: #58a6ff; margin-left: auto; white-space: nowrap; }
+  .opt-effort { font-size: 0.78em; padding: 1px 8px; border-radius: 10px; background: #21262d; color: #8b949e; white-space: nowrap; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 8px 0; }
+  .row > div > strong { color: #8b949e; font-size: 0.8em; text-transform: uppercase; letter-spacing: 0.5px; }
+  p, .row > div { font-size: 0.9em; color: #b1bac4; }
+  pre { background: #0d1117; border: 1px solid #21262d; border-radius: 6px; padding: 10px 12px; overflow-x: auto; font-size: 0.8em; line-height: 1.45; color: #e6edf3; margin: 8px 0; }
+  .kw { color: #ff7b72; } .fn { color: #d2a8ff; } .cm { color: #8b949e; } .st { color: #a5d6ff; } .num { color: #79c0ff; }
+  .evidence { border-left: 3px solid #30363d; padding-left: 12px; margin: 8px 0; font-size: 0.85em; color: #8b949e; }
+  .warn { color: #f47067; font-weight: 600; }
+  .summary-table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 0.85em; }
+  .summary-table th { text-align: left; padding: 6px 8px; border-bottom: 2px solid #30363d; color: #8b949e; font-size: 0.85em; }
+  .summary-table td { padding: 5px 8px; border-bottom: 1px solid #21262d; }
+  .summary-table tr:hover { background: #161b22; }
+  hr { border: none; border-top: 1px solid #21262d; margin: 28px 0; }
+</style>
+</head>
+<body>
+
+<h1>Lattice Performance Optimization Proposals</h1>
+<p class="subtitle">15 optimizations ranked by impact/effort, grounded in actual code. February 2026.</p>
+
+<!-- ================================================================ -->
+<h2>At a Glance</h2>
+<table class="summary-table">
+<tr><th>#</th><th>Optimization</th><th>Speedup</th><th>Effort</th><th>Tier</th></tr>
+<tr><td>1</td><td>6th-order FD stencils</td><td>3-10x</td><td>Low-Med</td><td><span class="tier-label tier-easy">Easy Win</span></td></tr>
+<tr><td>2</td><td>Enable LTO (-flto)</td><td>5-15% CPU</td><td>Trivial</td><td><span class="tier-label tier-easy">Easy Win</span></td></tr>
+<tr><td>3</td><td>Fused d1/d2 stencil</td><td>10-15% CPU</td><td>Low</td><td><span class="tier-label tier-easy">Easy Win</span></td></tr>
+<tr><td>4</td><td>Checkpoint/restart</td><td>N/A (critical)</td><td>Low</td><td><span class="tier-label tier-easy">Easy Win</span></td></tr>
+<tr><td>5</td><td>Persistent pack</td><td>10-20% GPU</td><td>Med</td><td><span class="tier-label tier-mod">Moderate</span></td></tr>
+<tr><td>6</td><td>Selective GPU transfer</td><td>3-8x transfer</td><td>Low-Med</td><td><span class="tier-label tier-mod">Moderate</span></td></tr>
+<tr><td>7</td><td>Fused RHS+CK45 update</td><td>15-25% CPU</td><td>Med</td><td><span class="tier-label tier-mod">Moderate</span></td></tr>
+<tr><td>8</td><td>Larger AMR blocks (32^3)</td><td>1.7x</td><td>Low</td><td><span class="tier-label tier-mod">Moderate</span></td></tr>
+<tr><td>9</td><td>CCZ3 formulation</td><td>stability to 10^5 M</td><td>Low-Med</td><td><span class="tier-label tier-mod">Moderate</span></td></tr>
+<tr><td>10</td><td>GPU-native ghost exchange</td><td>2-5x GPU overall</td><td>Med-High</td><td><span class="tier-label tier-sig">Significant</span></td></tr>
+<tr><td>11</td><td>GPU kernel splitting</td><td>20-40% GPU</td><td>Med-High</td><td><span class="tier-label tier-sig">Significant</span></td></tr>
+<tr><td>12</td><td>3D output (raw + XDMF)</td><td>N/A (science)</td><td>Low</td><td><span class="tier-label tier-sig">Significant</span></td></tr>
+<tr><td>13</td><td>Multi-GPU support</td><td>1.5-3.5x on 4 GPUs</td><td>Med-High</td><td><span class="tier-label tier-long">Long-term</span></td></tr>
+<tr><td>14</td><td>MPI domain decomposition</td><td>Linear with nodes</td><td>High</td><td><span class="tier-label tier-long">Long-term</span></td></tr>
+<tr><td>15</td><td>P-ERK multi-rate RK</td><td>2-5x on AMR</td><td>High</td><td><span class="tier-label tier-long">Long-term</span></td></tr>
+</table>
+
+<!-- ================================================================ -->
+<hr>
+<h2>Tier 1: Easy Wins <span class="tier-label tier-easy">Days</span></h2>
+
+<!-- #1 -->
+<div class="opt">
+  <div class="opt-header">
+    <span class="opt-num">1</span>
+    <span class="opt-title">6th-order FD stencils</span>
+    <span class="opt-speedup">3-10x (coarser grid, same accuracy)</span>
+    <span class="opt-effort">Low-Med</span>
+  </div>
+  <div class="row">
+    <div><strong>What</strong><br>Add 7-point 6th-order coefficients to <code>finite_diff.h</code> alongside the existing 5-point 4th-order ones. Compile-time or runtime flag selects order.</div>
+    <div><strong>Why it works</strong><br>For equivalent accuracy, 6th order needs N = N_4th^(2/3). An N=128 run at 4th order becomes N=40 at 6th order -- 33x fewer points, 3-10x after wider stencil overhead. AthenaK uses 6th-order as their standard NR config.</div>
+  </div>
+  <div class="evidence">
+    The current ghost width is already sufficient:
+  </div>
+<pre><span class="cm">// src/core/grid.h:17</span>
+<span class="kw">#define</span> GHOST_WIDTH <span class="num">4</span>   <span class="cm">// 6th-order FD needs 3 ghost cells, KO-8 needs 4. Already covered.</span></pre>
+  <div class="evidence">
+    The existing 4th-order stencil in <code>finite_diff.h</code> uses a 5-point stencil (offsets -2 to +2). A 6th-order stencil uses 7 points (offsets -3 to +3) -- still within ghost=4. No memory layout change. No new ghost exchange logic. Just new coefficients.
+  </div>
+<pre><span class="cm">// Current 4th-order (finite_diff.h:24-31) -- 5 points</span>
+<span class="kw">return</span> ((<span class="num">1.0</span>/<span class="num">12.0</span>)*f[idx-<span class="num">2</span>*s] - (<span class="num">2.0</span>/<span class="num">3.0</span>)*f[idx-s]
+      + (<span class="num">2.0</span>/<span class="num">3.0</span>)*f[idx+s] - (<span class="num">1.0</span>/<span class="num">12.0</span>)*f[idx+<span class="num">2</span>*s]) / dx;
+
+<span class="cm">// Proposed 6th-order -- 7 points, same ghost budget</span>
+<span class="kw">return</span> (-<span class="num">1.0</span>/<span class="num">60</span>*f[idx-<span class="num">3</span>*s] + <span class="num">3.0</span>/<span class="num">20</span>*f[idx-<span class="num">2</span>*s] - <span class="num">3.0</span>/<span class="num">4</span>*f[idx-s]
+      + <span class="num">3.0</span>/<span class="num">4</span>*f[idx+s] - <span class="num">3.0</span>/<span class="num">20</span>*f[idx+<span class="num">2</span>*s] + <span class="num">1.0</span>/<span class="num">60</span>*f[idx+<span class="num">3</span>*s]) / dx;</pre>
+</div>
+
+<!-- #2 -->
+<div class="opt">
+  <div class="opt-header">
+    <span class="opt-num">2</span>
+    <span class="opt-title">Enable LTO (-flto in Makefile)</span>
+    <span class="opt-speedup">5-15% CPU</span>
+    <span class="opt-effort">Trivial</span>
+  </div>
+  <div class="row">
+    <div><strong>What</strong><br>Add <code>-flto</code> to <code>CFLAGS_OPT</code> in the Makefile. One line. Enables link-time optimization across all translation units.</div>
+    <div><strong>Why it works</strong><br>The CPU hot path calls <code>ccz4_rhs_point</code> through a function pointer in a tight inner loop. Without LTO, GCC cannot inline across the <code>backend_cpu.c</code> / <code>ccz4_rhs.c</code> boundary, preventing constant propagation, SIMD, and loop optimizations.</div>
+  </div>
+  <div class="evidence">
+    No <code>-flto</code> anywhere in the Makefile. The hot path is a cross-TU function call:
+  </div>
+<pre><span class="cm">// Makefile:69 -- no LTO</span>
+CFLAGS_OPT = $(CFLAGS_BASE) -O3 -ffast-math -march=native
+
+<span class="cm">// backend_cpu.c:39-43 -- func is a function pointer, opaque to optimizer</span>
+<span class="kw">for</span> (<span class="kw">int</span> i = lo; i &lt; hi; i++) {
+    <span class="fn">func</span>(rhs, src, g, p, i, j, k);  <span class="cm">// can't inline without LTO</span>
+}</pre>
+  <p>With <code>-flto</code>, GCC sees that <code>func</code> is always <code>ccz4_rhs_point</code>, devirtualizes the call, and inlines the entire 500-line RHS function. The stencil loads, Christoffel symbols, and Ricci tensor computation all benefit from register allocation across the full call chain.</p>
+</div>
+
+<!-- #3 -->
+<div class="opt">
+  <div class="opt-header">
+    <span class="opt-num">3</span>
+    <span class="opt-title">Fused d1/d2 stencil function</span>
+    <span class="opt-speedup">10-15% CPU, 5-10% GPU</span>
+    <span class="opt-effort">Low</span>
+  </div>
+  <div class="row">
+    <div><strong>What</strong><br>Add <code>fd_d1_d2()</code> to <code>finite_diff.h</code> that computes both first and second derivatives in a single pass over the stencil points.</div>
+    <div><strong>Why it works</strong><br><code>fd_d1</code> and <code>fd_d2</code> load the exact same 5 stencil points. For fields needing both derivatives (chi, lapse, h_ij, shift), we load each point twice. Fusing halves the memory loads.</div>
+  </div>
+<pre><span class="cm">// ccz4_rhs.c:87-109 -- d1 and d2 called separately, redundant loads</span>
+d1_chi[dir]      = <span class="fn">fd_d1</span>(src[FIELD_CHI], idx, s, dx);  <span class="cm">// loads f[idx-2s..idx+2s]</span>
+...
+d2_chi[dir][dir] = <span class="fn">fd_d2</span>(src[FIELD_CHI], idx, s, dx);  <span class="cm">// loads same 5 points again</span></pre>
+  <div class="evidence">
+    Counting from <code>ccz4_rhs.c</code>: chi needs d1+d2 (3 dirs each), lapse needs d1+d2, 6 h_ij components need d1+d2, 3 shift components need d1+d2. That is (1+1+6+3) x 3 = 33 pairs of redundant d1/d2 calls, each loading 5 doubles. The fused version saves ~165 redundant loads per point, about 10% of total memory traffic.
+  </div>
+<pre><span class="cm">// Proposed fused function for finite_diff.h</span>
+<span class="kw">static inline void</span> <span class="fn">fd_d1_d2</span>(<span class="kw">const double</span> *f, <span class="kw">int</span> idx, <span class="kw">int</span> s, <span class="kw">double</span> dx,
+                             <span class="kw">double</span> *d1, <span class="kw">double</span> *d2) {
+    <span class="kw">double</span> fm2=f[idx-<span class="num">2</span>*s], fm1=f[idx-s], f0=f[idx], fp1=f[idx+s], fp2=f[idx+<span class="num">2</span>*s];
+    *d1 = ((<span class="num">1.0</span>/<span class="num">12</span>)*fm2 - (<span class="num">2.0</span>/<span class="num">3</span>)*fm1 + (<span class="num">2.0</span>/<span class="num">3</span>)*fp1 - (<span class="num">1.0</span>/<span class="num">12</span>)*fp2) / dx;
+    *d2 = (-(<span class="num">1.0</span>/<span class="num">12</span>)*fm2 + (<span class="num">4.0</span>/<span class="num">3</span>)*fm1 - (<span class="num">5.0</span>/<span class="num">2</span>)*f0 + (<span class="num">4.0</span>/<span class="num">3</span>)*fp1 - (<span class="num">1.0</span>/<span class="num">12</span>)*fp2) / (dx*dx);
+}</pre>
+</div>
+
+<!-- #4 -->
+<div class="opt">
+  <div class="opt-header">
+    <span class="opt-num">4</span>
+    <span class="opt-title">Checkpoint/restart</span>
+    <span class="opt-speedup">N/A -- prevents losing 40-hour runs</span>
+    <span class="opt-effort">Low (~300 lines)</span>
+  </div>
+  <div class="row">
+    <div><strong>What</strong><br>Raw binary checkpoint file with header (magic, version, N, L, step, time, params), per-block field data, and CRC32 footer. Ring buffer of 2 files. Checkpoint every 500 steps.</div>
+    <div><strong>Why</strong><br>Production inspiral runs take 10-40 hours. Without checkpointing, any crash loses everything. This is not optional for production use. The overhead is negligible: writing 342 MB every 500 steps is 0.2% of runtime, capping data loss at ~37 minutes.</div>
+  </div>
+  <div class="evidence">
+    Current output is 1D CSV slices only -- no way to resume from a crash:
+  </div>
+<pre><span class="cm">// output.c:31 -- only writes 1D CSV, no state persistence</span>
+fprintf(fp, <span class="st">"x,chi,lapse,K,Hamiltonian\n"</span>);
+<span class="kw">for</span> (<span class="kw">int</span> i = g-&gt;ghost; i &lt; g-&gt;ghost + g-&gt;N; i++) { ... }</pre>
+  <p>Zero external dependencies (no HDF5, no ADIOS). Pure C with <code>fwrite</code> and a CRC32 implementation. The pack infrastructure already has <code>meshblock_pack_load</code>/<code>meshblock_pack_store</code> -- checkpoint piggybacks on the same pattern.</p>
+</div>
+
+<!-- ================================================================ -->
+<hr>
+<h2>Tier 2: Moderate Effort <span class="tier-label tier-mod">1-2 Weeks</span></h2>
+
+<!-- #5 -->
+<div class="opt">
+  <div class="opt-header">
+    <span class="opt-num">5</span>
+    <span class="opt-title">Persistent pack (avoid per-step alloc/free)</span>
+    <span class="opt-speedup">10-20% GPU</span>
+    <span class="opt-effort">Medium</span>
+  </div>
+  <div class="row">
+    <div><strong>What</strong><br>Create the meshblock_pack once and reuse it across timesteps. Invalidate only on mesh regridding.</div>
+    <div><strong>Why it works</strong><br>Currently, <em>every single timestep</em> allocates a pack, copies all field data in, runs kernels, copies data out, and frees the pack. For a 200-block AMR mesh at N=16, that is ~4 GB of memcpy per step -- pure overhead.</div>
+  </div>
+<pre><span class="cm">// rk4.c:623-661 -- pack built and destroyed EVERY step</span>
+<span class="kw">static void</span> <span class="fn">ck45_step_mesh_packed</span>(mesh_t *m, ...) {
+    meshblock_pack_t *pack = <span class="fn">mesh_build_leaf_pack</span>(m, RK_CK45);  <span class="cm">// alloc + memcpy</span>
+    <span class="fn">backend_map_pack</span>(pack, p);                                  <span class="cm">// GPU map</span>
+    <span class="cm">// ... 5 stages of actual work ...</span>
+    <span class="fn">backend_unmap_pack</span>(pack);                                    <span class="cm">// GPU unmap</span>
+    <span class="fn">meshblock_pack_store</span>(pack, m-&gt;blocks);                       <span class="cm">// memcpy out</span>
+    <span class="fn">meshblock_pack_free</span>(pack);                                   <span class="cm">// free everything</span>
+}</pre>
+  <div class="evidence">
+    <code>meshblock_pack_create</code> (meshblock_pack.c:93-158) allocates 3-4 page-aligned buffers of size <code>NUM_FIELDS * n_blocks * npts</code> doubles each. <code>meshblock_pack_load</code> (meshblock_pack.c:206-227) copies all fields from all blocks via <code>memcpy</code> loops. This entire lifecycle repeats per step -- and again per level during subcycling. For a static mesh between regrids, this is pure waste.
+  </div>
+</div>
+
+<!-- #6 -->
+<div class="opt">
+  <div class="opt-header">
+    <span class="opt-num">6</span>
+    <span class="opt-title">Selective GPU transfer (ghost slabs only)</span>
+    <span class="opt-speedup">3-8x transfer reduction</span>
+    <span class="opt-effort">Low-Med</span>
+  </div>
+  <div class="row">
+    <div><strong>What</strong><br>During GPU ghost exchange, transfer only the ghost zone slabs (boundary cells) instead of the entire pack buffer.</div>
+    <div><strong>Why it works</strong><br>The GPU ghost exchange currently syncs the <em>entire</em> data buffer to host and back. For 200 blocks at N=16: that is 31 fields x 200 blocks x 13,824 points x 8 bytes = 687 MB round-trip. Ghost slabs are ~12% of that.</div>
+  </div>
+<pre><span class="cm">// backend_gpu.c:897-921 -- syncs EVERYTHING per ghost exchange</span>
+<span class="kw">void</span> <span class="fn">backend_ghost_exchange_packed</span>(meshblock_pack_t *pack) {
+    size_t total = (size_t)pack-&gt;n_fields * pack-&gt;n_blocks * pack-&gt;npts;
+    <span class="kw">#pragma</span> omp target update from(pack-&gt;data[<span class="num">0</span>:total])  <span class="cm">// ALL data: 342 MB</span>
+    <span class="cm">// ... 5-phase exchange on host ...</span>
+    <span class="kw">#pragma</span> omp target update to(pack-&gt;data[<span class="num">0</span>:total])    <span class="cm">// ALL data back: 342 MB</span>
+}</pre>
+  <p>Ghost zones at N=16 with ghost=4: each face slab is 4 x 24 x 24 = 2,304 points vs 13,824 total per block. With smart slicing, transfer drops from 342 MB to ~40-80 MB per exchange -- 4-8x reduction in PCIe traffic, which is the dominant GPU bottleneck.</p>
+</div>
+
+<!-- #7 -->
+<div class="opt">
+  <div class="opt-header">
+    <span class="opt-num">7</span>
+    <span class="opt-title">Fused RHS + CK45 update</span>
+    <span class="opt-speedup">15-25% CPU, 10-20% GPU</span>
+    <span class="opt-effort">Medium</span>
+  </div>
+  <div class="row">
+    <div><strong>What</strong><br>Instead of writing RHS to a separate buffer then reading it back for the CK45 update, fuse both operations inside <code>ccz4_rhs_point</code>. Eliminates the rhs buffer entirely.</div>
+    <div><strong>Why it works</strong><br>Currently each CK45 stage does: (1) write ~500 MB of RHS values, (2) read them back in the update kernel. Fusing avoids the intermediate buffer, saving one full memory pass per stage -- 5 stages = 5 GB of avoided bandwidth at N=128.</div>
+  </div>
+<pre><span class="cm">// Current: two separate operations per CK45 stage</span>
+<span class="cm">// ccz4_rhs.c:480 -- writes to rhs buffer</span>
+rhs[FIELD_CHI][idx] = rhs_chi;
+
+<span class="cm">// backend_cpu.c:336-339 -- reads rhs buffer back in a second pass</span>
+scratch[i] = A_s * scratch[i] + dt * rhs_data[i];
+data[i]   += B_s * scratch[i];
+
+<span class="cm">// Proposed: fuse inside the RHS kernel, no rhs buffer needed</span>
+<span class="cm">// scratch[f][idx] = A_s * scratch[f][idx] + dt * rhs_chi;</span>
+<span class="cm">// data[f][idx] += B_s * scratch[f][idx];</span></pre>
+  <p>This also saves 25% memory for CK45 (eliminates the rhs buffer). The tradeoff: Sommerfeld BCs at boundary points need separate handling since they overwrite RHS values.</p>
+</div>
+
+<!-- #8 -->
+<div class="opt">
+  <div class="opt-header">
+    <span class="opt-num">8</span>
+    <span class="opt-title">Larger AMR blocks (32^3)</span>
+    <span class="opt-speedup">1.7x from ghost overhead reduction</span>
+    <span class="opt-effort">Low</span>
+  </div>
+  <div class="row">
+    <div><strong>What</strong><br>Support configurable block size, with 32^3 as the production default for GPU runs.</div>
+    <div><strong>Why it works</strong><br>At N=16 with ghost=4, each block is 24^3 = 13,824 total points but only 16^3 = 4,096 interior points. That means 70% of allocated memory is ghost zones -- wasted computation and bandwidth. At N=32, ghost overhead drops to 45%, and GPU occupancy improves dramatically (32,768 useful points per block vs 4,096).</div>
+  </div>
+  <div class="evidence">
+    Parthenon-VIBE (arXiv:2509.19701) warns that 16^3 blocks are at the lower boundary of GPU efficiency. AthenaK uses 64^3 for production.
+  </div>
+<pre><span class="cm">// block.c:85-86 -- N_block is already a runtime parameter</span>
+block_t *<span class="fn">block_alloc</span>(<span class="kw">int</span> id, <span class="kw">int</span> level, <span class="kw">int</span> N_block, <span class="kw">double</span> dx, ...) {
+    <span class="kw">double</span> L_block = N_block * dx;
+    b-&gt;grid = <span class="fn">grid_alloc</span>(N_block, L_block, method); <span class="cm">// N_block must be multiple of 16</span>
+}</pre>
+  <p>Effort is low because the block size is already a runtime parameter. The main work is testing that AMR regridding, prolongation, and restriction are correct at the new size.</p>
+</div>
+
+<!-- #9 -->
+<div class="opt">
+  <div class="opt-header">
+    <span class="opt-num">9</span>
+    <span class="opt-title">CCZ3 formulation (Theta=0, kappa1=0)</span>
+    <span class="opt-speedup">Stable to 10^5 M (100x longer runs)</span>
+    <span class="opt-effort">Low-Med</span>
+  </div>
+  <div class="row">
+    <div><strong>What</strong><br>Add a <code>--ccz3</code> mode that sets Theta=0 and kappa1=0 in all CCZ4 equations. Eliminates the Theta field and all constraint-damping Z-terms.</div>
+    <div><strong>Why it works</strong><br>arXiv:2501.01055 demonstrates that standard CCZ4 develops momentum-constraint-damping instabilities at late times. CCZ3 (their term for BSSN+Z4=0) is stable to 10^5 M. The direct compute saving is small (~4% fewer fields), but the science impact is massive: it unlocks multi-orbit inspirals that currently crash.</div>
+  </div>
+<pre><span class="cm">// ccz4_rhs.c:345-357 -- kappa1 terms that drive the late-time instability</span>
+<span class="kw">if</span> (p-&gt;ccz4.covariant_Z4)
+    kappa1_times_lapse = p-&gt;ccz4.kappa1;         <span class="cm">// sets magnitude of Z damping</span>
+<span class="kw">else</span>
+    kappa1_times_lapse = p-&gt;ccz4.kappa1 * lapse;
+
+<span class="kw">double</span> rhs_Theta = advec_Theta
+    + <span class="num">0.5</span> * lapse * (ricci.scalar - tr_A2 ...)
+    - <span class="num">0.5</span> * Theta * kappa1_times_lapse * ...  <span class="cm">// &lt;-- this term kills long runs</span></pre>
+  <p>Implementation: runtime flag sets <code>kappa1=0</code>, skip Theta evolution, remove Z_over_chi contributions from Ricci and Gamma equations. Most changes are in <code>ccz4_rhs.c</code> with conditional branches (or compile-time <code>#if</code>).</p>
+</div>
+
+<!-- ================================================================ -->
+<hr>
+<h2>Tier 3: Significant Effort <span class="tier-label tier-sig">Weeks</span></h2>
+
+<!-- #10 -->
+<div class="opt">
+  <div class="opt-header">
+    <span class="opt-num">10</span>
+    <span class="opt-title">GPU-native ghost exchange</span>
+    <span class="opt-speedup">2-5x overall GPU speedup</span>
+    <span class="opt-effort">Med-High</span>
+  </div>
+  <div class="row">
+    <div><strong>What</strong><br>Run the 5-phase ghost exchange as GPU kernels instead of syncing to host. Phase 1 (same-level) is device-to-device copies; Phases 2-4 are compute kernels.</div>
+    <div><strong>Why it works</strong><br>Ghost exchange is the #1 GPU bottleneck. Every RK stage currently does: GPU compute (fast) -&gt; full sync to host (slow) -&gt; CPU exchange (slow) -&gt; full sync back (slow). Eliminating the host round-trip removes 684 MB of PCIe transfer per stage.</div>
+  </div>
+<pre><span class="cm">// backend_gpu.c:895-926 -- the entire exchange goes through host</span>
+<span class="kw">void</span> <span class="fn">backend_ghost_exchange_packed</span>(meshblock_pack_t *pack) {
+    <span class="kw">#pragma</span> omp target update from(pack-&gt;data[<span class="num">0</span>:total])  <span class="cm">// GPU-&gt;CPU: ~342 MB</span>
+    <span class="fn">packed_exchange_same_level</span>(pack);    <span class="cm">// CPU memcpy loops</span>
+    <span class="fn">packed_restrict_to_coarse</span>(pack);     <span class="cm">// CPU compute</span>
+    <span class="fn">packed_fill_coarse_buf_ghosts</span>(pack); <span class="cm">// CPU memcpy loops</span>
+    <span class="fn">packed_fill_coarse_boundary</span>(pack);   <span class="cm">// CPU compute</span>
+    <span class="fn">packed_prolongate_fine_ghosts</span>(pack); <span class="cm">// CPU compute</span>
+    <span class="kw">#pragma</span> omp target update to(pack-&gt;data[<span class="num">0</span>:total])    <span class="cm">// CPU-&gt;GPU: ~342 MB</span>
+}</pre>
+  <p>Phase 1 is straightforward: precompute a work list of (src_offset, dst_offset, count) tuples on the host, map to device, run a flat copy kernel. Phases 2-4 are embarrassingly parallel per-point operations -- natural GPU kernels. The neighbor tables are already mapped to the device by <code>backend_map_pack</code>.</p>
+</div>
+
+<!-- #11 -->
+<div class="opt">
+  <div class="opt-header">
+    <span class="opt-num">11</span>
+    <span class="opt-title">GPU kernel splitting for occupancy</span>
+    <span class="opt-speedup">20-40% GPU</span>
+    <span class="opt-effort">Med-High</span>
+  </div>
+  <div class="row">
+    <div><strong>What</strong><br>Split <code>ccz4_rhs_point</code> into two stages: (1) compute all derivatives and store to intermediate buffer, (2) compute algebra, Christoffels, Ricci, and write RHS.</div>
+    <div><strong>Why it works</strong><br>The full RHS function uses ~400 registers per thread (all the derivative arrays, Christoffels, Ricci locals). On an A100 with 65,536 registers per SM, that is only ~163 threads per SM = ~15% occupancy. Splitting halves register pressure, doubling occupancy to ~30%.</div>
+  </div>
+<pre><span class="cm">// backend_gpu.c:215-216 -- the monster kernel, ~400 registers of locals</span>
+grid_t g_local;
+<span class="fn">memset</span>(&amp;g_local, <span class="num">0</span>, <span class="kw">sizeof</span>(grid_t));  <span class="cm">// zeroes 872 bytes per thread (!)</span></pre>
+  <div class="evidence">
+    Quick win within this proposal: replace the <code>memset(&amp;g_local, 0, sizeof(grid_t))</code> with targeted initialization of the 5 fields actually used (N, ghost, Ntotal, dx, npoints). This avoids zeroing 872 bytes per thread for a struct where only 40 bytes matter. Estimated 2-5% GPU speedup by itself.
+  </div>
+</div>
+
+<!-- #12 -->
+<div class="opt">
+  <div class="opt-header">
+    <span class="opt-num">12</span>
+    <span class="opt-title">3D output (raw binary + XDMF)</span>
+    <span class="opt-speedup">N/A -- enables real science visualization</span>
+    <span class="opt-effort">Low (~200 lines)</span>
+  </div>
+  <div class="row">
+    <div><strong>What</strong><br>Write raw binary field dumps with XDMF descriptor files. VisIt and ParaView load XDMF natively -- zero external library dependencies.</div>
+    <div><strong>Why it works</strong><br>The current output is 1D CSV slices along the x-axis. This is sufficient for 1D diagnostics but useless for visualizing 3D merger dynamics, gravitational wave extraction surfaces, or AMR mesh structure.</div>
+  </div>
+<pre><span class="cm">// output.c:31-32 -- current output: 1D CSV only</span>
+fprintf(fp, <span class="st">"x,chi,lapse,K,Hamiltonian\n"</span>);
+<span class="cm">// No 3D output capability exists.</span></pre>
+  <p>Implementation: <code>fwrite</code> the raw field arrays (already contiguous in SoA layout), emit a short XML descriptor per snapshot. For AMR: one binary per block, XDMF describes the multi-block hierarchy. Optional async I/O thread (pthread + staging buffer) for high-frequency output without blocking compute.</p>
+</div>
+
+<!-- ================================================================ -->
+<hr>
+<h2>Tier 4: Long-term <span class="tier-label tier-long">Months</span></h2>
+
+<!-- #13 -->
+<div class="opt">
+  <div class="opt-header">
+    <span class="opt-num">13</span>
+    <span class="opt-title">Multi-GPU support</span>
+    <span class="opt-speedup">1.5-3.5x on 4 GPUs</span>
+    <span class="opt-effort">Med-High</span>
+  </div>
+  <div class="row">
+    <div><strong>What</strong><br>Split the meshblock_pack across multiple GPU devices. Each GPU gets a subset of Morton-ordered blocks with its own pack. Inter-device ghost exchange via host staging buffers.</div>
+    <div><strong>Why it works</strong><br>Single-GPU memory limits cap resolution. An A100 (80 GB) can handle ~100 blocks at N=32 with 31 fields. Splitting across 4 GPUs provides 4x memory and 3-3.5x throughput (after inter-device communication overhead).</div>
+  </div>
+  <div class="evidence">
+    The pack infrastructure already supports per-level packing (<code>mesh_build_level_pack</code> in rk4.c:754-798). Multi-GPU extends this to per-device packing. The Morton ordering in the mesh provides natural spatial locality for partitioning.
+  </div>
+</div>
+
+<!-- #14 -->
+<div class="opt">
+  <div class="opt-header">
+    <span class="opt-num">14</span>
+    <span class="opt-title">MPI domain decomposition</span>
+    <span class="opt-speedup">Linear scaling with node count</span>
+    <span class="opt-effort">High (2-3 months)</span>
+  </div>
+  <div class="row">
+    <div><strong>What</strong><br>Partition Morton-sorted leaf blocks across MPI ranks. Ghost exchange becomes intra-rank (memcpy, same as today) + inter-rank (MPI_Isend/Irecv with packed ghost buffers).</div>
+    <div><strong>Why it works</strong><br>The only path to cluster-scale runs. Single-node GPU limits resolution to N_eff ~ 512-1024. MPI enables N_eff &gt; 4096 across hundreds of nodes. AthenaK demonstrates 80% scaling to 65,536 GPUs with this architecture (arXiv:2409.16053).</div>
+  </div>
+  <p>The subcycling complication: fine blocks needing coarse neighbor data across rank boundaries require temporal interpolation data to be communicated after each coarse step. This is the hardest part of the implementation. Estimated efficiency: 85-90% at 8 nodes, 70-80% at 64 nodes.</p>
+</div>
+
+<!-- #15 -->
+<div class="opt">
+  <div class="opt-header">
+    <span class="opt-num">15</span>
+    <span class="opt-title">P-ERK multi-rate time integration</span>
+    <span class="opt-speedup">2-5x on AMR meshes</span>
+    <span class="opt-effort">High</span>
+  </div>
+  <div class="row">
+    <div><strong>What</strong><br>Paired Explicit Runge-Kutta: different blocks use different numbers of RK stages based on local stiffness. Stiff blocks (near punctures) get many stages; outer blocks get few.</div>
+    <div><strong>Why it works</strong><br>Near a puncture, chi approaches zero and the effective CFL number is much smaller. CK45 wastes 5 full stages everywhere when only the blocks near punctures are stiff. P-ERK gives the outer 80% of blocks (which are non-stiff) fewer stages, saving 2-5x total work. Requires careful stage-matching at block boundaries.</div>
+  </div>
+<pre><span class="cm">// rk4.c:248-262 -- CK45 uses fixed 5 stages everywhere</span>
+<span class="kw">static const double</span> CK_A[<span class="num">5</span>] = { ... };  <span class="cm">// same coefficients for all blocks</span>
+<span class="kw">static const double</span> CK_B[<span class="num">5</span>] = { ... };  <span class="cm">// no per-block adaptation</span></pre>
+</div>
+
+<!-- ================================================================ -->
+<hr>
+<h2>Not Recommended <span class="tier-label tier-no">Avoid</span></h2>
+
+<div class="opt" style="border-color: #30363d;">
+  <div class="opt-header">
+    <span class="opt-title" style="color: #8b949e;">Mixed precision (float32 for intermediates)</span>
+    <span class="opt-effort">Against</span>
+  </div>
+  <p>Float32 Christoffel symbols accumulate ~1e-5 roundoff near punctures, which is comparable to N=256 truncation error. This would <span class="warn">break 4th-order convergence</span> -- the invariant that validates correctness. FP64 is non-negotiable for all physics arrays. The GPU kernel is compute-bound (not bandwidth-bound) anyway, so halving precision does not halve runtime.</p>
+</div>
+
+<div class="opt" style="border-color: #30363d;">
+  <div class="opt-header">
+    <span class="opt-title" style="color: #8b949e;">Precomputed inverse metric</span>
+    <span class="opt-effort">Against</span>
+  </div>
+  <p>The inverse metric computation (<code>compute_inverse_sym</code>) is 30 FLOPs -- roughly 0.6% of the ~5,000 FLOPs in <code>ccz4_rhs_point</code>. Storing it as 6 extra evolved fields adds 48 bytes/point of memory bandwidth per RHS evaluation. On GPU, where the kernel is bandwidth-limited, this would be a <em>net negative</em>: saving 0.6% compute while adding ~3% bandwidth.</p>
+</div>
+
+<div class="opt" style="border-color: #30363d;">
+  <div class="opt-header">
+    <span class="opt-title" style="color: #8b949e;">Operator splitting (split RHS into substeps)</span>
+    <span class="opt-effort">Against</span>
+  </div>
+  <p>Splitting the CCZ4 RHS into separate operators (e.g., advection step + source step) introduces splitting error that <span class="warn">breaks the 4th-order convergence guarantee</span>. The CCZ4 equations are tightly coupled -- Christoffel symbols, Ricci tensor, and gauge conditions all depend on each other at the same point and time. Strang splitting only recovers 2nd order at best.</p>
+</div>
+
+<div class="opt" style="border-color: #30363d;">
+  <div class="opt-header">
+    <span class="opt-title" style="color: #8b949e;">Unified GPU memory</span>
+    <span class="opt-effort">Against</span>
+  </div>
+  <p>Page-fault-driven migration is unpredictable in a stencil code where neighboring threads access adjacent memory. Page faults during the RHS kernel would serialize GPU execution. GCC's OpenMP target support for unified memory is immature. Explicit mapping (already implemented) gives deterministic performance.</p>
+</div>
+
+<div class="opt" style="border-color: #30363d;">
+  <div class="opt-header">
+    <span class="opt-title" style="color: #8b949e;">Task-based parallelism</span>
+    <span class="opt-effort">Against</span>
+  </div>
+  <p>5-15% potential benefit, 2-4 month effort, and it would fundamentally break the simple bulk-synchronous execution model. The current OpenMP parallel-for with pack batching is already well-matched to GPU execution. Subcycling already provides inter-level asynchrony. Adding a DAG scheduler adds complexity with marginal benefit.</p>
+</div>
+
+<hr>
+<p style="text-align: center; color: #484f58; font-size: 0.8em; margin-top: 20px;">
+  Lattice Performance Optimization Proposals -- compiled from research on 2026-02-20, grounded in codebase analysis 2026-02-21.
+</p>
+
+</body>
+</html>
