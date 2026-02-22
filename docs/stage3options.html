@@ -351,7 +351,18 @@ rhs_Gamma[i] += ... - <span class="num">2.0</span> * kappa1_times_lapse * Z_over
 <strong>CCE via SpECTRE worldtube <span class="tag tag-best">Next-gen detectors</span></strong><br>
 <p>Output metric on worldtube at r=20-25M (AMR-refined region), feed to SpECTRE CCE. Gauge-invariant at J<sup>+</sup>, captures GW memory. ~300 LOC C for worldtube output.</p>
 <p class="good">Worldtube in refined region sidesteps wave zone resolution problem.</p>
+<p><strong>Spectral filter:</strong> <code>f_lm *= exp(-36 * (l/l_max)^8)</code> kills grid noise, preserves physics modes.</p>
+<table>
+<tr><th>Case</th><th>l<sub>max</sub></th><th>Points on sphere</th></tr>
+<tr><td>Equal-mass BBH</td><td>8</td><td>~150</td></tr>
+<tr><td>Precessing</td><td>12&ndash;16</td><td>~330&ndash;560</td></tr>
+<tr><td>N&gt;10 / next-gen</td><td>16&ndash;20</td><td>~560&ndash;860</td></tr>
+</table>
 </div>
+</div>
+
+<div class="evidence">
+The extraction sphere must not cross AMR refinement boundaries. At crossings, data drops to prolongation order and CCE propagates that noise. Constrain regridding so the sphere's bounding box stays within one level (~20 lines in <code>criterion.c</code>).
 </div>
 
 <h3>The Accuracy Chain</h3>
