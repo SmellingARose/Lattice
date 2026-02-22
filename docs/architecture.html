@@ -157,6 +157,7 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
     <li><a class="section-header">Deep Dives</a></li>
     <li><a href="#memory">Memory &amp; Performance</a></li>
     <li><a href="#amr-arch">AMR Architecture</a></li>
+    <li><a href="#refinement-criteria">Refinement Criteria</a></li>
     <li><a href="#design-decisions">Key Design Decisions</a></li>
 
     <li><a class="section-header">Using Lattice</a></li>
@@ -448,6 +449,193 @@ Grid indexing:  IDX(g, i, j, k) = k * Ntotal^2 + j * Ntotal + i
 
 <h3>Chi-gradient refinement</h3>
 <p>The refinement criterion computes <code>(dx / chi^2) * |grad(chi)|</code> at each point. This auto-detects and tracks black holes because chi (the conformal factor) has steep gradients near punctures. Hysteresis thresholds (refine at 0.3, coarsen at 0.1) prevent oscillation. The 2:1 constraint ensures adjacent blocks differ by at most one refinement level.</p>
+
+<p>Because <code>dx</code> appears in the numerator, the criterion naturally decreases as blocks refine (dx halves at each level). This creates concentric shells: blocks nearest the puncture refine to higher levels, while blocks farther away stop refining once the criterion drops below the threshold. However, the chi-gradient criterion only detects <strong>static features tied to the conformal factor</strong> &mdash; it does not track gravitational waves propagating outward, since chi barely changes in the wave zone.</p>
+
+<!-- ========================================== -->
+<h2 id="refinement-criteria">Refinement Criteria: Three Approaches</h2>
+
+<p>AMR refinement criteria decide which blocks need higher resolution and which can be coarsened. The choice of criterion directly affects accuracy, efficiency, and what physics gets resolved. There are three approaches used in numerical relativity, each with different trade-offs.</p>
+
+<h3>Option A: Chi-gradient (current implementation)</h3>
+
+<p>Our current criterion, implemented in <code>criterion.c</code>. For each leaf block, compute the maximum of <code>(dx / chi&sup2;) &times; |&nabla;chi|</code> over all interior cells. Refine if it exceeds <code>chi_refine</code>, coarsen if below <code>chi_coarsen</code>.</p>
+
+<p><strong>How it creates level structure:</strong> The conformal factor chi approaches zero at the puncture and 1 far away, so <code>|&nabla;chi|</code> is large near black holes and negligible elsewhere. Because <code>dx</code> halves at each refinement level, the criterion value drops as you refine:</p>
+
+<pre><code>Level 0 block near BH:  dx=1.0,  criterion = 5.0    → REFINE  (> 0.1)
+Level 1 block near BH:  dx=0.5,  criterion = 2.5    → REFINE  (> 0.1)
+Level 2 block near BH:  dx=0.25, criterion = 1.2    → REFINE  (> 0.1)
+Level 3 block near BH:  dx=0.125, criterion = 0.6   → REFINE  (> 0.1)
+Level 4 block near BH:  dx=0.0625, criterion = 0.08 → STOP   (< 0.1)</code></pre>
+
+<p>This creates nested shells around each puncture. The 2:1 constraint (<code>mesh_enforce_2to1</code>) forces buffer blocks at intermediate levels between any two levels that differ by more than 1.</p>
+
+<p><strong>Strengths:</strong></p>
+<ul>
+  <li>Automatically detects and follows moving punctures (re-evaluated every <code>regrid_every</code> steps)</li>
+  <li>No prior knowledge of puncture positions needed</li>
+  <li>Simple to implement and tune (two thresholds)</li>
+</ul>
+
+<p><strong>Limitations:</strong></p>
+<ul>
+  <li>Only sees the conformal factor &mdash; blind to gravitational waves, which propagate through regions where chi &asymp; 1</li>
+  <li>Can be aggressive: creates and destroys blocks rapidly as punctures move, generating regridding noise</li>
+  <li>Level structure is implicit (depends on threshold tuning), not explicitly controlled</li>
+</ul>
+
+<h3>Option B: Truncation error estimation</h3>
+
+<p>The most physically-motivated approach. Instead of looking at one field (chi), the truncation error criterion estimates how much error each block is actually producing. Blocks with large error get refined; blocks with small error get coarsened. This naturally <strong>follows any feature in the solution</strong> &mdash; punctures, gravitational waves, gauge dynamics, shock-like features &mdash; because all of these generate truncation error where they are under-resolved.</p>
+
+<h4>How it works</h4>
+
+<p>The local truncation error (LTE) is the difference between the true solution and what the numerical scheme computes at a given resolution. We cannot compute the true solution, but we can <em>estimate</em> the LTE by comparing the solution at two different resolutions. The key idea:</p>
+
+<ol>
+  <li><strong>Take a fine block</strong> at level L with grid spacing dx.</li>
+  <li><strong>Restrict its data</strong> to a coarser temporary grid at spacing 2dx (which we already have &mdash; this is the parent block&rsquo;s data, or a restriction of the fine block).</li>
+  <li><strong>Compute one RHS evaluation</strong> on the coarse grid to get the coarse time derivative.</li>
+  <li><strong>Restrict the fine RHS</strong> to the same coarse grid.</li>
+  <li><strong>Compare:</strong> the difference between the coarse RHS and the restricted fine RHS is an estimate of the truncation error at the coarse resolution.</li>
+</ol>
+
+<p>For a 4th-order scheme, the truncation error scales as O(dx&sup4;). The comparison gives an estimate of the leading-order error coefficient at each point. Where this coefficient is large, the solution has features that need more resolution.</p>
+
+<div class="diagram"><span class="highlight">Truncation Error Estimation (Richardson extrapolation)</span>
+
+  Fine block (level L, spacing dx):
+    u_fine[i,j,k]  &rarr;  RHS_fine[i,j,k]     <span class="comment">// standard RHS computation</span>
+
+  Restrict to coarse grid (spacing 2dx):
+    u_coarse = <span class="fn">Restrict</span>(u_fine)           <span class="comment">// 4th-order restriction</span>
+    RHS_coarse = <span class="fn">ccz4_rhs</span>(u_coarse)      <span class="comment">// one extra RHS eval on coarse grid</span>
+
+  Restricted fine RHS:
+    RHS_fine_restricted = <span class="fn">Restrict</span>(RHS_fine)
+
+  Truncation error estimate:
+    <span class="type">tau</span>[i,j,k] = |RHS_coarse - RHS_fine_restricted|
+
+  <span class="comment">// tau is large where the solution has sharp features</span>
+  <span class="comment">// (punctures, gravitational waves, gauge transients)</span>
+  <span class="comment">// tau is small where the solution is smooth</span></div>
+
+<h4>Why it &ldquo;follows a wave&rdquo;</h4>
+
+<p>Consider a gravitational wave pulse propagating outward from a binary merger. As the wave crosses a block:</p>
+
+<ul>
+  <li>The wave front has steep gradients in <strong>all fields</strong> (h_ij, K, A_ij, Gamma^i, lapse, shift) &mdash; not just chi.</li>
+  <li>The coarse RHS cannot accurately capture these gradients, while the fine RHS can.</li>
+  <li>The difference (the truncation error) spikes at the wave front location.</li>
+  <li>The refinement criterion triggers, adding resolution <strong>where the wave currently is</strong>.</li>
+  <li>As the wave passes through and the block returns to a smooth state, the truncation error drops and the block is coarsened.</li>
+</ul>
+
+<p>This creates a moving envelope of refinement that tracks the wave as it propagates &mdash; refinement appears ahead of the wave and disappears behind it. The chi-gradient criterion cannot do this because chi is essentially static in the wave zone.</p>
+
+<h4>Which fields to monitor</h4>
+
+<p>Not all 31 evolved fields contribute equally to the truncation error estimate. Standard practice (GRChombo, HAD) is to compute the relative error on a subset of physically meaningful fields:</p>
+
+<pre><code>// Relative truncation error on selected fields:
+//   chi   — tracks puncture structure
+//   K     — tracks strong-field dynamics
+//   h_11  — tracks gravitational wave content
+//
+// tau_rel = |tau_f| / max(|u_f|, epsilon)
+//
+// Refine if max(tau_rel) over selected fields > threshold</code></pre>
+
+<p>Using relative error (dividing by the field magnitude) prevents large-amplitude but smooth fields from dominating the estimate.</p>
+
+<h4>Cost</h4>
+
+<p>The main cost is one extra RHS evaluation per block on a coarse (half-resolution) grid. Since the coarse grid has 8x fewer points, this costs ~1/8 of a normal RHS evaluation per block. If computed every <code>regrid_every</code> steps (typically 32&ndash;64), the amortized overhead is &lt;1%. The restriction operations are negligible.</p>
+
+<h4>Implementation sketch</h4>
+
+<pre><code>double truncation_error_max(const block_t *b, const sim_params_t *p)
+{
+    // 1. Restrict fine block data to half-resolution temp grid
+    grid_t *coarse = grid_alloc(b->grid->N / 2, b->grid->L, p->rk_method);
+    restrict_all(b->grid, coarse);
+
+    // 2. Compute RHS on the coarse grid
+    compute_rhs(coarse, p);   // one extra evaluation
+
+    // 3. Compute RHS on the fine grid (already done during evolution)
+    //    Restrict the fine RHS to the coarse grid
+    grid_t *fine_rhs_restricted = grid_alloc(b->grid->N / 2, ...);
+    restrict_all(b->rhs, fine_rhs_restricted);
+
+    // 4. Compare: tau = |RHS_coarse - RHS_fine_restricted|
+    double max_tau = 0.0;
+    int fields_to_check[] = {FIELD_CHI, FIELD_K, FIELD_H11};
+    for (int f : fields_to_check) {
+        for each point (i,j,k) in coarse interior:
+            double u_mag = fmax(fabs(coarse->fields[f][idx]), 1e-10);
+            double tau = fabs(coarse->rhs[f][idx]
+                            - fine_rhs_restricted->fields[f][idx]);
+            double tau_rel = tau / u_mag;
+            if (tau_rel > max_tau) max_tau = tau_rel;
+    }
+
+    grid_free(coarse);
+    grid_free(fine_rhs_restricted);
+    return max_tau;   // compare against refine/coarsen thresholds
+}</code></pre>
+
+<h4>References</h4>
+<ul>
+  <li><strong>Berger &amp; Oliger (1984)</strong> &mdash; original truncation error AMR (the idea)</li>
+  <li><strong>GRChombo</strong> (<code>Source/TaggingCriteria/TruncationErrorCriterion.hpp</code>) &mdash; reference implementation</li>
+  <li><strong>HAD</strong> (Liebling et al.) &mdash; shadow hierarchy for truncation error</li>
+  <li><strong>arXiv:2312.05438</strong> (Rashti et al. 2023) &mdash; comparison of chi-gradient vs truncation error for BBH</li>
+</ul>
+
+<h3>Option C: L2-distance shells (puncture tracking)</h3>
+
+<p>The simplest and most predictable approach, used by most Einstein Toolkit / Carpet codes. Refinement levels are assigned based on the Euclidean distance from each puncture:</p>
+
+<pre><code>Level 5: r < 2M     (dx ~ M/64)    — puncture core
+Level 4: r < 4M     (dx ~ M/32)    — horizon region
+Level 3: r < 8M     (dx ~ M/16)    — BH vicinity
+Level 2: r < 16M    (dx ~ M/8)     — inner wave zone
+Level 1: r < 32M    (dx ~ M/4)     — wave zone
+Level 0: everywhere (dx ~ M/2)     — outer domain + boundary</code></pre>
+
+<p>Each level doubles the shell radius, creating a geometric series. The level of a block is determined by <code>level = max_level - floor(log2(r_min / r_inner))</code> where <code>r_min</code> is the minimum distance from the block center to any puncture.</p>
+
+<p><strong>Strengths:</strong></p>
+<ul>
+  <li>Explicit, deterministic level structure &mdash; no threshold tuning needed</li>
+  <li>Creates smooth, well-distributed refinement shells around each puncture</li>
+  <li>60% fewer blocks than box-in-box methods (Rashti et al. 2023)</li>
+  <li>Predictable memory usage and runtime</li>
+</ul>
+
+<p><strong>Limitations:</strong></p>
+<ul>
+  <li>Requires knowing puncture positions (must track them through evolution)</li>
+  <li>Static structure around each BH &mdash; does not adapt to unexpected features</li>
+  <li>Blind to gravitational waves (same as chi-gradient)</li>
+  <li>Over-refines in empty space between widely separated BHs</li>
+</ul>
+
+<h3>Recommended strategy for production</h3>
+
+<p>Production codes typically combine approaches. The recommended strategy from the literature (Rashti et al. 2023, arXiv:2312.05438):</p>
+
+<ol>
+  <li><strong>Primary: L2-distance shells</strong> &mdash; guarantees correct resolution near each puncture with explicit control over the level structure. Cheap, predictable, no regridding noise.</li>
+  <li><strong>Secondary: Truncation error</strong> &mdash; catches features the distance criterion misses: gravitational waves, gauge transients, unexpected dynamics. Evaluated every 32&ndash;64 coarse steps. Adds ~1% computational overhead.</li>
+  <li><strong>Fallback: Chi-gradient</strong> &mdash; safety net for extreme cases (e.g. new punctures forming from collapse). Rarely triggers when the other two are active.</li>
+</ol>
+
+<p>A block is refined if <strong>any</strong> of the three criteria triggers. A block is coarsened only if <strong>all three</strong> agree it is safe to coarsen (conservative strategy, prevents premature coarsening of wave-zone resolution).</p>
 
 <h3>5-phase ghost exchange</h3>
 <p>The multilevel ghost exchange uses the AthenaK coarse-buffer architecture, which avoids all cross-block memory writes:</p>
