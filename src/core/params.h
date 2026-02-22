@@ -52,14 +52,14 @@ typedef struct {
 
 /*
  * Noise reduction parameters.
- * All disabled by default (existing behavior preserved).
+ * CAKO, per-field sigma, and SSL on by default; CAHD off.
  * Ref: arXiv:2404.01137 (Etienne 2024)
  */
 typedef struct {
     int    use_cako;           /* CAKO: chi-adjusted KO dissipation        */
     int    use_cahd;           /* CAHD: constraint-adjusted Hamiltonian    */
     int    use_ssl;            /* SSL: slow-start lapse                    */
-    int    use_per_field_sigma;/* per-field dissipation strengths          */
+    int    use_per_field_sigma; /* per-field dissipation strengths         */
     double sigma_gauge;        /* KO sigma for gauge fields (default 0.99) */
     double sigma_phys;         /* KO sigma for physical fields (def 0.3)   */
     double cahd_coeff;         /* CAHD C coefficient (default 0.15)        */
@@ -143,12 +143,14 @@ static inline sim_params_t default_params(void)
     p.amr.chi_coarsen   = 0.01;
     p.amr.regrid_every  = 1;
 
-    /* Noise reduction defaults (all disabled — existing behavior) */
-    /* Ref: arXiv:2404.01137, Table 1 and Eqs. (20), (26), (27) */
-    p.noise.use_cako           = 0;
+    /* Noise reduction defaults.
+     * CAKO, per-field sigma, and SSL enabled by default — these are
+     * standard production techniques (arXiv:2404.01137, Etienne 2024).
+     * CAHD disabled by default (experimental, Phase 3). */
+    p.noise.use_cako           = 1;
     p.noise.use_cahd           = 0;
-    p.noise.use_ssl            = 0;
-    p.noise.use_per_field_sigma = 0;
+    p.noise.use_ssl            = 1;
+    p.noise.use_per_field_sigma = 1;
     p.noise.sigma_gauge        = 0.99;
     p.noise.sigma_phys         = 0.3;
     p.noise.cahd_coeff         = 0.15;
