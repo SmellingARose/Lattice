@@ -1,4 +1,4 @@
-# Binary Inspiral Convergence Test: Failure Analysis
+# Binary Inspiral Convergence Test: Failure Analysis & AMR Plan
 
 **Date:** 2026-02-22
 **Test:** `test_inspiral_convergence.c` — AMR binary inspiral convergence (3 resolutions)
@@ -194,46 +194,275 @@ Even mature production codes (MAYA catalog) measure order 2.1–2.9 with 6th-ord
 spatial FD, attributed to AMR interpolation effects. Clean 4th order requires
 being well inside the convergent regime.
 
+### Comparison with our test vs production standards
+
+| Parameter | Our failing test | Production standard | Source |
+|-----------|-----------------|---------------------|--------|
+| Finest dx | M/1.5 – M/3 | M/64 – M/128 | AthenaK, GR-Athena++ |
+| Domain half-width | 32M | 400 – 2048M | All codes |
+| Refinement levels | 0 | 10 – 14 | All codes |
+| Block size | 32–64 | 16 (CPU), packed 16 or 32 (GPU) | AthenaK, GRChombo |
+| Refinement criterion | none (uniform) | L2 distance from punctures (primary) + chi-gradient (secondary) | Rashti et al. 2023 |
+| Regrid interval | n/a | 32–64 coarse steps (inner levels), static (outer) | GRChombo, ET |
+| Subcycling | n/a | Yes (2.5–4.5x speedup) | CarpetX 2025 |
+| Time interp at boundaries | Linear (in code) | Dense output / 4th-order (CarpetX 2025) | Key for convergence |
+| KO dissipation | Uniform sigma=0.3 | CAKO: sigma(x) = chi(x) * sigma_base | Etienne 2024 |
+
 ---
 
-## Recommended Fixes
+## Current State of the AMR System
 
-### Fix 1: Fix the convergence comparison methodology
+Our AMR infrastructure is **fully implemented and tested**:
+- Berger-Oliger subcycling (per-level packing, recursive)
+- Multi-level ghost exchange (5-phase, coarse-buffer architecture)
+- 4th-order prolongation (5-point Lagrange, AthenaK weights)
+- 4th-order restriction (4-point symmetric Lagrange)
+- Chi-gradient refinement criterion
+- 2:1 level constraint enforcement
+- Oct-tree block hierarchy with Morton ordering
+- Temporal interpolation for subcycling (`ghost_fill_from_coarser`)
+- Block-aware Sommerfeld BCs
+- AH finder on AMR meshes
+- AMR-aware 1D output slices
+
+**Test coverage:**
+- `test_amr_mesh.c` (8/8): block creation, Morton ordering, neighbor finding
+- `test_amr_ghost.c` (5/5): same-level and multi-level ghost exchange
+- `test_amr_prolong.c` (9/9): prolongation, restriction, CAKO/CAHD/SSL
+- `test_amr_refine.c` (9/9): split, merge, 2:1 constraint, full regrid
+- `test_subcycle.c` (3/3): uniform identity, flat stability, BH evolution
+- `test_pack_evolve.c` (3/3): packed vs per-block validation
+
+**What has NOT been tested:**
+- max_level > 2 (deep refinement hierarchies)
+- Binary inspiral WITH active AMR refinement
+- Many regrid cycles on a moving binary over hundreds of M
+- Time interpolation accuracy at coarse-fine boundaries during long subcycling runs
+
+---
+
+## Key Findings from Literature Review
+
+### 1. AMR is mandatory for binary inspiral convergence
+
+No published code has ever demonstrated binary inspiral convergence on a uniform
+grid. The dynamic range (M/100 near puncture to 2000M outer boundary = 200,000:1)
+requires 10–14 levels of factor-2 refinement.
+
+### 2. MAYA catalog only gets order 2.1–2.9
+
+Even with mature AMR (Einstein Toolkit + Carpet), the MAYA waveform catalog
+(arXiv:2309.00262) measures convergence order 2.1–2.9, not the theoretical 4th.
+Root cause: **2nd-order time interpolation** at coarse-fine boundaries during
+subcycling. CarpetX fixed this in 2025 using RK4 dense output. Our code uses
+linear temporal interpolation in `ghost_fill_from_coarser()` — same limitation.
+
+### 3. Prolongation should be 5th-order
+
+Rule: prolongation order >= FD convergence order + 1. For 4th-order FD, need at
+least 5th-order prolongation. Our 5-point Lagrange stencil is formally 4th-order
+(degree-4 polynomial). Upgrading to 6-point (5th-order) would use one more stencil
+point; our 4-ghost-zone width supports this.
+
+### 4. Most codes use puncture-tracking, not pure chi-gradient
+
+Production codes use **L2 distance from puncture positions** as the primary
+criterion, with chi-gradient as secondary. The L2 (spherical) method from Rashti
+et al. 2023 (arXiv:2312.05438) creates **60% fewer blocks** than box-in-box and
+produces smoother convergence with less regridding noise. Chi-gradient alone
+creates and destroys blocks too aggressively.
+
+### 5. Block size of 16³ is universal standard
+
+AthenaK, GR-Athena++, and GRChombo all use N_block=16 for CPU runs. For GPU,
+AthenaK packs multiple 16³ MeshBlocks into MeshBlockPacks (same pattern as our
+`meshblock_pack.h`). Larger blocks (32–64) waste memory in refined regions and
+reduce load balancing flexibility.
+
+### 6. CAKO dissipation reduces constraint violations by ~2 orders of magnitude
+
+Chi-adjusted KO: `sigma_eff(x) = chi(x) * sigma_base`. Near punctures where
+chi → 0, this gives near-zero dissipation (preventing over-dissipation of the
+steep fields). In the wave zone where chi ≈ 1, full dissipation strength.
+Combined with per-field sigma (0.99 for gauge, 0.3 for physical), this is
+the state of the art (arXiv:2404.01137, Etienne 2024).
+
+---
+
+## Memory Estimates for AMR Inspiral
+
+### Memory per block
+
+Formula: `31 fields × (N_block + 8)³ × rk_blocks × 8 bytes`
+
+| N_block | CK45 (3 blocks) | Classic RK4 (4 blocks) |
+|---------|-----------------|------------------------|
+| 16      | 9.8 MB          | 13.1 MB                |
+| 32      | 45.4 MB         | 60.6 MB                |
+
+### AMR hierarchy estimate (N_root=8, N_block=16, L=128M, max_level=6, CK45)
+
+| Level | dx (M) | What it covers | Est. leaf blocks | Memory |
+|-------|--------|----------------|-----------------|--------|
+| 0 | 1.0 | Whole domain (±64M) | ~490 | 4.8 GB |
+| 1 | 0.5 | Around binary (~30M) | ~40 | 0.4 GB |
+| 2 | 0.25 | Near each BH (~15M) | ~24 | 0.2 GB |
+| 3 | 0.125 | BH vicinity (~7M) | ~16 | 0.2 GB |
+| 4 | 0.0625 | Horizon region (~3M) | ~12 | 0.1 GB |
+| 5 | 0.031 | Puncture (~1.5M) | ~10 | 0.1 GB |
+| 6 | 0.016 (M/64) | Puncture core | ~8 | 0.1 GB |
+| **Total** | | | **~600** | **~6 GB** |
+
+### Domain size vs memory trade-off
+
+| N_root | Domain L | Boundary | Root blocks | Root memory (CK45) |
+|--------|----------|----------|-------------|-------------------|
+| 4 | 64M | 32M | 64 | 0.6 GB |
+| 6 | 96M | 48M | 216 | 2.1 GB |
+| 8 | 128M | 64M | 512 | 5.0 GB |
+| 12 | 192M | 96M | 1728 | 16.9 GB |
+| 16 | 256M | 128M | 4096 | 40.1 GB |
+
+**33 GB machine limit:** N_root=8 (L=128M) fits easily. N_root=12 (L=192M)
+is tight. N_root=16 (L=256M) exceeds memory.
+
+---
+
+## Runtime Estimates for AMR Inspiral
+
+### Calibration from the uniform test
+
+From the inspiral.log timing data:
+- LOW (27 blocks of 32³, classic RK4): ~2.3 sec/step
+- MED (27 blocks of 48³): ~6.5 sec/step
+- HIGH (27 blocks of 64³): ~14 sec/step
+- Derived: ~1.3 μs per point per classic RK4 step (4 stages)
+- CK45 (5 stages): ~1.6 μs per point per step
+
+### Subcycling cost per coarse step
+
+With Berger-Oliger, level L takes 2^L sub-steps per coarse step. For
+N_root=8, N_block=16, max_level=6, CK45:
+
+| Level | Leaf blocks | Sub-steps | Block-steps/coarse step | % of work |
+|-------|-------------|-----------|------------------------|-----------|
+| 0 | ~490 | 1 | 490 | 29% |
+| 1 | ~40 | 2 | 80 | 5% |
+| 2 | ~24 | 4 | 96 | 6% |
+| 3 | ~16 | 8 | 128 | 8% |
+| 4 | ~12 | 16 | 192 | 11% |
+| 5 | ~10 | 32 | 320 | 19% |
+| 6 | ~8 | 64 | 512 | **30%** |
+| **Total** | | | **~1818** | |
+
+Cost per block-step (16³ block, CK45): (16+8)³ × 1.6μs ≈ 0.022 sec
+Cost per coarse step: ~1818 × 0.022 ≈ **40 sec**
+
+### 3-resolution convergence test runtime
+
+Varying N_block at 1.5x ratio (16 → 24 → 32), t_final=200M (~1 orbit):
+
+| Resolution | N_block | Finest dx | Coarse dt | Steps | sec/step | Wall time |
+|------------|---------|-----------|-----------|-------|----------|-----------|
+| LOW | 16 | M/64 | 0.25M | 800 | ~40 | **~9 hours** |
+| MED | 24 | M/96 | 0.167M | 1200 | ~95 | **~32 hours** |
+| HIGH | 32 | M/128 | 0.125M | 1600 | ~180 | **~80 hours** |
+| **Total** | | | | | | **~121 hours (~5 days)** |
+
+### Comparison with the failed uniform test
+
+| | Uniform test (38h) | AMR test (~121h) |
+|-|-------------------|-----------------|
+| Finest dx | M/3 (useless) | M/64 to M/128 (production) |
+| Boundary | 32M (too small) | 64M (marginal) |
+| t_final | 500–1000M | 200M |
+| Convergence? | No (order 0.3) | Expected yes (order ~3–4) |
+
+The AMR test is ~3x longer but actually resolves the physics. The uniform test
+was faster but produced no useful convergence information.
+
+### Budget-constrained option
+
+For a faster (~45h) test with slightly lower resolution:
+
+```
+N_root=6, N_block=16, L=96M, max_level=5, CK45, t_final=100M
+3 resolutions: N_block = 16, 24, 32
+```
+
+| Resolution | Finest dx | Wall time |
+|------------|-----------|-----------|
+| LOW (16) | M/32 | ~3h |
+| MED (24) | M/48 | ~12h |
+| HIGH (32) | M/64 | ~30h |
+| **Total** | | **~45 hours** |
+
+Memory peak: ~8 GB. M/32 is marginal (Etienne says M/42 is "slightly outside
+the convergent regime"), but M/48 and M/64 should be in or near the regime.
+
+### Why not skip subcycling? (global timestep)
+
+AthenaK uses a global timestep for GPU efficiency. But:
+- dt_global = CFL × dx_finest = 0.25 × 0.016 = 0.004M
+- Steps for t=200M: 50,000
+- Cost per step: ~600 blocks × 0.022 sec ≈ 13 sec
+- Total: 50,000 × 13 ≈ **180 hours** (50% worse than subcycling)
+
+Subcycling wins by ~1.5x because most blocks are coarse (level 0 at dt=0.25M
+vs global dt=0.004M).
+
+---
+
+## Recommended Fixes (Implementation Plan)
+
+### Fix 1: Fix convergence comparison methodology
 
 Compare at the same physical time, not the same step number. Either:
 - Run different step counts per resolution (as `test_convergence.c` does)
 - Interpolate the Hamiltonian history to common physical times
 
-### Fix 2: Use an annular exclusion region
+### Fix 2: Use annular exclusion region for constraint norms
 
-Replace `mesh_constraint_l2()` with an annular norm that excludes r < 5M from
-each puncture and r > 0.8·L_boundary, matching `constraint_l2_annular()`.
+For binary: exclude r < 5M from each puncture AND r > 0.8 × L_boundary.
+This requires tracking puncture positions (already needed for L2 refinement
+criterion).
 
-### Fix 3: Enable AMR refinement for inspiral
+### Fix 3: Add L2-distance refinement criterion
 
-Use the existing AMR infrastructure with sufficient refinement levels (6–8+)
-to achieve dx ~ M/40–M/80 near the punctures while extending the boundary to
-200M+. This is the standard approach in every production NR code.
+Primary: refine blocks within spherical shells around each puncture at
+prescribed radii per level. Secondary: chi-gradient for any features missed.
+Ref: Rashti et al. 2023 (arXiv:2312.05438) — 60% fewer blocks than box-in-box.
 
-### Fix 4: Reduce evolution time for convergence test
+### Fix 4: Enable AMR with sufficient refinement levels
 
-If testing on a uniform grid (without AMR), use T_final ~ 10–20M — short enough
-that all resolutions are still in the convergent regime and boundary reflections
-have not yet arrived.
+Target configuration:
+```
+N_root=6, N_block=16, L=96M, max_level=5, CK45
+chi_refine=0.08, chi_coarsen=0.01, regrid_every=32
+```
 
-### Fix 5: Increase domain size
-
-Target outer boundary at 200M minimum (standard in literature).
-
-### Fix 6: Enable gauge advection
+### Fix 5: Enable gauge advection
 
 Set `lapse_advec_coeff = 1.0` and `shift_advec_coeff = 1.0` for binary
 evolutions, matching GRChombo and most production codes.
 
-### Fix 7: Enable CAKO + per-field dissipation
+### Fix 6: Enable CAKO + per-field dissipation
 
-Use chi-adjusted KO (CAKO) with per-field sigma (0.99 gauge, 0.3 physical)
-as recommended by arXiv:2404.01137.
+CAKO: `sigma_eff(x) = chi(x) * sigma_base`
+Per-field: sigma=0.99 for gauge (lapse, shift, B^i), sigma=0.3 for physical.
+Ref: arXiv:2404.01137 (Etienne 2024).
+
+### Fix 7: Upgrade prolongation to 5th-order
+
+Add one stencil point to the Lagrange prolongation (6-point, degree-5).
+Rule: prolongation order >= FD order + 1. 4-ghost-zone width supports this.
+
+### Fix 8 (future): Upgrade temporal interpolation to 4th-order
+
+Replace linear time interpolation in `ghost_fill_from_coarser()` with RK4
+dense output (polynomial from stage vectors). Without this, temporal convergence
+at coarse-fine boundaries is limited to 2nd order — the MAYA catalog limitation.
+Ref: CarpetX arXiv:2503.09629.
 
 ---
 
@@ -254,3 +483,19 @@ The evolution code itself (CCZ4 RHS, finite differences, time integration,
 dissipation) is correctly implemented and verified by the passing single-BH
 convergence test at order 5.4. The issue is entirely in the test setup and
 resolution requirements for binary inspiral.
+
+---
+
+## References
+
+- arXiv:2409.10383 — AthenaK performance-portable NR (2024)
+- arXiv:2411.11989 — GR-Athena++ BBH waveforms (2024)
+- arXiv:2312.05438 — AMR refinement criterion comparison (Rashti et al. 2023)
+- arXiv:2404.01137 — Improved moving-puncture techniques (Etienne 2024)
+- arXiv:2503.09629 — CarpetX GPU subcycling with dense output (2025)
+- arXiv:2309.00262 — Second MAYA waveform catalog (2023)
+- arXiv:0709.2160 — BAM high-spin BBH mergers (Marronetti et al.)
+- arXiv:2505.01495 — GRChombo 25-BH cluster simulation (2025)
+- arXiv:2406.09139 — Cell-centered vs vertex-centered AMR (2024)
+- arXiv:2406.11626 — ExaGRyPE NR solvers (2024)
+- arXiv:2506.06838 — AthenaK GW150914 simulations (2025)
