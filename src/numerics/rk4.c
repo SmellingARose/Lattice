@@ -695,12 +695,19 @@ static void classic_rk4_step_mesh_packed(mesh_t *m, const sim_params_t *p,
 
     /* Store final state back to blocks */
     meshblock_pack_store(pack, m->blocks);
+    meshblock_pack_free(pack);
+
+    /* Fix inter-block ghost zones.  The packed accum/axpy operate on all
+     * points, but RHS is only computed for interior + Sommerfeld-boundary
+     * cells.  Non-boundary ghost RHS stays zero, so the final
+     * data = scratch + accum leaves those ghosts at U^n instead of U^{n+1}.
+     * A same-level exchange restores correct ghost values from neighbors'
+     * (correctly evolved) interiors. */
+    ghost_exchange(m);
 
     /* Post-step: algebraic constraints + parent restriction */
     mesh_enforce_algebraic(m);
     mesh_restrict_to_parents(m);
-
-    meshblock_pack_free(pack);
 }
 
 /* ========================================================================

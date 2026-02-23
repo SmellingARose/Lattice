@@ -73,7 +73,7 @@
 <tr><td class="good">Pre-computed AMR weight tables</td><td>232-entry restriction/prolongation product tables (bit-exact verified)</td><td>Eliminates 4.6B multiplies</td><td>&mdash;</td><td class="good">Done</td></tr>
 <tr><td class="good">Default integrator: classic RK4</td><td>4 stages, faster than CK45 (5 stages); 25% more memory</td><td>Faster wall-clock per step</td><td>&mdash;</td><td class="good">Done</td></tr>
 <tr style="border-top: 2px solid #da3634"><td class="good">AMR dynamic-regrid NaN</td><td>ghost_fill_from_coarser ordering bug: restrict&rarr;exchange per block read stale coarse_bufs</td><td class="good">Fixed</td><td>&mdash;</td><td class="good">Done</td></tr>
-<tr><td class="warn">Classic RK4 packed mesh divergence</td><td>classic_rk4_step_mesh_packed() 10x higher constraints than CK45</td><td class="warn">Blocks classic packed path</td><td>~50 LOC</td><td class="warn">Investigate</td></tr>
+<tr><td class="good">Classic RK4 packed mesh divergence</td><td>Stale ghost zones after data=scratch+accum; added post-store ghost_exchange</td><td class="good">Fixed</td><td>&mdash;</td><td class="good">Done</td></tr>
 <tr style="border-top: 2px solid #30363d"><td class="good">6th-order FD + 8th-order KO</td><td>Wider stencils, smaller truncation error</td><td>170x cheaper at &epsilon;=10<sup>&minus;6</sup></td><td>&mdash;</td><td class="good">Done</td></tr>
 <tr><td class="good">6th-order prolongation + restriction</td><td>Matched AMR operator order, no fallbacks</td><td>Clean convergence at refinement boundaries</td><td>&mdash;</td><td class="good">Done</td></tr>
 <tr><td class="good">4th-order Sommerfeld BCs</td><td>5 Fornberg stencil variants, no 2nd-order fallback</td><td>Reduced boundary reflections</td><td>&mdash;</td><td class="good">Done</td></tr>
@@ -168,10 +168,10 @@
 <p><strong>Fix:</strong> Split into two passes &mdash; Pass 1 restricts <em>all</em> fine blocks, Pass 2 does exchange + prolongate. Removed <code>has_coarser_leaves</code> workaround from <code>step_level()</code>. Test 2 now passes with classic RK4 (Ham L2 = 2.9e-03).</p>
 </div>
 
-<div class="card" style="border-color: #da3634;">
-<div class="card-header"><span class="card-title">Classic RK4 packed mesh divergence</span> <span class="tag tag-bug">INVESTIGATE</span></div>
-<p><code>test_amr_evolve</code> Test 1: classic RK4 packed mesh stepper produces 10x higher constraint violations than CK45 packed stepper (ratio 11.87 vs expected ~1.0). <strong>Pre-existing</strong> &mdash; <code>classic_rk4_step_mesh_packed()</code> was never tested before (tests always used CK45). Single-grid classic RK4 works correctly.</p>
-<p><strong>Likely cause:</strong> Bug in <code>classic_rk4_step_mesh_packed()</code> stage ordering or buffer management. CK45 packed path (<code>ck45_step_mesh_packed()</code>) works correctly as the reference.</p>
+<div class="card" style="border-color: #238830;">
+<div class="card-header"><span class="card-title">Classic RK4 packed mesh divergence</span> <span class="tag tag-rec">FIXED</span></div>
+<p>Packed RHS only computes interior + Sommerfeld-boundary cells. Non-boundary ghost <code>rhs</code> stays zero, so <code>accum</code> accumulates zeros there. Final <code>data = scratch + accum</code> puts ghost zones at U<sup>n</sup> instead of U<sup>n+1</sup>. CK45 unaffected (incremental <code>data += B*dU</code> leaves ghosts at last-exchanged values).</p>
+<p><strong>Fix:</strong> Added <code>ghost_exchange(m)</code> after <code>meshblock_pack_store</code> in <code>classic_rk4_step_mesh_packed()</code>. Test 1 ratio = 1.0000 (bit-identical to single-grid).</p>
 </div>
 
 <!-- ================================================================ -->

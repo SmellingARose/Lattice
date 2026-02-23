@@ -112,12 +112,6 @@ output slices work on AMR meshes.
   faster (4 stages vs 5) but uses 25% more memory. All test allocations updated.
 - **Tests:** Flat spacetime, convergence (order 6.5), Bowen-York (29/29), HiSpID (26/26), AH finder (13/13), Maxwell (15/15). Total: 31 evolved fields (25 CCZ4 + 6 EM).
 
-**Known issues (to investigate):**
-- Classic RK4 packed mesh stepper (test_amr_evolve Test 1) produces 10x higher
-  constraint violations than CK45 packed stepper (single-grid classic is fine).
-  Likely a bug in `classic_rk4_step_mesh_packed()`. CK45 packed path works correctly.
-  Not a regression — this path was never tested before (tests always used CK45).
-
 Update as milestones are reached.
 
 ## Project Structure

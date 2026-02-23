@@ -3,28 +3,39 @@
 > **Note:** When adding/removing/renaming files or functions, also update
 > `docs/architecture.html` — the living map of the codebase structure.
 
-## 2026-02-23: Fix ghost_fill_from_coarser ordering bug
+## 2026-02-23: Fix two AMR packed-stepper bugs (test_amr_evolve 8/8)
 
-**Root cause:** `ghost_fill_from_coarser()` did restrict → exchange → prolongate
-per block in a single loop. Block B could read neighbor C's `coarse_buf` before
-C had been restricted, getting stale/zero data. This caused NaN in AMR subcycling
-(test_amr_evolve Test 2).
+**Bug 1: ghost_fill_from_coarser ordering (Test 2 NaN)**
 
-**Fix:** Split the single loop into two passes:
+Root cause: `ghost_fill_from_coarser()` did restrict → exchange → prolongate
+per block in a single loop. Block B read neighbor C's `coarse_buf` before C
+had been restricted → stale/zero data → NaN in AMR subcycling.
+
+Fix: Split the single loop into two passes:
 - **Pass 1:** Restrict ALL fine blocks' interiors into their `coarse_buf`s.
 - **Pass 2:** Exchange coarse_buf ghosts + boundary extrapolate + prolongate.
-  Safe to read neighbors' coarse_bufs — they were all restricted in Pass 1.
 
-**Cleanup:**
-- Removed `has_coarser_leaves` workaround from `step_level()` in `rk4.c`.
-  The two-pass fix makes `ghost_fill_from_coarser` safe to call unconditionally.
-- Removed `RK_CK45` debug override and ~60 lines of NaN diagnostic code from
-  `test_amr_evolve.c`. Test 2 now runs with default classic RK4.
-- Removed unused `fields.h` include from `test_amr_evolve.c`.
+Cleanup: removed `has_coarser_leaves` workaround from `step_level()` in `rk4.c`,
+removed `RK_CK45` debug override and ~60 lines of NaN diagnostics from
+`test_amr_evolve.c`, removed unused `fields.h` include.
 
-**Verification:** `make` zero warnings. test_amr_evolve: 7/8 pass. Test 2 (dynamic
-regrid) now passes with classic RK4 (Ham L2 = 2.9e-03, no NaN). Test 1 still fails
-(pre-existing classic packed mesh divergence, unrelated).
+**Bug 2: classic RK4 packed mesh stale ghost zones (Test 1 ratio 11.87)**
+
+Root cause: packed RHS only computes interior + Sommerfeld-boundary cells.
+Non-boundary ghost `rhs` stays zero, so `accum` accumulates zeros there.
+Final `data = scratch + accum` puts ghost zones at U^n (start of step) instead
+of U^{n+1}. `meshblock_pack_store` copies these stale ghosts back to blocks.
+Constraint measurement then reads wrong ghost values in FD stencils.
+CK45 unaffected: its incremental `data += B*dU` leaves ghosts at whatever the
+last ghost exchange set them to (≈ U^{n+1}).
+
+Fix: added `ghost_exchange(m)` after `meshblock_pack_store` in
+`classic_rk4_step_mesh_packed()`. Restores correct ghost values from neighbors'
+correctly-evolved interiors.
+
+**Verification:** `make` zero warnings. test_amr_evolve: **8/8 ALL PASSED**.
+Test 1 ratio = 1.0000 (bit-identical to single-grid). Test 2 Ham L2 = 2.6e-03.
+Full suite: flat PASSED, convergence 6.56/6.25 PASSED, Maxwell 15/15 PASSED.
 
 ---
 
@@ -46,14 +57,13 @@ regrid) now passes with classic RK4 (Ham L2 = 2.9e-03, no NaN). Test 1 still fai
 - All test files updated: hardcoded `RK_CK45` → `RK_CLASSIC` in grid/mesh allocations.
   Tests using `default_params()` now get classic by default.
 
-**Discovered issues during testing:**
-1. AMR Test 2 NaN: **Fixed** (see entry above) — `ghost_fill_from_coarser` ordering bug.
-2. Classic RK4 packed mesh diverges from single-grid (ratio 11.87x, should be ~1.0).
-   CK45 packed path is fine (ratio 0.99). Bug is in `classic_rk4_step_mesh_packed()`.
-   Never caught before because all AMR tests used CK45. To investigate.
+**Discovered issues during testing (both now fixed — see entry above):**
+1. AMR Test 2 NaN — `ghost_fill_from_coarser` ordering bug.
+2. Classic RK4 packed mesh divergence (ratio 11.87x) — stale ghost zones after
+   `data = scratch + accum`.
 
 **Verification:** `make` zero warnings. Flat PASSED. Convergence 6.56/6.25 PASSED.
-Maxwell PASSED (15/15). Test 1 classic packed divergence is pre-existing.
+Maxwell PASSED (15/15). AMR evolve 8/8 ALL PASSED.
 
 ---
 
