@@ -58,6 +58,10 @@ enum {
     NUM_FIELDS       /* = 31                                    */
 };
 
+/* Number of CCZ4-only fields (excludes 6 EM fields).
+ * Used to skip EM fields in dissipation/Sommerfeld when EM is disabled. */
+#define NUM_CCZ4_FIELDS 25
+
 /* First field index for symmetric tensor components */
 #define FIELD_H_START FIELD_H11
 #define FIELD_A_START FIELD_A11

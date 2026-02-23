@@ -32,7 +32,8 @@
  * Legacy per-grid API
  * ======================================================================== */
 
-void backend_compute_rhs(double **rhs, const double *const *src,
+void backend_compute_rhs(double ** restrict rhs,
+                         const double *const * restrict src,
                          const grid_t *g, const sim_params_t *p,
                          rhs_point_func_t func)
 {
@@ -186,22 +187,27 @@ void backend_compute_rhs_packed(meshblock_pack_t *pack, const sim_params_t *p)
 {
     int lo = pack->ghost;
     int hi = pack->ghost + pack->N;
-    int N  = pack->N;
-    int ghost = pack->ghost;
-    int Nt = pack->Ntotal;
     int nb = pack->n_blocks;
     size_t npts = pack->npts;
     double *data = pack->data;
     double *rhs_data = pack->rhs;
     double *dx_arr = pack->dx_per_block;
 
+    /* Build grid_t template once before kernel — eliminates 1064-byte
+     * memset + 5 assignments per GPU thread. Only dx varies per block. */
+    grid_t g_template;
+    memset(&g_template, 0, sizeof(grid_t));
+    g_template.N       = pack->N;
+    g_template.ghost   = pack->ghost;
+    g_template.Ntotal  = pack->Ntotal;
+    g_template.npoints = npts;
+
     #pragma omp target teams distribute parallel for collapse(4)
     for (int b = 0; b < nb; b++) {
         for (int k = lo; k < hi; k++) {
             for (int j = lo; j < hi; j++) {
                 for (int i = lo; i < hi; i++) {
-                    /* Per-field pointers from pack layout (on GPU stack).
-                     * src[f] points to field f of block b within the pack. */
+                    /* Per-field pointers from pack layout (on GPU stack) */
                     double *rhs_ptrs[NUM_FIELDS];
                     const double *src_ptrs[NUM_FIELDS];
                     for (int f = 0; f < NUM_FIELDS; f++) {
@@ -210,20 +216,10 @@ void backend_compute_rhs_packed(meshblock_pack_t *pack, const sim_params_t *p)
                         rhs_ptrs[f] = rhs_data + base;
                     }
 
-                    /* Minimal grid_t on stack for IDX/dx access.
-                     * Only fields used by ccz4_rhs_point are set. */
-                    grid_t g_local;
-                    memset(&g_local, 0, sizeof(grid_t));
-                    g_local.N       = N;
-                    g_local.ghost   = ghost;
-                    g_local.Ntotal  = Nt;
-                    g_local.dx      = dx_arr[b];
-                    g_local.npoints = npts;
+                    /* Copy pre-built template, set only per-block dx */
+                    grid_t g_local = g_template;
+                    g_local.dx = dx_arr[b];
 
-                    /* Dispatch: combined CCZ4+Maxwell if EM enabled.
-                     * Both functions are omp declare target — no function
-                     * pointers needed on GPU.
-                     * Ref: arXiv:0907.1151 (Einstein-Maxwell 3+1) */
                     if (p->em_enabled)
                         ccz4_maxwell_rhs_point(rhs_ptrs,
                                                (const double *const *)src_ptrs,
@@ -252,7 +248,6 @@ void backend_compute_rhs_packed(meshblock_pack_t *pack, const sim_params_t *p)
  */
 void backend_sommerfeld_packed(meshblock_pack_t *pack, const sim_params_t *p)
 {
-    (void)p;
     int lo = pack->ghost;
     int hi = pack->ghost + pack->N;
     int Nt = pack->Ntotal;
@@ -304,8 +299,10 @@ void backend_sommerfeld_packed(meshblock_pack_t *pack, const sim_params_t *p)
                     int strides[3] = { 1, Nt, Nt*Nt };
                     double loc[3] = { x, y, z };
 
-                    /* Apply Sommerfeld to each field */
-                    for (int field = 0; field < NUM_FIELDS; field++) {
+                    /* Apply Sommerfeld to each field.
+                     * Skip EM fields when disabled (saves 6/31 iterations). */
+                    int nf = p->em_enabled ? NUM_FIELDS : NUM_CCZ4_FIELDS;
+                    for (int field = 0; field < nf; field++) {
                         size_t base = (size_t)field * nb * npts
                                     + (size_t)b * npts;
                         const double *src_f = data + base;
@@ -547,7 +544,7 @@ static void packed_restrict_to_coarse(meshblock_pack_t *pack)
                         for (int sk = 0; sk < RESTRICT_STENCIL; sk++) {
                             int fk = fk_base - 2 + sk;
                             for (int sj = 0; sj < RESTRICT_STENCIL; sj++) {
-                                double wkj = restrict_w[sk] * restrict_w[sj];
+                                double wkj = restrict_wkj[sk][sj];
                                 int fj = fj_base - 2 + sj;
                                 for (int si = 0; si < RESTRICT_STENCIL; si++) {
                                     int fi = fi_base - 2 + si;
@@ -846,12 +843,11 @@ static void packed_prolongate_fine_ghosts(meshblock_pack_t *pack)
                         int oj = (cj_cont >= cj0) ? 1 : 0;
                         int ok = (ck_cont >= ck0) ? 1 : 0;
 
+                        int combo = ok * 2 + oj;
                         double val = 0.0;
                         for (int sk = 0; sk < PROLONG_STENCIL; sk++) {
-                            int wk = ok ? (PROLONG_STENCIL-1-sk) : sk;
                             for (int sj = 0; sj < PROLONG_STENCIL; sj++) {
-                                int wj = oj ? (PROLONG_STENCIL-1-sj) : sj;
-                                double wkj = prolong_w[wk] * prolong_w[wj];
+                                double wkj = prolong_wkj[combo][sk][sj];
                                 for (int si = 0; si < PROLONG_STENCIL; si++) {
                                     int wi = oi ?
                                         (PROLONG_STENCIL-1-si) : si;

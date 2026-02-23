@@ -18,7 +18,8 @@
 #ifdef LATTICE_GPU
 #pragma omp declare target
 #endif
-void maxwell_rhs_point(double **rhs, const double *const *src,
+void maxwell_rhs_point(double ** restrict rhs,
+                       const double *const * restrict src,
                        const grid_t *g, const sim_params_t *p,
                        int i, int j, int k);
 #ifdef LATTICE_GPU
@@ -31,7 +32,8 @@ void maxwell_rhs_point(double **rhs, const double *const *src,
 #ifdef LATTICE_GPU
 #pragma omp declare target
 #endif
-void ccz4_maxwell_rhs_point(double **rhs, const double *const *src,
+void ccz4_maxwell_rhs_point(double ** restrict rhs,
+                             const double *const * restrict src,
                              const grid_t *g, const sim_params_t *p,
                              int i, int j, int k);
 #ifdef LATTICE_GPU
@@ -47,7 +49,7 @@ void ccz4_maxwell_rhs_point(double **rhs, const double *const *src,
 #ifdef LATTICE_GPU
 #pragma omp declare target
 #endif
-void em_stress_energy(const double *const *src, const grid_t *g,
+void em_stress_energy(const double *const * restrict src, const grid_t *g,
                       int idx,
                       double chi, const double h_UU[3][3],
                       const double h[3][3],

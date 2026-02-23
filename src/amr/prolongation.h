@@ -31,6 +31,12 @@
 
 extern const double prolong_w[PROLONG_STENCIL];
 
+/* Pre-computed prolong_w[wk]*prolong_w[wj] for 4 octant combos.
+ * combo = ok*2 + oj, where wk = ok ? (6-sk) : sk, wj = oj ? (6-sj) : sj.
+ * Eliminates one multiply + two conditional index computations per middle loop.
+ * Verified bit-exact against runtime computation (tools/verify_weights.c). */
+extern const double prolong_wkj[4][PROLONG_STENCIL][PROLONG_STENCIL];
+
 /* Prolongate a single field from coarse grid to fine grid.
  * Fine grid has 2x the resolution (N_fine = 2 * N_coarse, dx_fine = dx_coarse/2).
  * Same physical domain. Fills fine interior points from coarse data.

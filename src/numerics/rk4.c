@@ -28,6 +28,7 @@
 #include "../amr/mesh.h"
 #include "../amr/ghost_exchange.h"
 #include "../amr/meshblock_pack.h"
+#include "../amr/restriction.h"
 #include "../boundary/sommerfeld.h"
 #include "../core/fields.h"
 #include "../geometry/tensor_utils.h"
@@ -41,80 +42,57 @@
  * Shared helpers
  * ======================================================================== */
 
-/* Copy all field arrays: dst = src */
+/* Copy all field arrays: dst = src.
+ * Backing blocks are contiguous (fields[f] = block + f*n), so use single memcpy. */
 static void copy_fields(double **dst, const double *const *src, size_t n)
 {
-    for (int f = 0; f < NUM_FIELDS; f++)
-        memcpy(dst[f], src[f], n * sizeof(double));
+    memcpy(dst[0], src[0], (size_t)NUM_FIELDS * n * sizeof(double));
 }
 
-/* Linear combination: dst[i] = a[i] + coeff * b[i] for all fields */
+/* Linear combination: dst[i] = a[i] + coeff * b[i] for all fields.
+ * Flattened to single OMP region over all fields (eliminates 31 fork/joins). */
 static void axpy_fields(double **dst, const double *const *a,
                         const double *const *b, double coeff, size_t n)
 {
-    for (int f = 0; f < NUM_FIELDS; f++) {
-        double *restrict d = dst[f];
-        const double *restrict ap = a[f];
-        const double *restrict bp = b[f];
-        #pragma omp parallel for simd schedule(static)
-        for (size_t i = 0; i < n; i++)
-            d[i] = ap[i] + coeff * bp[i];
-    }
+    double *restrict d = dst[0];
+    const double *restrict ap = a[0];
+    const double *restrict bp = b[0];
+    size_t total = (size_t)NUM_FIELDS * n;
+    #pragma omp parallel for simd schedule(static)
+    for (size_t i = 0; i < total; i++)
+        d[i] = ap[i] + coeff * bp[i];
 }
 
-/* Accumulate: accum[i] += coeff * rhs[i] */
+/* Accumulate: accum[i] += coeff * rhs[i].
+ * Flattened to single OMP region over all fields. */
 static void accum_add(double **accum, const double *const *rhs_arr,
                       double coeff, size_t n)
 {
-    for (int f = 0; f < NUM_FIELDS; f++) {
-        double *restrict acc = accum[f];
-        const double *restrict rp = rhs_arr[f];
-        #pragma omp parallel for simd schedule(static)
-        for (size_t i = 0; i < n; i++)
-            acc[i] += coeff * rp[i];
-    }
+    double *restrict acc = accum[0];
+    const double *restrict rp = rhs_arr[0];
+    size_t total = (size_t)NUM_FIELDS * n;
+    #pragma omp parallel for simd schedule(static)
+    for (size_t i = 0; i < total; i++)
+        acc[i] += coeff * rp[i];
 }
 
-/* Apply: fields[i] += accum[i] */
+/* Apply: fields[i] += accum[i].
+ * Flattened to single OMP region over all fields. */
 static void apply_accum(double **fields, const double *const *accum, size_t n)
 {
-    for (int f = 0; f < NUM_FIELDS; f++) {
-        double *restrict fp = fields[f];
-        const double *restrict ap = accum[f];
-        #pragma omp parallel for simd schedule(static)
-        for (size_t i = 0; i < n; i++)
-            fp[i] += ap[i];
-    }
+    double *restrict fp = fields[0];
+    const double *restrict ap = accum[0];
+    size_t total = (size_t)NUM_FIELDS * n;
+    #pragma omp parallel for simd schedule(static)
+    for (size_t i = 0; i < total; i++)
+        fp[i] += ap[i];
 }
 
-/* Zero all field arrays */
+/* Zero all field arrays.
+ * Backing blocks are contiguous, so use single memset. */
 static void zero_fields(double **arr, size_t n)
 {
-    for (int f = 0; f < NUM_FIELDS; f++)
-        memset(arr[f], 0, n * sizeof(double));
-}
-
-/*
- * Fast inverse cube root for det ≈ 1: two Newton-Raphson iterations
- * starting from linear approximation 1/cbrt(1+e) ≈ 1 - e/3.
- * Falls back to cbrt() for det outside [0.5, 2.0].
- * ~3-5x faster than 1/cbrt(det) for the common case.
- */
-static inline double fast_inv_cbrt(double det)
-{
-    if (det < 0.5 || det > 2.0)
-        return 1.0 / cbrt(det);
-
-    /* Linear seed: 1/cbrt(1+e) ≈ 1 - e/3 */
-    double s = 1.0 + (1.0 - det) / 3.0;
-
-    /* Newton for f(s) = s^3 * det - 1 = 0 → s = s * (4 - det*s^3) / 3 */
-    double s3 = s * s * s;
-    s = s * (4.0 - det * s3) / 3.0;
-    s3 = s * s * s;
-    s = s * (4.0 - det * s3) / 3.0;
-
-    return s;
+    memset(arr[0], 0, (size_t)NUM_FIELDS * n * sizeof(double));
 }
 
 /*
@@ -261,19 +239,19 @@ static const double CK_B[5] = {
     2277821191437.0 / 14882151754819.0
 };
 
-/* Fused CK45 update: dU = A*dU + dt*F; U += B*dU */
+/* Fused CK45 update: dU = A*dU + dt*F; U += B*dU.
+ * Flattened to single OMP region over all fields (eliminates 31 fork/joins). */
 static void ck45_update(double **U, double **dU, const double *const *F,
                         double A_s, double B_s, double dt, size_t n)
 {
-    for (int f = 0; f < NUM_FIELDS; f++) {
-        double *restrict u = U[f];
-        double *restrict du = dU[f];
-        const double *restrict fp = F[f];
-        #pragma omp parallel for simd schedule(static)
-        for (size_t i = 0; i < n; i++) {
-            du[i] = A_s * du[i] + dt * fp[i];
-            u[i] += B_s * du[i];
-        }
+    double *restrict u = U[0];
+    double *restrict du = dU[0];
+    const double *restrict fp = F[0];
+    size_t total = (size_t)NUM_FIELDS * n;
+    #pragma omp parallel for simd schedule(static)
+    for (size_t i = 0; i < total; i++) {
+        du[i] = A_s * du[i] + dt * fp[i];
+        u[i] += B_s * du[i];
     }
 }
 
@@ -361,21 +339,15 @@ static void restrict_level_to_parents(mesh_t *m, int level)
                         for (int pk = 0; pk < half_N; pk++) {
                             for (int pj = 0; pj < half_N; pj++) {
                                 for (int pi = 0; pi < half_N; pi++) {
-                                    double sum = 0.0;
-                                    for (int ok = 0; ok < 2; ok++) {
-                                        for (int oj = 0; oj < 2; oj++) {
-                                            for (int oi = 0; oi < 2; oi++) {
-                                                int fi = cg->ghost + 2 * pi + oi;
-                                                int fj = cg->ghost + 2 * pj + oj;
-                                                int fk = cg->ghost + 2 * pk + ok;
-                                                sum += cg->fields[f][IDX(cg, fi, fj, fk)];
-                                            }
-                                        }
-                                    }
+                                    int fi_base = cg->ghost + 2 * pi;
+                                    int fj_base = cg->ghost + 2 * pj;
+                                    int fk_base = cg->ghost + 2 * pk;
                                     int pii = ghost_w + p_off_i + pi;
                                     int pjj = ghost_w + p_off_j + pj;
                                     int pkk = ghost_w + p_off_k + pk;
-                                    pg->fields[f][IDX(pg, pii, pjj, pkk)] = sum * 0.125;
+                                    pg->fields[f][IDX(pg, pii, pjj, pkk)] =
+                                        restrict_cell(cg->fields[f], cg,
+                                                      fi_base, fj_base, fk_base);
                                 }
                             }
                         }
@@ -875,6 +847,10 @@ static void step_level(mesh_t *m, const sim_params_t *p,
             backend_ghost_exchange_packed(pack);
             backend_compute_rhs_packed(pack, p);
             backend_sommerfeld_packed(pack, p);
+            /* Save k1 (Stage 0 RHS) for quartic temporal interpolation.
+             * Must happen before Stage 1 overwrites the pack's RHS buffer.
+             * Only saves for blocks with rhs_old allocated (level < max_level). */
+            if (s == 0) save_k1_from_pack(pack, m->blocks);
             backend_update_ck45_packed(pack, CK_A[s], CK_B[s], dt_level);
         }
     } else {

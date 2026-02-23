@@ -48,7 +48,8 @@ static const int levi_civita[3][3][3] = {
 };
 
 /* Forward declaration of KO dissipation */
-extern void add_ko_dissipation(double **rhs, const double *const *src,
+extern void add_ko_dissipation(double ** restrict rhs,
+                               const double *const * restrict src,
                                const grid_t *g, const sim_params_t *p,
                                int i, int j, int k);
 
@@ -74,7 +75,7 @@ extern void add_ko_dissipation(double **rhs, const double *const *src,
  *
  * Ref: arXiv:0907.1151 Eq. (5)
  */
-void em_stress_energy(const double *const *src, const grid_t *g,
+void em_stress_energy(const double *const * restrict src, const grid_t *g,
                       int idx,
                       double chi, const double h_UU[3][3],
                       const double h[3][3],
@@ -183,7 +184,8 @@ void em_stress_energy(const double *const *src, const grid_t *g,
  * Ref: arXiv:0907.1151 Eqs. (23)-(24)
  * Ref: arXiv:1903.01036 Eq. (6)-(8)
  */
-void maxwell_rhs_point(double **rhs, const double *const *src,
+void maxwell_rhs_point(double ** restrict rhs,
+                       const double *const * restrict src,
                        const grid_t *g, const sim_params_t *p,
                        int i, int j, int k)
 {
@@ -361,7 +363,8 @@ void maxwell_rhs_point(double **rhs, const double *const *src,
  * Calls ccz4_rhs_point (which includes EM source terms via p->em_enabled),
  * then maxwell_rhs_point for the 6 EM field equations.
  */
-void ccz4_maxwell_rhs_point(double **rhs, const double *const *src,
+void ccz4_maxwell_rhs_point(double ** restrict rhs,
+                             const double *const * restrict src,
                              const grid_t *g, const sim_params_t *p,
                              int i, int j, int k)
 {

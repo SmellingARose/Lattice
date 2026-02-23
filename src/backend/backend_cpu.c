@@ -26,7 +26,8 @@
  * Legacy per-grid API
  * ======================================================================== */
 
-void backend_compute_rhs(double **rhs, const double *const *src,
+void backend_compute_rhs(double ** restrict rhs,
+                         const double *const * restrict src,
                          const grid_t *g, const sim_params_t *p,
                          rhs_point_func_t func)
 {
@@ -207,13 +208,13 @@ void backend_compute_rhs_packed(meshblock_pack_t *pack, const sim_params_t *p)
  */
 void backend_sommerfeld_packed(meshblock_pack_t *pack, const sim_params_t *p)
 {
-    (void)p;
     int lo = pack->ghost;
     int hi = pack->ghost + pack->N;
     int Nt = pack->Ntotal;
     int nb = pack->n_blocks;
     size_t npts = pack->npts;
 
+    #pragma omp parallel for schedule(dynamic)
     for (int b = 0; b < nb; b++) {
         /* Per-field pointer arrays into pack layout for this block */
         double *rhs_ptrs[NUM_FIELDS];
@@ -290,8 +291,10 @@ void backend_sommerfeld_packed(meshblock_pack_t *pack, const sim_params_t *p)
                     /* Apply Sommerfeld to each field:
                      * rhs = -sum_dir(d_dir(f) * x_dir / r)
                      *      + (f_asymptotic - f) / r
+                     * Skip EM fields when disabled (saves 6/31 iterations).
                      * Ref: GRChombo BoundaryConditions.cpp:593-661 */
-                    for (int field = 0; field < NUM_FIELDS; field++) {
+                    int nf = p->em_enabled ? NUM_FIELDS : NUM_CCZ4_FIELDS;
+                    for (int field = 0; field < nf; field++) {
                         double sommerfeld = 0.0;
 
                         for (int dir = 0; dir < 3; dir++) {
@@ -460,6 +463,8 @@ static void packed_exchange_same_level(meshblock_pack_t *pack)
     int Nt = pack->Ntotal;
     size_t npts = pack->npts;
 
+    /* Safe to parallelize: each block's ghost writes are disjoint */
+    #pragma omp parallel for schedule(dynamic)
     for (int b = 0; b < nb; b++) {
         for (int n = 0; n < NUM_NEIGHBORS; n++) {
             int nbr = pack->neighbor_table[b * NUM_NEIGHBORS + n];
@@ -524,6 +529,7 @@ static void packed_restrict_to_coarse(meshblock_pack_t *pack)
     size_t npts = pack->npts;
     size_t cnpts = pack->coarse_npts;
 
+    #pragma omp parallel for schedule(dynamic)
     for (int b = 0; b < nb; b++) {
         int r = pack->refined_map[b];
         if (r < 0) continue;
@@ -546,7 +552,7 @@ static void packed_restrict_to_coarse(meshblock_pack_t *pack)
                         for (int sk = 0; sk < RESTRICT_STENCIL; sk++) {
                             int fk = fk_base - 2 + sk;
                             for (int sj = 0; sj < RESTRICT_STENCIL; sj++) {
-                                double wkj = restrict_w[sk] * restrict_w[sj];
+                                double wkj = restrict_wkj[sk][sj];
                                 int fj = fj_base - 2 + sj;
                                 for (int si = 0; si < RESTRICT_STENCIL; si++) {
                                     int fi = fi_base - 2 + si;
@@ -586,6 +592,7 @@ static void packed_fill_coarse_buf_ghosts(meshblock_pack_t *pack)
     size_t npts = pack->npts;
     size_t cnpts = pack->coarse_npts;
 
+    #pragma omp parallel for schedule(dynamic)
     for (int b = 0; b < nb; b++) {
         int r = pack->refined_map[b];
         if (r < 0) continue;
@@ -718,6 +725,7 @@ static void packed_fill_coarse_boundary(meshblock_pack_t *pack)
         c[d][2] = t * (t - 1.0) / 2.0;
     }
 
+    #pragma omp parallel for schedule(dynamic)
     for (int b = 0; b < nb; b++) {
         int r = pack->refined_map[b];
         if (r < 0) continue;
@@ -832,6 +840,7 @@ static void packed_prolongate_fine_ghosts(meshblock_pack_t *pack)
     size_t cnpts = pack->coarse_npts;
     int half = PROLONG_STENCIL / 2;
 
+    #pragma omp parallel for schedule(dynamic)
     for (int b = 0; b < nb; b++) {
         int r = pack->refined_map[b];
         if (r < 0) continue;
@@ -888,13 +897,12 @@ static void packed_prolongate_fine_ghosts(meshblock_pack_t *pack)
                         int oj = (cj_cont >= cj0) ? 1 : 0;
                         int ok = (ck_cont >= ck0) ? 1 : 0;
 
-                        /* 5×5×5 tensor product Lagrange interpolation */
+                        /* 7×7×7 tensor product Lagrange interpolation */
+                        int combo = ok * 2 + oj;
                         double val = 0.0;
                         for (int sk = 0; sk < PROLONG_STENCIL; sk++) {
-                            int wk = ok ? (PROLONG_STENCIL-1-sk) : sk;
                             for (int sj = 0; sj < PROLONG_STENCIL; sj++) {
-                                int wj = oj ? (PROLONG_STENCIL-1-sj) : sj;
-                                double wkj = prolong_w[wk] * prolong_w[wj];
+                                double wkj = prolong_wkj[combo][sk][sj];
                                 for (int si = 0; si < PROLONG_STENCIL; si++) {
                                     int wi = oi ?
                                         (PROLONG_STENCIL-1-si) : si;

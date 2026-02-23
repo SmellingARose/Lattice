@@ -37,6 +37,37 @@ struct block_s;
 
 extern const double restrict_w[RESTRICT_STENCIL];
 
+/* Pre-computed w[sk]*w[sj] products for 6×6 tensor restriction.
+ * Eliminates one multiply per inner loop iteration (216 per coarse cell).
+ * Verified bit-exact against runtime computation (tools/verify_weights.c). */
+extern const double restrict_wkj[RESTRICT_STENCIL][RESTRICT_STENCIL];
+
+/*
+ * Restrict a single coarse cell from fine data.
+ * fi_base, fj_base, fk_base: fine grid indices of the first direct child.
+ *
+ * 6th-order: 3D tensor product of 6-point stencil (base-2 to base+3).
+ * Stencil reaches at most 2 cells into ghost zones; with ghost width = 4
+ * the bounds [0, Ntotal) always contain valid data. No fallback needed.
+ */
+static inline double restrict_cell(const double *src, const grid_t *fg,
+                                    int fi_base, int fj_base, int fk_base)
+{
+    double val = 0.0;
+    for (int sk = 0; sk < RESTRICT_STENCIL; sk++) {
+        int fk = fk_base - 2 + sk;
+        for (int sj = 0; sj < RESTRICT_STENCIL; sj++) {
+            double wkj = restrict_wkj[sk][sj];
+            int fj = fj_base - 2 + sj;
+            for (int si = 0; si < RESTRICT_STENCIL; si++) {
+                int fi = fi_base - 2 + si;
+                val += wkj * restrict_w[si] * src[IDX(fg, fi, fj, fk)];
+            }
+        }
+    }
+    return val;
+}
+
 /* Restrict a single field from fine grid to coarse grid.
  * Fine grid has 2x the resolution (N_fine = 2 * N_coarse).
  * Same physical domain. Fills coarse interior points.

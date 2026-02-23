@@ -32,7 +32,8 @@ static inline int is_gauge_field(int f)
 #ifdef LATTICE_GPU
 #pragma omp declare target
 #endif
-void add_ko_dissipation(double **rhs, const double *const *src,
+void add_ko_dissipation(double ** restrict rhs,
+                        const double *const * restrict src,
                         const grid_t *g, const sim_params_t *p,
                         int i, int j, int k)
 {
@@ -51,7 +52,9 @@ void add_ko_dissipation(double **rhs, const double *const *src,
         W = sqrt(fmax(chi, 1.0e-10));
     }
 
-    for (int f = 0; f < NUM_FIELDS; f++) {
+    /* Skip EM fields when EM is disabled (saves 6/31 field iterations) */
+    int nf = p->em_enabled ? NUM_FIELDS : NUM_CCZ4_FIELDS;
+    for (int f = 0; f < nf; f++) {
         /* Per-field sigma: gauge fields get stronger dissipation.
          * When disabled, all fields use p->sigma (existing behavior). */
         double sigma_f;

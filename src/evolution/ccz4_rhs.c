@@ -29,11 +29,13 @@
 #include <math.h>
 
 /* Forward declaration */
-extern void add_ko_dissipation(double **rhs, const double *const *src,
+extern void add_ko_dissipation(double ** restrict rhs,
+                               const double *const * restrict src,
                                const grid_t *g, const sim_params_t *p,
                                int i, int j, int k);
 
-void ccz4_rhs_point(double **rhs, const double *const *src,
+void ccz4_rhs_point(double ** restrict rhs,
+                    const double *const * restrict src,
                     const grid_t *g, const sim_params_t *p,
                     int i, int j, int k)
 {
@@ -448,9 +450,12 @@ void ccz4_rhs_point(double **rhs, const double *const *src,
 
     /* ========== 10. Moving puncture gauge ========== */
     /* Ref: GRChombo MovingPunctureGauge.hpp:54-65 */
+    /* Fast path: default lapse_power = 1.0 avoids 50-100 cycle pow() call.
+     * Ref: GRChombo MovingPunctureGauge.hpp:54-65 */
+    double lapse_pow = (p->gauge.lapse_power == 1.0) ? lapse
+                       : pow(lapse, p->gauge.lapse_power);
     double rhs_lapse = p->gauge.lapse_advec_coeff * advec_lapse
-        - p->gauge.lapse_coeff * pow(lapse, p->gauge.lapse_power)
-          * (K - 2.0 * Theta);
+        - p->gauge.lapse_coeff * lapse_pow * (K - 2.0 * Theta);
 
     /* SSL: Slow-Start Lapse — temporary Gaussian damping of initial gauge pulse.
      * Drives lapse toward trumpet solution (alpha → W = sqrt(chi)) during

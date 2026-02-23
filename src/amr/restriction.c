@@ -41,31 +41,28 @@ const double restrict_w[RESTRICT_STENCIL] = {
     -17.0 / 11520.0      /* -0.00147569... (outermost) */
 };
 
-/*
- * Restrict a single coarse cell from fine data.
- * fi_base, fj_base, fk_base: fine grid indices of the first direct child.
- *
- * 6th-order: 3D tensor product of 6-point stencil (base-2 to base+3).
- * Stencil reaches at most 2 cells into ghost zones; with ghost width = 4
- * the bounds [0, Ntotal) always contain valid data. No fallback needed.
- */
-static inline double restrict_cell(const double *src, const grid_t *fg,
-                                    int fi_base, int fj_base, int fk_base)
-{
-    double val = 0.0;
-    for (int sk = 0; sk < RESTRICT_STENCIL; sk++) {
-        int fk = fk_base - 2 + sk;
-        for (int sj = 0; sj < RESTRICT_STENCIL; sj++) {
-            double wkj = restrict_w[sk] * restrict_w[sj];
-            int fj = fj_base - 2 + sj;
-            for (int si = 0; si < RESTRICT_STENCIL; si++) {
-                int fi = fi_base - 2 + si;
-                val += wkj * restrict_w[si] * src[IDX(fg, fi, fj, fk)];
-            }
-        }
-    }
-    return val;
-}
+/* Pre-computed w[sk]*w[sj] products for 6×6 tensor restriction.
+ * Eliminates one multiply per inner loop iteration (216 per coarse cell). */
+const double restrict_wkj[RESTRICT_STENCIL][RESTRICT_STENCIL] = {
+    { (-17.0/11520.0)*(-17.0/11520.0), (-17.0/11520.0)*(97.0/3840.0),
+      (-17.0/11520.0)*(2743.0/5760.0), (-17.0/11520.0)*(2743.0/5760.0),
+      (-17.0/11520.0)*(97.0/3840.0),   (-17.0/11520.0)*(-17.0/11520.0) },
+    { (97.0/3840.0)*(-17.0/11520.0), (97.0/3840.0)*(97.0/3840.0),
+      (97.0/3840.0)*(2743.0/5760.0), (97.0/3840.0)*(2743.0/5760.0),
+      (97.0/3840.0)*(97.0/3840.0),   (97.0/3840.0)*(-17.0/11520.0) },
+    { (2743.0/5760.0)*(-17.0/11520.0), (2743.0/5760.0)*(97.0/3840.0),
+      (2743.0/5760.0)*(2743.0/5760.0), (2743.0/5760.0)*(2743.0/5760.0),
+      (2743.0/5760.0)*(97.0/3840.0),   (2743.0/5760.0)*(-17.0/11520.0) },
+    { (2743.0/5760.0)*(-17.0/11520.0), (2743.0/5760.0)*(97.0/3840.0),
+      (2743.0/5760.0)*(2743.0/5760.0), (2743.0/5760.0)*(2743.0/5760.0),
+      (2743.0/5760.0)*(97.0/3840.0),   (2743.0/5760.0)*(-17.0/11520.0) },
+    { (97.0/3840.0)*(-17.0/11520.0), (97.0/3840.0)*(97.0/3840.0),
+      (97.0/3840.0)*(2743.0/5760.0), (97.0/3840.0)*(2743.0/5760.0),
+      (97.0/3840.0)*(97.0/3840.0),   (97.0/3840.0)*(-17.0/11520.0) },
+    { (-17.0/11520.0)*(-17.0/11520.0), (-17.0/11520.0)*(97.0/3840.0),
+      (-17.0/11520.0)*(2743.0/5760.0), (-17.0/11520.0)*(2743.0/5760.0),
+      (-17.0/11520.0)*(97.0/3840.0),   (-17.0/11520.0)*(-17.0/11520.0) },
+};
 
 void restrict_field(const grid_t *fine_g, int ff,
                     grid_t *coarse_g, int cf)

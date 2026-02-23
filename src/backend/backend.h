@@ -33,13 +33,15 @@
 /* Point-wise RHS function signature.
  * Called for each interior grid point (i,j,k).
  * Reads from src arrays, writes to rhs arrays. */
-typedef void (*rhs_point_func_t)(double **rhs, const double *const *src,
+typedef void (*rhs_point_func_t)(double ** restrict rhs,
+                                 const double *const * restrict src,
                                  const grid_t *g, const sim_params_t *p,
                                  int i, int j, int k);
 
 /* Compute RHS over the entire interior grid.
  * Dispatches to the selected backend (OpenMP, Metal, CUDA, HIP). */
-void backend_compute_rhs(double **rhs, const double *const *src,
+void backend_compute_rhs(double ** restrict rhs,
+                         const double *const * restrict src,
                          const grid_t *g, const sim_params_t *p,
                          rhs_point_func_t func);
 

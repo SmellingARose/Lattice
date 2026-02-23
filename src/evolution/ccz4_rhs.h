@@ -18,7 +18,8 @@
 #ifdef LATTICE_GPU
 #pragma omp declare target
 #endif
-void ccz4_rhs_point(double **rhs, const double *const *src,
+void ccz4_rhs_point(double ** restrict rhs,
+                    const double *const * restrict src,
                     const grid_t *g, const sim_params_t *p,
                     int i, int j, int k);
 #ifdef LATTICE_GPU

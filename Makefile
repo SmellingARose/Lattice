@@ -37,6 +37,7 @@ MAIN_SRC      = src/main.c
 # Backend selection
 ifeq ($(BACKEND),cpu)
     BACKEND_SRC = src/backend/backend_cpu.c
+    LTO_FLAGS = -flto
     ifeq ($(UNAME),Darwin)
         # macOS: clang needs libomp from Homebrew
         OMP_PREFIX ?= $(shell brew --prefix libomp 2>/dev/null || echo /opt/homebrew/opt/libomp)
@@ -53,6 +54,7 @@ else ifeq ($(BACKEND),gpu)
     # Set GOMP_NVPTX_NATIVE_GPU_THREAD_STACK_SIZE=16384 at runtime.
     # GPU_ARCH: nvptx-none (NVIDIA, default) or amdgcn-amdhsa (AMD)
     GPU_ARCH ?= nvptx-none
+    LTO_FLAGS =
     BACKEND_FLAGS = -fopenmp -foffload=$(GPU_ARCH) -fcf-protection=none \
                     -fno-stack-protector \
                     -foffload-options="-lm -fno-stack-protector" -DLATTICE_GPU
@@ -67,10 +69,10 @@ ALL_SRC = $(CORE_SRC) $(EVOLUTION_SRC) $(NUMERICS_SRC) $(INITIAL_SRC) \
 # Compiler flags
 INCLUDES = -I src
 CFLAGS_BASE = -std=c17 -Wall -Wextra -Werror -D_GNU_SOURCE -Wno-unused-but-set-variable -DFD_ORDER=$(FD_ORDER) $(INCLUDES) $(BACKEND_FLAGS)
-CFLAGS_OPT  = $(CFLAGS_BASE) -O3 -ffast-math -march=native
+CFLAGS_OPT  = $(CFLAGS_BASE) -O3 -ffast-math -march=native $(LTO_FLAGS)
 CFLAGS_DBG  = $(CFLAGS_BASE) -O0 -g -fsanitize=address,undefined -DDEBUG
 
-LDFLAGS = $(BACKEND_LIBS) -lm
+LDFLAGS = $(BACKEND_LIBS) -lm $(LTO_FLAGS)
 
 # Build directory
 BUILD = build
