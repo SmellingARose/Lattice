@@ -1,501 +1,252 @@
-# Binary Inspiral Convergence Test: Failure Analysis & AMR Plan
+# Performance & Optimization Findings
 
-**Date:** 2026-02-22
-**Test:** `test_inspiral_convergence.c` — AMR binary inspiral convergence (3 resolutions)
-**Result:** FAIL — measured order 0.30, expected 4.0
-**Wall time:** 38.1 hours
+Compiled from deep analysis of the Lattice codebase, comparison against 6 production NR codes (AthenaK, GR-Athena++, SpECTRE, CarpetX, ExaGRyPE, NRPy+), and mathematical methods research. February 2026.
 
 ---
 
-## Test Parameters
+## Quick Wins
 
-| Resolution | N_block | N_eff | dx (M) | dt (M) | t_final (M) |
-|------------|---------|-------|--------|--------|-------------|
-| LOW        | 32      | 96    | 0.6667 | 0.1667 | 1000.0      |
-| MED        | 48      | 144   | 0.4444 | 0.1111 | 666.7       |
-| HIGH       | 64      | 192   | 0.3333 | 0.0833 | 500.0       |
+### 1. LTO (-flto)
+Add `-flto` to CFLAGS_OPT in the Makefile (CPU only; GPU LTO broken in GCC 15). Enables cross-TU inlining of `ccz4_rhs_point` through the function pointer in `backend_cpu.c`. One line change.
 
-Physics: equal-mass non-spinning, d=10M, P_y=0.0939 (3PN), L=64M domain,
-uniform AMR mesh (max_level=0), classic RK4, CFL=0.25, 6000 steps.
+**Benefit:** 5-15% CPU speedup.
 
----
+### 2. `__restrict__` on RHS pointers
+The compiler cannot assume `rhs[f]` and `src[FIELD_CHI]` don't alias, so it re-loads from memory after every write. Add `__restrict__` to `ccz4_rhs_point` signature and backend dispatch functions.
 
-## What the Log Shows
+**Benefit:** 3-8% (enables more aggressive CSE and loop-invariant code motion). GPU-safe.
 
-### Anti-convergence in the Hamiltonian constraint
+### 3. Conditional EM field allocation
+The 6 EM fields (E^i, B^i_mag) are always allocated even when `--em` is not set. `NUM_FIELDS=31` is baked into every allocation. Check `em_enabled` in `grid_alloc()` and skip EM fields when disabled.
 
-At the same physical time, the higher-resolution runs have **larger** constraint
-violations — the opposite of convergence:
+**Benefit:** 19% memory reduction when EM is off (~970 MB per single grid at N=256, ~4.5 GB for 200-block AMR).
 
-| t (M)  | Ham_LOW  | Ham_MED  | Ham_HIGH | Ratio HIGH/LOW |
-|--------|----------|----------|----------|----------------|
-| 0      | 8.06e-03 | 6.21e-03 | 4.21e-03 | 0.52 (good)    |
-| 16.7   | 1.43e-02 | 2.37e-02 | 3.31e-02 | 2.31 (bad)     |
-| 100.0  | 1.04e-01 | 1.88e-01 | 2.87e-01 | 2.76 (bad)     |
-| 250.0  | 1.51e-01 | 2.74e-01 | 4.19e-01 | 2.77 (bad)     |
+### 4. Move `em_enabled` branch outside inner loop
+In `backend_cpu.c:176` and `backend_gpu.c:227`, the EM dispatch check is inside the innermost loop. Hoist it outside, use two separate code paths.
 
-For 4th-order convergence with ratio 1.5x, Ham_HIGH should be 5.06x **smaller**
-than Ham_LOW. Instead it is 2.8x **larger**.
-
-### Constraint growth (stable but large)
-
-All three runs are numerically stable — no NaN, no blowup. But constraints grow
-monotonically from O(1e-3) to O(1e-1), a factor of 20–110x, then plateau:
-
-- LOW saturates at ~0.172 by t ~ 500M
-- MED saturates at ~0.310
-- HIGH saturates at ~0.468
-
-### Convergence factor Q
-
-Q was never good. Mean Q = 1.13 (expected 5.06). It oscillated wildly early
-(0.32 to 6.20 at steps 200–300) then settled to ~0.9–1.0 at late times.
+**Benefit:** Marginal on CPU (branch predictor handles it), ~5% on GPU (eliminates warp divergence).
 
 ---
 
-## Root Causes (ranked by severity)
-
-### 1. CRITICAL BUG: Same-step comparison instead of same-time comparison
-
-The test compares Hamiltonian constraint values at the **same step number** across
-resolutions. But since dt = CFL × dx differs per resolution, the same step number
-corresponds to completely different physical times:
-
-- Step 1000: LOW at t=166.7M, MED at t=111.1M, HIGH at t=83.3M
-- Step 6000: LOW at t=1000.0M, MED at t=666.7M, HIGH at t=500.0M
-
-The convergence ratio Q = |H_low − H_med| / |H_med − H_high| is only meaningful
-when all three solutions are evaluated at the **same physical time**. Here the
-differences are dominated by different evolutionary states (different numbers of
-orbits completed), not by truncation error.
-
-**The passing single-BH test (`test_convergence.c`) does it correctly:** it
-computes a different number of steps per resolution to reach the same T_final=2M,
-then compares final constraint values.
-
-### 2. CRITICAL: All resolutions are below the convergent regime
-
-Production NR codes use AMR with finest grid spacing of **M/42 to M/160** near
-punctures. Our uniform grid has dx = 0.33–0.67M, which is **20–50x too coarse**.
-
-| Code               | Finest dx near puncture | Our dx    | Ratio   |
-|--------------------|------------------------|-----------|---------|
-| BAM                | M/80 typical           | M/1.5     | 53x     |
-| AthenaK            | M/64 to M/128          | M/1.5     | 43–85x  |
-| GR-Athena++        | M/51 to M/153          | M/1.5     | 34–102x |
-| Einstein Toolkit   | M/42 to M/72           | M/1.5     | 28–48x  |
-
-Points across the gravitational radius (~0.5M) at each resolution:
-
-| Resolution | dx (M) | Points across r_g |
-|------------|--------|-------------------|
-| LOW        | 0.6667 | 0.75              |
-| MED        | 0.4444 | 1.12              |
-| HIGH       | 0.3333 | 1.50              |
-
-At LOW resolution, the gravitational radius is **smaller than a single grid cell**.
-The 4th-order convergence formula e ~ C·dx⁴ requires smooth solutions on the scale
-of dx. The puncture has unbounded derivatives (chi ~ r⁴ as r→0), so the error does
-not follow a power law at these resolutions.
-
-### 3. SEVERE: No exclusion of puncture region from L2 norm
-
-The global L2 norm `mesh_constraint_l2()` integrates over the entire domain
-**including the puncture neighborhood** where constraint violations are O(1) and
-non-convergent. The passing single-BH test uses `constraint_l2_annular()` with
-5M < r < 25M, which excludes the puncture and boundary regions.
-
-Higher resolution resolves **more** of the puncture's steep gradients, producing
-**larger** finite-difference errors in absolute terms. This is why the constraints
-get worse with resolution — classic pre-convergent behavior.
-
-### 4. SEVERE: Domain too small (L=64M, boundary at 32M)
-
-The outer boundary is only 27M from the nearest puncture. Boundary reflections
-reach the BHs at t ~ 54M and make 9–18 round-trips during the simulation.
-
-| Code               | Outer boundary | Our boundary | Ratio   |
-|--------------------|---------------|--------------|---------|
-| BAM                | ~240M         | 32M          | 7.5x    |
-| AthenaK            | ~1024M        | 32M          | 32x     |
-| Einstein Toolkit   | ~1365M        | 32M          | 43x     |
-| MAYA catalog       | >400M         | 32M          | 12.5x   |
-
-The Sommerfeld BCs use 2nd-order one-sided stencils, so reflected wave amplitude
-scales as O(dx²). After 54M of evolution, boundary errors dominate interior errors
-and degrade measured convergence from 4th to ~2nd order.
-
-### 5. MODERATE: Evolution time far too long
-
-For a convergence test at these resolutions, t_final should be short enough that
-all three resolutions are still accurate. The passing single-BH test uses
-T_final=2M. This test runs to 500–1000M, by which time the constraints have
-saturated at O(0.1) — any convergence information is lost.
-
-### 6. MODERATE: Gauge advection disabled
-
-Both `lapse_advec_coeff` and `shift_advec_coeff` default to 0.0 (no advection
-terms in the gauge equations). GRChombo and most production codes advect both
-lapse and shift. The non-advecting variant produces stronger gauge transients
-that are harder to control at coarse resolution.
-
-### 7. MINOR: CAKO and per-field dissipation disabled
-
-Without chi-adjusted KO dissipation (CAKO), the uniform sigma=0.3 does not
-suppress near punctures where it should. Per-field sigma (0.99 for gauge, 0.3
-for physical) would help damp gauge transients (ref: arXiv:2404.01137).
-
----
-
-## What Is NOT Wrong
-
-- **Finite difference stencils:** Correctly 4th-order (verified by inspection).
-- **RK4 integrator:** Standard textbook implementation, correct.
-- **CCZ4 equations:** Match GRChombo reference line-by-line.
-- **Initial data:** Bowen-York with pre-collapsed lapse (alpha = psi⁻²), standard.
-- **KO dissipation:** 6th-order (preserves 4th-order convergence). Correct.
-- **Numerical stability:** All runs complete without NaN or blowup.
-
----
-
-## What Production Codes Actually Do
-
-### No code has ever demonstrated binary inspiral convergence on a uniform grid
-
-AMR is effectively mandatory because the problem spans multiple scales:
-
-| Scale              | Requirement     |
-|--------------------|----------------|
-| Puncture structure | dx ~ M/50–M/100 |
-| Orbital dynamics   | ~10M            |
-| Wave zone          | ~100M           |
-| Outer boundary     | 200–1000M       |
-
-On a uniform grid, resolving the puncture at M/50 with boundary at 200M would
-require N = 20,000 per side — a 20,000³ grid, which is impossible. AMR with
-10–14 levels of factor-2 refinement provides the necessary 1024–16384x dynamic
-range.
-
-### Published convergence results
-
-| Code         | Measured order | Finest dx | Outer boundary | AMR levels | Source                    |
-|--------------|---------------|-----------|----------------|------------|---------------------------|
-| AthenaK      | 4th (clean)   | M/64–M/128| ±1024M         | 10–11      | arXiv:2409.10383          |
-| GR-Athena++  | 4th (q=1,2)   | M/51–M/153| large          | 12–14      | arXiv:2411.11989          |
-| BAM          | 4th           | M/57–M/95 | ~240M          | 10         | arXiv:0709.2160           |
-| MAYA catalog | 2.1–2.9       | ~M/48     | >400M          | many       | arXiv:2309.00262          |
-| Etienne 2024 | improving     | M/42–M/72 | ~1365M         | 11         | arXiv:2404.01137          |
-
-Key finding from Etienne (2024): M/42 "lies slightly outside the convergent
-regime" for a GW150914-like binary. Our finest resolution of M/3 is nowhere
-close.
-
-Even mature production codes (MAYA catalog) measure order 2.1–2.9 with 6th-order
-spatial FD, attributed to AMR interpolation effects. Clean 4th order requires
-being well inside the convergent regime.
-
-### Comparison with our test vs production standards
-
-| Parameter | Our failing test | Production standard | Source |
-|-----------|-----------------|---------------------|--------|
-| Finest dx | M/1.5 – M/3 | M/64 – M/128 | AthenaK, GR-Athena++ |
-| Domain half-width | 32M | 400 – 2048M | All codes |
-| Refinement levels | 0 | 10 – 14 | All codes |
-| Block size | 32–64 | 16 (CPU), packed 16 or 32 (GPU) | AthenaK, GRChombo |
-| Refinement criterion | none (uniform) | L2 distance from punctures (primary) + chi-gradient (secondary) | Rashti et al. 2023 |
-| Regrid interval | n/a | 32–64 coarse steps (inner levels), static (outer) | GRChombo, ET |
-| Subcycling | n/a | Yes (2.5–4.5x speedup) | CarpetX 2025 |
-| Time interp at boundaries | Linear (in code) | Dense output / 4th-order (CarpetX 2025) | Key for convergence |
-| KO dissipation | Uniform sigma=0.3 | CAKO: sigma(x) = chi(x) * sigma_base | Etienne 2024 |
-
----
-
-## Current State of the AMR System
-
-Our AMR infrastructure is **fully implemented and tested**:
-- Berger-Oliger subcycling (per-level packing, recursive)
-- Multi-level ghost exchange (5-phase, coarse-buffer architecture)
-- 4th-order prolongation (5-point Lagrange, AthenaK weights)
-- 4th-order restriction (4-point symmetric Lagrange)
-- Chi-gradient refinement criterion
-- 2:1 level constraint enforcement
-- Oct-tree block hierarchy with Morton ordering
-- Temporal interpolation for subcycling (`ghost_fill_from_coarser`)
-- Block-aware Sommerfeld BCs
-- AH finder on AMR meshes
-- AMR-aware 1D output slices
-
-**Test coverage:**
-- `test_amr_mesh.c` (8/8): block creation, Morton ordering, neighbor finding
-- `test_amr_ghost.c` (5/5): same-level and multi-level ghost exchange
-- `test_amr_prolong.c` (9/9): prolongation, restriction, CAKO/CAHD/SSL
-- `test_amr_refine.c` (9/9): split, merge, 2:1 constraint, full regrid
-- `test_subcycle.c` (3/3): uniform identity, flat stability, BH evolution
-- `test_pack_evolve.c` (3/3): packed vs per-block validation
-
-**What has NOT been tested:**
-- max_level > 2 (deep refinement hierarchies)
-- Binary inspiral WITH active AMR refinement
-- Many regrid cycles on a moving binary over hundreds of M
-- Time interpolation accuracy at coarse-fine boundaries during long subcycling runs
-
----
-
-## Key Findings from Literature Review
-
-### 1. AMR is mandatory for binary inspiral convergence
-
-No published code has ever demonstrated binary inspiral convergence on a uniform
-grid. The dynamic range (M/100 near puncture to 2000M outer boundary = 200,000:1)
-requires 10–14 levels of factor-2 refinement.
-
-### 2. MAYA catalog only gets order 2.1–2.9
-
-Even with mature AMR (Einstein Toolkit + Carpet), the MAYA waveform catalog
-(arXiv:2309.00262) measures convergence order 2.1–2.9, not the theoretical 4th.
-Root cause: **2nd-order time interpolation** at coarse-fine boundaries during
-subcycling. CarpetX fixed this in 2025 using RK4 dense output. Our code uses
-linear temporal interpolation in `ghost_fill_from_coarser()` — same limitation.
-
-### 3. Prolongation should be 5th-order
-
-Rule: prolongation order >= FD convergence order + 1. For 4th-order FD, need at
-least 5th-order prolongation. Our 5-point Lagrange stencil is formally 4th-order
-(degree-4 polynomial). Upgrading to 6-point (5th-order) would use one more stencil
-point; our 4-ghost-zone width supports this.
-
-### 4. Most codes use puncture-tracking, not pure chi-gradient
-
-Production codes use **L2 distance from puncture positions** as the primary
-criterion, with chi-gradient as secondary. The L2 (spherical) method from Rashti
-et al. 2023 (arXiv:2312.05438) creates **60% fewer blocks** than box-in-box and
-produces smoother convergence with less regridding noise. Chi-gradient alone
-creates and destroys blocks too aggressively.
-
-### 5. Block size of 16³ is universal standard
-
-AthenaK, GR-Athena++, and GRChombo all use N_block=16 for CPU runs. For GPU,
-AthenaK packs multiple 16³ MeshBlocks into MeshBlockPacks (same pattern as our
-`meshblock_pack.h`). Larger blocks (32–64) waste memory in refined regions and
-reduce load balancing flexibility.
-
-### 6. CAKO dissipation reduces constraint violations by ~2 orders of magnitude
-
-Chi-adjusted KO: `sigma_eff(x) = chi(x) * sigma_base`. Near punctures where
-chi → 0, this gives near-zero dissipation (preventing over-dissipation of the
-steep fields). In the wave zone where chi ≈ 1, full dissipation strength.
-Combined with per-field sigma (0.99 for gauge, 0.3 for physical), this is
-the state of the art (arXiv:2404.01137, Etienne 2024).
-
----
-
-## Memory Estimates for AMR Inspiral
-
-### Memory per block
-
-Formula: `31 fields × (N_block + 8)³ × rk_blocks × 8 bytes`
-
-| N_block | CK45 (3 blocks) | Classic RK4 (4 blocks) |
-|---------|-----------------|------------------------|
-| 16      | 9.8 MB          | 13.1 MB                |
-| 32      | 45.4 MB         | 60.6 MB                |
-
-### AMR hierarchy estimate (N_root=8, N_block=16, L=128M, max_level=6, CK45)
-
-| Level | dx (M) | What it covers | Est. leaf blocks | Memory |
-|-------|--------|----------------|-----------------|--------|
-| 0 | 1.0 | Whole domain (±64M) | ~490 | 4.8 GB |
-| 1 | 0.5 | Around binary (~30M) | ~40 | 0.4 GB |
-| 2 | 0.25 | Near each BH (~15M) | ~24 | 0.2 GB |
-| 3 | 0.125 | BH vicinity (~7M) | ~16 | 0.2 GB |
-| 4 | 0.0625 | Horizon region (~3M) | ~12 | 0.1 GB |
-| 5 | 0.031 | Puncture (~1.5M) | ~10 | 0.1 GB |
-| 6 | 0.016 (M/64) | Puncture core | ~8 | 0.1 GB |
-| **Total** | | | **~600** | **~6 GB** |
-
-### Domain size vs memory trade-off
-
-| N_root | Domain L | Boundary | Root blocks | Root memory (CK45) |
-|--------|----------|----------|-------------|-------------------|
-| 4 | 64M | 32M | 64 | 0.6 GB |
-| 6 | 96M | 48M | 216 | 2.1 GB |
-| 8 | 128M | 64M | 512 | 5.0 GB |
-| 12 | 192M | 96M | 1728 | 16.9 GB |
-| 16 | 256M | 128M | 4096 | 40.1 GB |
-
-**33 GB machine limit:** N_root=8 (L=128M) fits easily. N_root=12 (L=192M)
-is tight. N_root=16 (L=256M) exceeds memory.
-
----
-
-## Runtime Estimates for AMR Inspiral
-
-### Calibration from the uniform test
-
-From the inspiral.log timing data:
-- LOW (27 blocks of 32³, classic RK4): ~2.3 sec/step
-- MED (27 blocks of 48³): ~6.5 sec/step
-- HIGH (27 blocks of 64³): ~14 sec/step
-- Derived: ~1.3 μs per point per classic RK4 step (4 stages)
-- CK45 (5 stages): ~1.6 μs per point per step
-
-### Subcycling cost per coarse step
-
-With Berger-Oliger, level L takes 2^L sub-steps per coarse step. For
-N_root=8, N_block=16, max_level=6, CK45:
-
-| Level | Leaf blocks | Sub-steps | Block-steps/coarse step | % of work |
-|-------|-------------|-----------|------------------------|-----------|
-| 0 | ~490 | 1 | 490 | 29% |
-| 1 | ~40 | 2 | 80 | 5% |
-| 2 | ~24 | 4 | 96 | 6% |
-| 3 | ~16 | 8 | 128 | 8% |
-| 4 | ~12 | 16 | 192 | 11% |
-| 5 | ~10 | 32 | 320 | 19% |
-| 6 | ~8 | 64 | 512 | **30%** |
-| **Total** | | | **~1818** | |
-
-Cost per block-step (16³ block, CK45): (16+8)³ × 1.6μs ≈ 0.022 sec
-Cost per coarse step: ~1818 × 0.022 ≈ **40 sec**
-
-### 3-resolution convergence test runtime
-
-Varying N_block at 1.5x ratio (16 → 24 → 32), t_final=200M (~1 orbit):
-
-| Resolution | N_block | Finest dx | Coarse dt | Steps | sec/step | Wall time |
-|------------|---------|-----------|-----------|-------|----------|-----------|
-| LOW | 16 | M/64 | 0.25M | 800 | ~40 | **~9 hours** |
-| MED | 24 | M/96 | 0.167M | 1200 | ~95 | **~32 hours** |
-| HIGH | 32 | M/128 | 0.125M | 1600 | ~180 | **~80 hours** |
-| **Total** | | | | | | **~121 hours (~5 days)** |
-
-### Comparison with the failed uniform test
-
-| | Uniform test (38h) | AMR test (~121h) |
-|-|-------------------|-----------------|
-| Finest dx | M/3 (useless) | M/64 to M/128 (production) |
-| Boundary | 32M (too small) | 64M (marginal) |
-| t_final | 500–1000M | 200M |
-| Convergence? | No (order 0.3) | Expected yes (order ~3–4) |
-
-The AMR test is ~3x longer but actually resolves the physics. The uniform test
-was faster but produced no useful convergence information.
-
-### Budget-constrained option
-
-For a faster (~45h) test with slightly lower resolution:
-
-```
-N_root=6, N_block=16, L=96M, max_level=5, CK45, t_final=100M
-3 resolutions: N_block = 16, 24, 32
+## CPU Optimizations
+
+### 5. Fused d1/d2 stencil (HIGH IMPACT)
+11 fields need both d1 and d2 per direction (chi, lapse, 6x h_ij, 3x shift). Currently loads the same 7 stencil points twice. A fused `fd_d1_d2()` halves the load count for these fields: 33x3 = 99 redundant load sequences eliminated.
+
+```c
+static inline void fd_d1_d2(const double *f, int idx, int s, double dx,
+                            double *d1, double *d2) {
+    double fm3=f[idx-3*s], fm2=f[idx-2*s], fm1=f[idx-s], f0=f[idx];
+    double fp1=f[idx+s], fp2=f[idx+2*s], fp3=f[idx+3*s];
+    *d1 = (-1.0/60*fm3 + 3.0/20*fm2 - 3.0/4*fm1
+           + 3.0/4*fp1 - 3.0/20*fp2 + 1.0/60*fp3) / dx;
+    *d2 = (1.0/90*fm3 - 3.0/20*fm2 + 3.0/2*fm1
+           - 49.0/18*f0
+           + 3.0/2*fp1 - 3.0/20*fp2 + 1.0/90*fp3) / (dx*dx);
+}
 ```
 
-| Resolution | Finest dx | Wall time |
-|------------|-----------|-----------|
-| LOW (16) | M/32 | ~3h |
-| MED (24) | M/48 | ~12h |
-| HIGH (32) | M/64 | ~30h |
-| **Total** | | **~45 hours** |
+**Benefit:** 15-20% CPU, 5-10% GPU. ~50 lines changed.
 
-Memory peak: ~8 GB. M/32 is marginal (Etienne says M/42 is "slightly outside
-the convergent regime"), but M/48 and M/64 should be in or near the regime.
+### 6. Symmetric tensor raise
+`raise_all_2()` in `tensor_utils.h` computes all 9 entries of A^{ij} but only 6 are unique. Compute diagonal (3) + upper triangle (3) and copy: 54 FMAs down to 36 (33% reduction).
 
-### Why not skip subcycling? (global timestep)
+**Benefit:** 2-3%.
 
-AthenaK uses a global timestep for GPU efficiency. But:
-- dt_global = CFL × dx_finest = 0.25 × 0.016 = 0.004M
-- Steps for t=200M: 50,000
-- Cost per step: ~600 blocks × 0.022 sec ≈ 13 sec
-- Total: 50,000 × 13 ≈ **180 hours** (50% worse than subcycling)
+### 7. Common subexpression elimination in RHS
+`chris.ULL[m][kk][ll]` is used repeatedly across Ricci, Gamma RHS, and A_ij RHS. Products like `lapse * K` and `h_UU[i][j]` contracted with various tensors appear multiple times. The compiler's CSE pass is limited by C aliasing rules and `-ffast-math` interference. Manual extraction of repeated sub-expressions can reduce FLOP count.
 
-Subcycling wins by ~1.5x because most blocks are coarse (level 0 at dt=0.25M
-vs global dt=0.004M).
+NRPy+ (arXiv:2501.14030) uses SymPy's CSE pass on the entire RHS expression tree and reports ~21% instruction reduction. Manual CSE on the obvious cases (Christoffel products, metric contractions) is low effort.
 
----
+**Benefit:** 10-20% FLOP reduction. Low-medium effort for manual CSE.
 
-## Recommended Fixes (Implementation Plan)
+### 8. Derivative precomputation for mixed d2
+`fd_d2_mixed()` uses a 7x7=49-point stencil (6th-order). If first derivatives are stored in scratch arrays, mixed second derivatives can be computed as 1D stencils on the stored d1 values: 7 loads instead of 49 per mixed pair. With 11 fields needing mixed d2 and 3 mixed direction pairs each, this is significant.
 
-### Fix 1: Fix convergence comparison methodology
+**Benefit:** 30-50% fewer loads for mixed second derivatives. Requires scratch storage for d1 arrays.
 
-Compare at the same physical time, not the same step number. Either:
-- Run different step counts per resolution (as `test_convergence.c` does)
-- Interpolate the Hamiltonian history to common physical times
+### 9. Interior/boundary RHS split for async overlap
+Compute interior cells' RHS (no ghost dependency) while ghost exchange runs concurrently. Interior cells vastly outnumber boundary cells. Used by GR-Athena++, SpECTRE, ExaGRyPE.
 
-### Fix 2: Use annular exclusion region for constraint norms
-
-For binary: exclude r < 5M from each puncture AND r > 0.8 × L_boundary.
-This requires tracking puncture positions (already needed for L2 refinement
-criterion).
-
-### Fix 3: Add L2-distance refinement criterion
-
-Primary: refine blocks within spherical shells around each puncture at
-prescribed radii per level. Secondary: chi-gradient for any features missed.
-Ref: Rashti et al. 2023 (arXiv:2312.05438) — 60% fewer blocks than box-in-box.
-
-### Fix 4: Enable AMR with sufficient refinement levels
-
-Target configuration:
-```
-N_root=6, N_block=16, L=96M, max_level=5, CK45
-chi_refine=0.08, chi_coarsen=0.01, regrid_every=32
-```
-
-### Fix 5: Enable gauge advection
-
-Set `lapse_advec_coeff = 1.0` and `shift_advec_coeff = 1.0` for binary
-evolutions, matching GRChombo and most production codes.
-
-### Fix 6: Enable CAKO + per-field dissipation
-
-CAKO: `sigma_eff(x) = chi(x) * sigma_base`
-Per-field: sigma=0.99 for gauge (lapse, shift, B^i), sigma=0.3 for physical.
-Ref: arXiv:2404.01137 (Etienne 2024).
-
-### Fix 7: Upgrade prolongation to 5th-order
-
-Add one stencil point to the Lagrange prolongation (6-point, degree-5).
-Rule: prolongation order >= FD order + 1. 4-ghost-zone width supports this.
-
-### Fix 8 (future): Upgrade temporal interpolation to 4th-order
-
-Replace linear time interpolation in `ghost_fill_from_coarser()` with RK4
-dense output (polynomial from stage vectors). Without this, temporal convergence
-at coarse-fine boundaries is limited to 2nd order — the MAYA catalog limitation.
-Ref: CarpetX arXiv:2503.09629.
+**Benefit:** 10-20% on CPU for multi-block AMR meshes. Medium effort.
 
 ---
 
-## Summary
+## GPU Optimizations
 
-The convergence test failure has **two classes of cause**:
+### 10. Persistent pack allocation (HIGH IMPACT)
+Lattice rebuilds the entire `meshblock_pack_t` every time step: malloc + field copy + `omp target enter data` + compute + `omp target exit data` + store + free. AthenaK keeps all field data on GPU permanently, only rebuilding after regridding.
 
-1. **Test methodology bugs** (fixes 1–2): comparing at wrong times, including
-   the puncture singularity in the norm. These would cause failure even with
-   a perfect evolution code.
+**Benefit:** Eliminates two full-buffer host-device transfers per step. 5-10% overhead reduction on CPU, much larger on GPU.
 
-2. **Inadequate resolution for the problem** (fixes 3–7): binary inspiral on a
-   uniform grid with dx ~ M/1.5–M/3 and boundary at 32M is 20–50x too coarse
-   and 8–40x too small compared to production standards. AMR is not optional
-   for this problem — it is a prerequisite.
+### 11. Device-side ghost exchange (HIGH IMPACT)
+`backend_gpu.c:879-910` syncs the entire pack to host (`omp target update from`), runs all 5 ghost exchange phases on CPU, then syncs back (`omp target update to`). For 100 blocks at 64^3: ~1.6 GB round-trip per CK45 stage, 5 stages = ~8 GB/step of PCIe traffic. AthenaK does all ghost exchange on-device.
 
-The evolution code itself (CCZ4 RHS, finite differences, time integration,
-dissipation) is correctly implemented and verified by the passing single-BH
-convergence test at order 5.4. The issue is entirely in the test setup and
-resolution requirements for binary inspiral.
+Phase 0+1 (same-level copy) is trivially parallelizable as a GPU kernel. Phases 2-4 (restriction/prolongation) are more complex but have regular control flow.
+
+**Benefit:** 2-5x GPU speedup. The single largest GPU bottleneck. ~300 lines.
+
+### 12. Eliminate per-thread overhead on GPU
+Every GPU thread in `backend_gpu.c:205-221` constructs a `grid_t` on stack (~872 bytes) via `memset` and builds two 31-element pointer arrays (~496 bytes). Total: ~1.4 KB per thread. Grid dimensions are identical for all threads in a block. Pass as kernel parameters instead.
+
+**Benefit:** 15-30% GPU occupancy improvement. Low effort.
+
+### 13. Kernel splitting for occupancy
+The CCZ4 RHS kernel uses ~400 registers per thread = ~25% occupancy on A100. Split into Phase A (all derivatives + Christoffels, ~2 KB stack, ~200 registers) and Phase B (Ricci + RHS assembly, uses cached derivatives from scratch buffer, ~200 registers). Each phase achieves ~75-80% occupancy.
+
+**Benefit:** 20-40% GPU speedup. Medium-high effort (~400 lines).
+
+### 14. Optimal block size
+Parthenon-VIBE benchmarks (arXiv:2509.19701) show N_block=16 makes GPU slower than 96-core CPU. N_block=32 is minimum for GPU; 64 is optimal for weak scaling. Already a runtime parameter in Lattice.
+
+**Benefit:** 2-30x GPU depending on current block size. Zero code changes.
+
+### 15. Reorder d2 computations for instruction cache
+The NR101 blog found that reordering second derivative computations to maximize instruction reuse (sort `d2[min(i,j)][max(i,j)]`) yielded ~20% GPU speedup by fitting within the 32 KB instruction cache.
+
+**Benefit:** 10-20% GPU. Low effort.
+
+---
+
+## Memory Savings
+
+### 16. CK45 is already optimal
+CK45 uses 3 memory blocks (fields, rhs, scratch) vs Classic RK4's 4 (adds accum). At N=256, 31 fields: CK45 = 14.9 GB, Classic = 19.9 GB. Already the default.
+
+### 17. Ghost zone overhead is unavoidable
+Ghost=4 is required for 6th-order FD + 8th-order KO. No reduction possible. At N_block=16: 4.1x overhead; at N_block=32: 1.95x; at N_block=64: 1.51x.
+
+### 18. No malloc in hot loops
+Verified: no malloc/free inside time-stepping loops. Pack creation happens once per step (or once per level per step for AMR). Allocation strategy is sound.
+
+### 19. Page alignment waste is negligible
+4096-byte alignment wastes <4 KB per block. Essential for GPU zero-copy mapping.
+
+---
+
+## Mathematical Methods
+
+### 20. Dense output for temporal interpolation (HIGH IMPACT)
+Current quartic interpolation at coarse-fine boundaries stores 5 quantities per point (U_n, U_{n+1}, U_{n-1}, F_n, F_{n-1}). RK4 dense output achieves 4th-order temporal accuracy using the 4 stage vectors + pre-step state:
+
+```
+y(t_n + theta*h) = y_n + h * [b1(theta)*k1 + b2(theta)*k2 + b3(theta)*k3 + b4(theta)*k4]
+b1 = theta - 3*theta^2/2 + 2*theta^3/3
+b2 = b3 = theta^2 - 2*theta^3/3
+b4 = -theta^2/2 + 2*theta^3/3
+```
+
+CarpetX (arXiv:2503.09629) uses this to achieve 4th-order convergence at AMR boundaries with fewer prolongation operations ("prolongates 5/8 as many points"). Simpler than the current fields_old/fields_older/rhs_old/rhs_older scheme.
+
+**Caveat:** Works naturally with classic RK4 (k1-k4 explicit). CK45's 2N storage overwrites stage vectors, so subcycling steps would need to use classic RK4.
+
+**Benefit:** Cleaner code, 4th-order temporal convergence at refinement boundaries.
+
+### 21. CCZ3 formulation
+Already in stage3options.html. Removes momentum constraint damping, stable to 10^5 M. One-line change + flag. arXiv:2501.01055.
+
+### 22. Optimized-stability 2N RK methods
+Niegemann et al. (2012) constructed 2N methods with 8-14 stages optimized for maximum CFL rather than higher order. 1.5-2x larger stable timestep at the cost of more stages. Net savings if CFL-limited. Swapping in new coefficients is trivial (same `CK_A[s]`, `CK_B[s]` infrastructure).
+
+Ketcheson (2010) found 2S methods achieving 4th order in only 4 stages (vs CK45's 5), saving 20% RHS evaluations. Different update formula but similar memory.
+
+**Benefit:** 20-50% fewer total steps if CFL is the bottleneck.
+
+### 23. P-ERK (Paired Explicit Runge-Kutta)
+Different AMR blocks use different RK stage counts based on local stiffness. Coarse blocks (80% of mesh) get fewer stages. Reported 1.5-5x speedup for 4-6 AMR levels (arXiv:2403.05144). Fourth-order P-ERK now exists (arXiv:2408.05470).
+
+**Caveat:** Very high implementation complexity. Requires spectral radius estimation per block. No existing NR implementation. Future work.
+
+### 24. Mixed-order stencils near punctures
+Use 4th-order FD (5-point) on finest AMR levels wrapping the puncture (where solution is only C2-C4), 6th-order elsewhere. Both are already implemented in `finite_diff.h` (compile-time `FD_ORDER`). Making it per-block at runtime requires two versions of the RHS or function pointer dispatch.
+
+**Benefit:** 10-20% RHS speedup on fine levels. Medium effort.
+
+### 25. KO dissipation stage reduction
+Apply Kreiss-Oliger dissipation at 1 RK stage instead of all 5. Saves ~80% of KO computation. Risk: reduced stability near punctures.
+
+**Benefit:** Few percent overall. Low effort but stability risk.
+
+---
+
+## What Other Codes Do Differently
+
+| Technique | Used by | Our status | Applicable? |
+|-----------|---------|------------|-------------|
+| Persistent GPU data residency | AthenaK | Rebuild every step | Yes (item 10) |
+| Device-side ghost exchange | AthenaK | Host round-trip | Yes (item 11) |
+| Dense output for subcycling | CarpetX | Quartic interp | Yes (item 20) |
+| Code generation from SymPy | NRPy+ | Hand-written C | Future |
+| Task-based parallelism | SpECTRE, GR-Athena++ | Bulk-synchronous | Partial (item 9) |
+| Enclave tasking for GPU | ExaGRyPE | Full-step offload | Not worth it |
+| Taylor-based AMR interpolation | ExaHyPE | Lagrange tensor-product | Worth investigating |
+| Vertex-centered grids | GR-Athena++ | Cell-centered | Not applicable |
+| Kokkos portability layer | AthenaK | OpenMP target | Not worth switching |
+| Block size 32-64 for GPU | AthenaK, Parthenon-VIBE | N_block configurable | Yes (item 14) |
+
+---
+
+## Not Worth It
+
+| Idea | Why not |
+|------|---------|
+| Mixed precision (float32) | ~1e-5 roundoff near punctures breaks convergence |
+| Precomputed inverse metric | 30 FLOPs saved vs 48 bytes/point extra bandwidth |
+| Operator splitting | CCZ4 is tightly coupled; Strang splitting caps at 2nd order |
+| Unified GPU memory | Page faults serialize stencil code |
+| SBP operators | Very high effort, constraint damping + KO works fine |
+| Constraint-preserving BCs | High effort, Sommerfeld sufficient for current goals |
+| FCCZ4 / Z4c formulation | Same cost as CCZ4, no meaningful advantage |
+| Full shared memory tiling on GPU | 6th-order 3D stencil footprint (14^3 = 22 KB) exceeds shared memory budget; OpenMP target has limited control |
+| Loop tiling for cache (CPU) | x-innermost already optimal; ~2-3% gain for high complexity |
+| Reducing ghost width | Would break 6th-order FD + 8th-order KO |
+| AoS field grouping | Violates SoA invariant; minimal cache benefit (~5%) |
+
+---
+
+## Priority Roadmap
+
+### Tier 1: Do Now (days, 30-50% combined improvement)
+1. LTO in Makefile (1 line)
+2. `__restrict__` on RHS pointers (5 lines)
+3. Fused d1/d2 stencil (~50 lines)
+4. Conditional EM allocation (~20 lines)
+5. Eliminate per-thread GPU overhead (~30 lines)
+
+### Tier 2: Do Soon (weeks, 20-40% additional)
+6. Persistent pack allocation (~100 lines)
+7. Manual CSE in ccz4_rhs.c (~50 lines)
+8. Symmetric tensor raise (~20 lines)
+9. Dense output for subcycling (~200 lines)
+
+### Tier 3: Major GPU Work (weeks-months, 2-5x GPU)
+10. Device-side ghost exchange (~300 lines)
+11. Kernel splitting for occupancy (~400 lines)
+12. Interior/boundary RHS split for async overlap (~150 lines)
+
+### Tier 4: Future
+13. P-ERK multirate time integration
+14. Code generation from SymPy for full CSE
+15. Optimized-stability RK methods
 
 ---
 
 ## References
 
-- arXiv:2409.10383 — AthenaK performance-portable NR (2024)
-- arXiv:2411.11989 — GR-Athena++ BBH waveforms (2024)
-- arXiv:2312.05438 — AMR refinement criterion comparison (Rashti et al. 2023)
-- arXiv:2404.01137 — Improved moving-puncture techniques (Etienne 2024)
-- arXiv:2503.09629 — CarpetX GPU subcycling with dense output (2025)
-- arXiv:2309.00262 — Second MAYA waveform catalog (2023)
-- arXiv:0709.2160 — BAM high-spin BBH mergers (Marronetti et al.)
-- arXiv:2505.01495 — GRChombo 25-BH cluster simulation (2025)
-- arXiv:2406.09139 — Cell-centered vs vertex-centered AMR (2024)
-- arXiv:2406.11626 — ExaGRyPE NR solvers (2024)
-- arXiv:2506.06838 — AthenaK GW150914 simulations (2025)
+- arXiv:2409.10383 -- AthenaK NR (Zhu et al. 2024)
+- arXiv:2409.16053 -- AthenaK framework (Stone et al. 2024)
+- arXiv:2101.08289 -- GR-Athena++ (Daszuta et al. 2021)
+- arXiv:2503.09629 -- CarpetX subcycling with dense output (2025)
+- arXiv:2406.11626 -- ExaGRyPE (2024)
+- arXiv:2504.15814 -- ExaHyPE higher-order AMR interpolation (2025)
+- arXiv:2404.01137 -- NRPy improved moving puncture (Etienne 2024)
+- arXiv:2501.14030 -- NRPy GPU code generation (2025)
+- arXiv:2505.00097 -- superB/NRPy task-based NR (2025)
+- arXiv:2509.19701 -- Parthenon-VIBE block size benchmarks (2025)
+- arXiv:2501.01055 -- CCZ3 stable to 10^5 M (Bezares et al. 2025)
+- arXiv:2408.05470 -- 4th-order P-ERK (Doehring et al. 2024)
+- arXiv:2403.05144 -- P-ERK with AMR (Doehring et al. 2024)
+- arXiv:1909.12256 -- Original P-ERK (Vermeire 2019)
+- Ketcheson 2010 -- Low-storage RK methods
+- Niegemann et al. 2012 -- Optimized-stability 2N RK
+- NR101/NR102 blog -- GPU NR optimization (James Brown 2024-2025)

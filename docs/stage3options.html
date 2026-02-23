@@ -19,7 +19,6 @@
   .tag-alt { background: #9e6a0050; color: #d29922; border: 1px solid #9e6a0080; }
   .tag-future { background: #8b1d3250; color: #f47067; border: 1px solid #8b1d3280; }
   .tag-best { background: #1f6feb50; color: #58a6ff; border: 1px solid #1f6feb80; }
-  .tag-no { background: #21262d; color: #8b949e; border: 1px solid #30363d; }
   p, li { font-size: 0.9em; color: #b1bac4; }
   ul { padding-left: 20px; margin: 6px 0; }
   li { margin-bottom: 3px; }
@@ -29,62 +28,88 @@
   th { text-align: left; padding: 6px 8px; border-bottom: 2px solid #30363d; color: #8b949e; font-size: 0.85em; }
   td { padding: 5px 8px; border-bottom: 1px solid #21262d; }
   tr:hover { background: #161b22; }
-  .vs { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 8px 0; }
-  .vs > div { background: #0d1117; border: 1px solid #21262d; border-radius: 6px; padding: 12px; }
-  .vs > div > strong { color: #8b949e; font-size: 0.8em; text-transform: uppercase; letter-spacing: 0.5px; }
   .evidence { border-left: 3px solid #30363d; padding-left: 12px; margin: 8px 0; font-size: 0.85em; color: #8b949e; }
   hr { border: none; border-top: 1px solid #21262d; margin: 32px 0; }
   .warn { color: #f47067; } .good { color: #3fb950; } .note { color: #d29922; }
   .math { font-family: 'Cambria Math', 'STIX Two Math', Georgia, serif; font-style: italic; }
-  .eq { background: #161b22; border: 1px solid #21262d; border-radius: 6px; padding: 12px 16px; margin: 10px 0; font-family: 'Cambria Math', 'STIX Two Math', Georgia, serif; font-size: 0.95em; color: #e6edf3; text-align: center; }
+  details { margin: 10px 0; }
+  summary { cursor: pointer; color: #d2a8ff; font-size: 0.9em; }
+  .tier-label { font-weight: 600; color: #f0f6fc; }
+  .tier-items { padding-left: 20px; margin: 4px 0 12px 0; font-size: 0.85em; }
+  .tier-items li { color: #b1bac4; margin-bottom: 2px; }
 </style>
 </head>
 <body>
 
 <h1>Phase 3: Production Roadmap</h1>
-<p class="subtitle">Consolidated feature, optimization, and FD order analysis. February 2026.</p>
+<p class="subtitle">What remains for production-quality BBH waveforms. Compiled from analysis of the Lattice codebase, comparison against 6 production NR codes, and mathematical methods research. February 2026.</p>
 
 <!-- ================================================================ -->
 <h2>At a Glance</h2>
 <table>
-<tr><th>#</th><th>Item</th><th>Impact</th><th>Effort</th><th>Status</th></tr>
-<tr><td>1</td><td>Position-dependent eta</td><td>Enables N-body + unequal mass</td><td>1 line</td><td class="warn">Not implemented</td></tr>
-<tr><td>2</td><td>Spatially varying KO</td><td>N-body stability</td><td>&mdash;</td><td class="good">Done (CAKO/CAHD/SSL)</td></tr>
-<tr><td>3</td><td>6th-order FD stencils</td><td>100-1000x cost reduction</td><td>Low-Med</td><td class="warn">Not implemented</td></tr>
-<tr><td>4</td><td>CCZ4&prime; / CCZ3 formulation</td><td>Stable to 10<sup>5</sup> M</td><td>Low-Med</td><td class="warn">Not implemented</td></tr>
-<tr><td>5</td><td>Checkpoint/restart</td><td>Critical infrastructure</td><td>Low</td><td class="warn">Not implemented</td></tr>
-<tr><td>6</td><td>Waveform extraction (Psi4 modes)</td><td>Science output</td><td>Medium</td><td class="warn">Partial (Psi4 exists)</td></tr>
-<tr><td>7</td><td>3D output (XDMF + binary)</td><td>Visualization</td><td>Low</td><td class="warn">Not implemented</td></tr>
-<tr><td>8</td><td>CPU optimizations (LTO, fused d1/d2, fused RHS+CK45)</td><td>20-40% CPU</td><td>Low-Med</td><td class="warn">Not implemented</td></tr>
-<tr><td>9</td><td>GPU optimizations (persistent pack, ghost, splitting)</td><td>2-5x GPU</td><td>Med-High</td><td class="warn">Not implemented</td></tr>
-<tr><td>10</td><td>Multi-GPU / MPI</td><td>Linear scaling</td><td>High</td><td class="warn">Future</td></tr>
+<tr><th>Improvement</th><th>What it means</th><th>Benefit</th><th>Effort</th><th>Status</th></tr>
+<tr><td>Position-dependent eta</td><td>Gamma-driver damping scales with local BH mass</td><td>Enables unequal-mass and N-body</td><td>1 line</td><td class="warn">Todo</td></tr>
+<tr><td>CCZ3 formulation</td><td>Remove momentum constraint damping term</td><td>Stable to 10<sup>5</sup> M (100x longer)</td><td>1 line + flag</td><td class="warn">Todo</td></tr>
+<tr><td>Checkpoint/restart</td><td>Binary dump of all fields to disk</td><td>Survive crashes on multi-day runs</td><td>~300 LOC</td><td class="warn">Todo</td></tr>
+<tr><td>Waveform extraction</td><td>Psi4 on spheres &rarr; (l,m) modes &rarr; strain</td><td>Science output (GW waveforms)</td><td>~300 LOC</td><td class="warn">Todo</td></tr>
+<tr><td>LTO + <code>__restrict__</code></td><td>Cross-TU inlining + pointer aliasing hints</td><td>8&ndash;23% CPU speedup</td><td>~5 LOC</td><td class="warn">Todo</td></tr>
+<tr><td>Fused d1/d2 stencil</td><td>Load 7 stencil points once for both derivatives</td><td>15&ndash;20% CPU, 5&ndash;10% GPU</td><td>~50 LOC</td><td class="warn">Todo</td></tr>
+<tr><td>Conditional EM allocation</td><td>Skip 6 EM fields when <code>--em</code> off</td><td>19% memory savings</td><td>~20 LOC</td><td class="warn">Todo</td></tr>
+<tr><td>Manual CSE in RHS</td><td>Cache repeated Christoffel/metric contractions</td><td>10&ndash;20% FLOP reduction</td><td>~50 LOC</td><td class="warn">Todo</td></tr>
+<tr><td>Dense output for subcycling</td><td>RK4 stage vectors for temporal interpolation</td><td>4th-order at AMR boundaries</td><td>~200 LOC</td><td class="warn">Todo</td></tr>
+<tr><td>3D output (XDMF)</td><td>Raw binary + XML for ParaView/VisIt</td><td>Visualization</td><td>~200 LOC</td><td class="warn">Todo</td></tr>
+<tr><td>N=10+ validation</td><td>Raise MAX_PUNCTURES, test solver at N=3+</td><td>Multi-body science</td><td>~50 LOC</td><td class="warn">Todo</td></tr>
+<tr><td>GPU optimizations</td><td>Persistent pack, device-side ghost, kernel splitting</td><td>2&ndash;5x GPU speedup</td><td>Medium&ndash;High</td><td class="warn">Todo</td></tr>
+<tr><td>Multi-GPU / MPI</td><td>Partition Morton-sorted blocks across ranks</td><td>Linear scaling to 1000s of GPUs</td><td>High</td><td class="warn">Future</td></tr>
+<tr style="border-top: 2px solid #30363d"><td class="good">6th-order FD + 8th-order KO</td><td>Wider stencils, smaller truncation error</td><td>170x cheaper at &epsilon;=10<sup>&minus;6</sup></td><td>&mdash;</td><td class="good">Done</td></tr>
+<tr><td class="good">6th-order prolongation + restriction</td><td>Matched AMR operator order, no fallbacks</td><td>Clean convergence at refinement boundaries</td><td>&mdash;</td><td class="good">Done</td></tr>
+<tr><td class="good">4th-order Sommerfeld BCs</td><td>5 Fornberg stencil variants, no 2nd-order fallback</td><td>Reduced boundary reflections</td><td>&mdash;</td><td class="good">Done</td></tr>
+<tr><td class="good">CAKO / SSL / per-field sigma</td><td>Chi-adjusted KO + slow-start lapse</td><td>2 orders less constraint violation near punctures</td><td>&mdash;</td><td class="good">Done</td></tr>
 </table>
+
+<!-- ================================================================ -->
+<h2>Priority Roadmap</h2>
+
+<p class="tier-label" style="color: #3fb950;">Tier 1: Do Now <span style="font-weight: normal; color: #8b949e;">(days, 30&ndash;50% combined improvement)</span></p>
+<ol class="tier-items">
+<li>LTO in Makefile (1 line)</li>
+<li><code>__restrict__</code> on RHS pointers (5 lines)</li>
+<li>Fused d1/d2 stencil (~50 lines)</li>
+<li>Conditional EM allocation (~20 lines)</li>
+<li>Eliminate per-thread GPU overhead (~30 lines)</li>
+</ol>
+
+<p class="tier-label" style="color: #d29922;">Tier 2: Do Soon <span style="font-weight: normal; color: #8b949e;">(weeks, 20&ndash;40% additional)</span></p>
+<ol class="tier-items" start="6">
+<li>Persistent pack allocation (~100 lines)</li>
+<li>Manual CSE in ccz4_rhs.c (~50 lines)</li>
+<li>Symmetric tensor raise (~20 lines)</li>
+<li>Dense output for subcycling (~200 lines)</li>
+</ol>
+
+<p class="tier-label" style="color: #f47067;">Tier 3: Major GPU Work <span style="font-weight: normal; color: #8b949e;">(weeks&ndash;months, 2&ndash;5x GPU)</span></p>
+<ol class="tier-items" start="10">
+<li>Device-side ghost exchange (~300 lines)</li>
+<li>Kernel splitting for occupancy (~400 lines)</li>
+<li>Interior/boundary RHS split for async overlap (~150 lines)</li>
+</ol>
+
+<p class="tier-label" style="color: #8b949e;">Tier 4: Future</p>
+<ol class="tier-items" start="13">
+<li>P-ERK multirate time integration</li>
+<li>Code generation from SymPy for full CSE</li>
+<li>Optimized-stability RK methods</li>
+</ol>
 
 <!-- ================================================================ -->
 <hr>
 <h2>1. Position-Dependent Eta</h2>
 
-<p>The single most critical change for N-body simulations. Without it, unequal-mass and hierarchical-merger dynamics are unstable.</p>
-
-<p><strong>Problem:</strong> A global constant <span class="math">eta</span> that's right for M=5 is wrong for M=0.5. Schnetter (arXiv:1003.0859) showed eta introduces a resolution-independent timestep limit. On coarse AMR levels, constant eta violates this.</p>
-
-<div class="vs">
-<div>
-<strong>Option A: eta(x) = eta_0 / W(x) <span class="tag tag-best">Recommended</span></strong><br>
-<p>Where W = sqrt(chi). Near a puncture, chi&rarr;0 so eta&rarr;&infin; (strong damping). Used by GRChombo 25-BH simulation (arXiv:2505.01495).</p>
-</div>
-<div>
-<strong>Option B: eta(x) = eta_0 / alpha</strong><br>
-<p>Uses lapse instead of chi. Near a puncture, 1+log gives alpha&sim;sqrt(chi), so behavior is similar. Slightly less clean since alpha depends on gauge.</p>
-</div>
-</div>
+<p>Most critical change for N-body. A global <span class="math">eta</span> that works for M=5 is wrong for M=0.5. Use <code>eta(x) = eta_0 / sqrt(chi)</code> (GRChombo 25-BH convention, arXiv:2505.01495). Alternative: <code>eta_0 / alpha</code>, similar but gauge-dependent.</p>
 
 <div class="card">
 <div class="card-header"><span class="card-title">Implementation</span> <span class="tag tag-rec">1 line change</span></div>
-<pre><span class="cm">// ccz4_rhs.c &mdash; current: constant eta</span>
-rhs_B[ii] = ... + rhs_Gamma[ii] - p->gauge.eta * B[ii];
-
-<span class="cm">// Proposed: position-dependent eta</span>
+<pre><span class="cm">// ccz4_rhs.c</span>
 <span class="kw">double</span> W = <span class="fn">sqrt</span>(<span class="fn">fmax</span>(chi, <span class="num">1e-10</span>));
 <span class="kw">double</span> eta_local = p->gauge.eta / W;
 rhs_B[ii] = ... + rhs_Gamma[ii] - eta_local * B[ii];</pre>
@@ -92,229 +117,29 @@ rhs_B[ii] = ... + rhs_Gamma[ii] - eta_local * B[ii];</pre>
 
 <!-- ================================================================ -->
 <hr>
-<h2>2. Spatially Varying KO Dissipation <span class="tag tag-rec">Done</span></h2>
+<h2>2. CCZ3 Formulation</h2>
 
-<p>Already implemented: CAKO (sigma_eff = sqrt(chi) * sigma), CAHD (constraint-adjusted Hamiltonian damping), SSL (slow-start lapse), per-field sigma. All from arXiv:2404.01137. For N=10+, CAKO handles all N puncture regions automatically.</p>
-
-<!-- ================================================================ -->
-<hr>
-<h2>3. Finite Difference Order: The Mathematical Case for 6th</h2>
-
-<p>This is the single biggest accuracy improvement available. We prove mathematically that <strong>6th order is the optimal choice</strong> for our code, and that going higher gives diminishing returns.</p>
-
-<h3>3.1 Stencil Widths and Ghost Requirements</h3>
-
-<table>
-<tr><th>FD order <span class="math">p</span></th><th>d1 points</th><th>d2 points</th><th>KO order</th><th>KO points</th><th>Ghost needed</th></tr>
-<tr><td>4th (current)</td><td>5</td><td>5</td><td>6th</td><td>7</td><td>3</td></tr>
-<tr><td class="good">6th</td><td class="good">7</td><td class="good">7</td><td class="good">8th</td><td class="good">9</td><td class="good">4 (no change!)</td></tr>
-<tr><td>8th</td><td>9</td><td>9</td><td>10th</td><td>11</td><td class="warn">5 (breaking)</td></tr>
-<tr><td>10th</td><td>11</td><td>11</td><td>12th</td><td>13</td><td class="warn">6 (breaking)</td></tr>
-</table>
-
-<div class="evidence">
-Lattice uses <code>GHOST_WIDTH = 4</code> (grid.h:17). This is <em>exactly</em> what 6th-order FD + 8th-order KO requires. Zero infrastructure change. Going to 8th-order would require ghost=5, changing memory layout, ghost exchange, prolongation, and boundary conditions.
-</div>
-
-<h3>3.2 Per-Point FLOP Cost (counted from our code)</h3>
-
-<p>Counted directly from <code>ccz4_rhs.c</code>: the CCZ4 RHS evaluates <strong>282 stencil operations per grid point</strong>:</p>
-
-<table>
-<tr><th>Operation</th><th>Fields</th><th>Calls</th><th>4th FLOPs</th><th>6th FLOPs</th><th>8th FLOPs</th><th>10th FLOPs</th></tr>
-<tr><td>d1 (centered)</td><td>22</td><td>66</td><td>594</td><td>858</td><td>1,122</td><td>1,386</td></tr>
-<tr><td>d2 (diagonal)</td><td>11</td><td>33</td><td>363</td><td>495</td><td>627</td><td>759</td></tr>
-<tr><td>d2 (mixed)</td><td>11</td><td>33</td><td>1,089</td><td>2,409</td><td>4,257</td><td>6,633</td></tr>
-<tr><td>Advection</td><td>25</td><td>75</td><td>825</td><td>1,125</td><td>1,425</td><td>1,725</td></tr>
-<tr><td>KO dissipation</td><td>25</td><td>75</td><td>825</td><td>1,125</td><td>1,425</td><td>1,725</td></tr>
-<tr style="font-weight:600"><td>Total stencil</td><td></td><td>282</td><td>3,696</td><td>6,012</td><td>8,856</td><td>12,228</td></tr>
-<tr style="font-weight:600"><td>Ratio to 4th</td><td></td><td></td><td>1.00</td><td class="good">1.63x</td><td class="note">2.40x</td><td class="warn">3.31x</td></tr>
-</table>
-
-<p>Since stencils are ~40% of total kernel cost (rest is Christoffels, Ricci, RHS assembly), the <strong>effective per-point overhead</strong> is closer to <strong>1.25x for 6th order</strong>.</p>
-
-<h3>3.3 Error Scaling: Why 6th Order Uses Fewer Grid Points</h3>
-
-<p>The truncation error for order-<span class="math">p</span> centered FD is:</p>
-<div class="eq">
-  <span class="math">f&prime;(x) &minus; D<sub>h</sub>f(x) = C<sub>p</sub> &middot; h<sup>p</sup> &middot; f<sup>(p+1)</sup>(x) + O(h<sup>p+2</sup>)</span>
-</div>
-
-<table>
-<tr><th>Order <span class="math">p</span></th><th>Leading coefficient <span class="math">C<sub>p</sub></span> (d1)</th><th>Decimal</th></tr>
-<tr><td>4</td><td>1/30</td><td>3.33 &times; 10<sup>-2</sup></td></tr>
-<tr><td>6</td><td>&minus;1/140</td><td>7.14 &times; 10<sup>-3</sup></td></tr>
-<tr><td>8</td><td>1/630</td><td>1.59 &times; 10<sup>-3</sup></td></tr>
-<tr><td>10</td><td>&minus;1/2772</td><td>3.61 &times; 10<sup>-4</sup></td></tr>
-</table>
-
-<p>For a target accuracy <span class="math">&epsilon;</span> on a 3D grid with CFL timestep:</p>
-
-<div class="eq">
-  <span class="math">W(&epsilon;, p) = N<sup>4</sup> &middot; F(p)</span> where <span class="math">N ~ (&epsilon; / |C<sub>p</sub>|)<sup>&minus;1/p</sup></span>
-</div>
-
-<p>The <span class="math">&minus;4/p</span> exponent is the key: higher order means cost grows <em>much</em> more slowly with accuracy.</p>
-<ul>
-<li>At 4th order: halving <span class="math">&epsilon;</span> costs 2<sup>4/4</sup> = <strong>2x</strong> more work</li>
-<li>At 6th order: halving <span class="math">&epsilon;</span> costs 2<sup>4/6</sup> = <strong>1.59x</strong> more work</li>
-<li>At 8th order: halving <span class="math">&epsilon;</span> costs 2<sup>4/8</sup> = <strong>1.41x</strong> more work</li>
-</ul>
-
-<h3>3.4 Total Computational Cost: 6th Order Is Cheaper, Not More Expensive</h3>
-
-<p>Including the per-point FLOP overhead <span class="math">F(p)</span> from Section 3.2:</p>
-
-<table>
-<tr><th>Target <span class="math">&epsilon;</span></th><th>4th order (cost)</th><th>6th order (cost)</th><th>8th order (cost)</th><th>10th order (cost)</th></tr>
-<tr><td>10<sup>&minus;4</sup></td><td>1.00</td><td class="good">0.040</td><td class="good">0.020</td><td class="good">0.015</td></tr>
-<tr><td>10<sup>&minus;6</sup></td><td>1.00</td><td class="good">0.0059</td><td class="good">0.0012</td><td class="good">0.00047</td></tr>
-<tr><td>10<sup>&minus;8</sup></td><td>1.00</td><td class="good">0.00087</td><td class="good">0.000075</td><td class="good">0.000015</td></tr>
-<tr><td>10<sup>&minus;10</sup></td><td>1.00</td><td class="good">0.00013</td><td class="good">4.7 &times; 10<sup>&minus;6</sup></td><td class="good">4.8 &times; 10<sup>&minus;7</sup></td></tr>
-</table>
-
-<p><strong>At <span class="math">&epsilon; = 10<sup>&minus;6</sup></span> (typical NR accuracy): 6th order is ~170x cheaper than 4th order.</strong> Despite 1.63x more FLOPs per point, you need far fewer points. At <span class="math">&epsilon; = 10<sup>&minus;8</sup></span>: ~1,100x cheaper.</p>
-
-<h3>3.5 Grid Equivalence: Same Accuracy, Fewer Points</h3>
-
-<table>
-<tr><th>4th-order N (baseline)</th><th>6th-order equivalent N</th><th>8th-order equivalent N</th><th>10th-order equivalent N</th></tr>
-<tr><td>64</td><td>32</td><td>24</td><td>20</td></tr>
-<tr><td>128</td><td>54</td><td>37</td><td>29</td></tr>
-<tr><td>256</td><td>91</td><td>57</td><td>43</td></tr>
-<tr><td>512</td><td>153</td><td>88</td><td>64</td></tr>
-</table>
-
-<h3>3.6 Why Not 8th Order? Diminishing Returns</h3>
-
-<p>The pure-math analysis assumes smooth solutions and infinite precision. Five effects cap the benefit at 6th order for CCZ4 puncture evolutions:</p>
-
-<div class="card" style="border-color: #d29922;">
-<div class="card-header"><span class="card-title">1. Ghost zones: infrastructure break</span></div>
-<p>8th order requires ghost=5, which changes grid allocation, AMR ghost exchange, prolongation stencils, and boundary conditions. 6th order needs ghost=4 &mdash; what we already have.</p>
-</div>
-
-<div class="card" style="border-color: #d29922;">
-<div class="card-header"><span class="card-title">2. Puncture regularity: fields are not smooth</span></div>
-<p>Near a moving puncture, chi transitions from 1/r<sup>2</sup> to ~r (trumpet). Per Hannam et al. (gr-qc/0606099), the solution is effectively C<sup>2</sup>&ndash;C<sup>4</sup> near the puncture. The higher derivatives <span class="math">f<sup>(p+1)</sup></span> blow up, so the theoretical <span class="math">&epsilon; ~ h<sup>p</sup></span> scaling saturates. Beyond ~6th order, you gain nothing in the innermost cells.</p>
-</div>
-
-<div class="card" style="border-color: #d29922;">
-<div class="card-header"><span class="card-title">3. AMR prolongation mismatch</span></div>
-<p>Our prolongation is 4th-order (5-point Lagrange, from AthenaK). At refinement boundaries, interpolation error is O(h<sup>5</sup>). With 6th-order FD, the mismatch is one order &mdash; acceptable since boundaries are a small grid fraction. With 8th-order FD, prolongation becomes the dominant error source.</p>
-</div>
-
-<div class="card" style="border-color: #d29922;">
-<div class="card-header"><span class="card-title">4. Time integration: RK4 is 4th-order</span></div>
-<p>With dt ~ h (CFL), time error is O(h<sup>4</sup>). At 6th-order spatial, the spatial prefactor |C<sub>6</sub>| = 1/140 is small enough that spatial error stays subdominant at production resolutions. At 8th-order spatial, the O(h<sup>4</sup>) time error completely dominates &mdash; the extra spatial accuracy is wasted.</p>
-</div>
-
-<div class="card" style="border-color: #d29922;">
-<div class="card-header"><span class="card-title">5. Boundary condition order</span></div>
-<p>Sommerfeld BCs are ~2nd-order accurate regardless of interior stencil. Mitigated by placing boundaries far from sources, but caps the global (L-infinity) convergence order.</p>
-</div>
-
-<h3>3.7 Memory Overhead from Ghost Zones</h3>
-
-<p>For a block of interior size B<sup>3</sup> with ghost width g, allocated size is (B + 2g)<sup>3</sup>:</p>
-
-<table>
-<tr><th>FD order</th><th>Ghost g</th><th>B=16 overhead</th><th>B=32 overhead</th><th>B=64 overhead</th></tr>
-<tr><td>4th</td><td>3</td><td>3.38x</td><td>1.95x</td><td>1.41x</td></tr>
-<tr><td class="good">6th</td><td class="good">4</td><td class="good">4.10x</td><td class="good">2.14x</td><td class="good">1.48x</td></tr>
-<tr><td>8th</td><td>5</td><td class="warn">4.92x</td><td>2.34x</td><td>1.55x</td></tr>
-<tr><td>10th</td><td>6</td><td class="warn">5.83x</td><td>2.56x</td><td>1.63x</td></tr>
-</table>
-
-<p>Going from ghost=3 to ghost=4 increases communication by ~25%. Modest relative to the 100x+ accuracy gain.</p>
-
-<h3>3.8 What Real NR Codes Use</h3>
-
-<table>
-<tr><th>Code</th><th>FD order</th><th>Ghost</th><th>Notes</th></tr>
-<tr><td class="good">AthenaK</td><td class="good">6th (default)</td><td>4</td><td>arXiv:2409.10383. Same infrastructure as Lattice.</td></tr>
-<tr><td class="good">GR-Athena++</td><td class="good">6th (production)</td><td>4</td><td>arXiv:2101.08289. Supports up to 8th, uses 6th.</td></tr>
-<tr><td>GRChombo</td><td>4th</td><td>3</td><td>arXiv:2201.03458. Increasingly seen as legacy choice.</td></tr>
-<tr><td>Einstein Toolkit</td><td>4th/6th/8th</td><td>varies</td><td>Configurable.</td></tr>
-<tr><td>BAM</td><td>6th (production)</td><td>varies</td><td>6th for production BBH.</td></tr>
-<tr><td>SpECTRE</td><td>Spectral/DG</td><td>N/A</td><td>Different paradigm entirely.</td></tr>
-</table>
-
-<div class="evidence">
-Industry consensus: <strong>6th order is the dominant production choice</strong> among FD-based NR codes. No major code defaults to 8th or 10th for puncture evolutions.
-</div>
-
-<h3>3.9 Scorecard</h3>
-<table>
-<tr><th>Criterion</th><th>4th</th><th>6th</th><th>8th</th><th>10th</th></tr>
-<tr><td>Cost at &epsilon;=10<sup>&minus;6</sup></td><td>1.00</td><td class="good">0.006</td><td>0.001</td><td>0.0005</td></tr>
-<tr><td>Ghost cells</td><td>3</td><td class="good">4 (have it)</td><td class="warn">5 (breaking)</td><td class="warn">6 (breaking)</td></tr>
-<tr><td>Prolongation match</td><td>exact</td><td class="good">mild mismatch</td><td class="warn">severe</td><td class="warn">extreme</td></tr>
-<tr><td>Puncture regularity</td><td>OK</td><td class="good">OK</td><td class="note">saturated</td><td class="warn">strongly saturated</td></tr>
-<tr><td>Time integrator match</td><td>matched</td><td class="good">close</td><td class="warn">time-limited</td><td class="warn">time-dominated</td></tr>
-<tr><td>Per-point FLOP overhead</td><td>1.0x</td><td class="good">1.63x</td><td class="note">2.40x</td><td class="warn">3.31x</td></tr>
-<tr><td>Infrastructure changes</td><td>none</td><td class="good">coefficients only</td><td class="warn">ghost, prolong, KO</td><td class="warn">everything</td></tr>
-<tr><td>Used by major codes</td><td>GRChombo</td><td class="good">AthenaK, GR-Athena++, BAM</td><td>optional in some</td><td>none</td></tr>
-</table>
-
-<h3>3.10 Stencil Coefficients (Ready to Implement)</h3>
-<div class="card">
-<pre><span class="cm">/* 6th-order first derivative &mdash; 7 points, ghost=3 */</span>
-<span class="kw">static inline double</span> <span class="fn">fd_d1_6</span>(<span class="kw">const double</span> *f, <span class="kw">int</span> idx, <span class="kw">int</span> s, <span class="kw">double</span> dx) {
-    <span class="kw">return</span> (-<span class="num">1.0</span>/<span class="num">60</span>*f[idx-<span class="num">3</span>*s] + <span class="num">3.0</span>/<span class="num">20</span>*f[idx-<span class="num">2</span>*s] - <span class="num">3.0</span>/<span class="num">4</span>*f[idx-s]
-            + <span class="num">3.0</span>/<span class="num">4</span>*f[idx+s] - <span class="num">3.0</span>/<span class="num">20</span>*f[idx+<span class="num">2</span>*s] + <span class="num">1.0</span>/<span class="num">60</span>*f[idx+<span class="num">3</span>*s]) / dx;
-}
-
-<span class="cm">/* 6th-order second derivative &mdash; 7 points, ghost=3 */</span>
-<span class="kw">static inline double</span> <span class="fn">fd_d2_6</span>(<span class="kw">const double</span> *f, <span class="kw">int</span> idx, <span class="kw">int</span> s, <span class="kw">double</span> dx) {
-    <span class="kw">return</span> (<span class="num">1.0</span>/<span class="num">90</span>*f[idx-<span class="num">3</span>*s] - <span class="num">3.0</span>/<span class="num">20</span>*f[idx-<span class="num">2</span>*s] + <span class="num">3.0</span>/<span class="num">2</span>*f[idx-s]
-           - <span class="num">49.0</span>/<span class="num">18</span>*f[idx]
-           + <span class="num">3.0</span>/<span class="num">2</span>*f[idx+s] - <span class="num">3.0</span>/<span class="num">20</span>*f[idx+<span class="num">2</span>*s] + <span class="num">1.0</span>/<span class="num">90</span>*f[idx+<span class="num">3</span>*s]) / (dx*dx);
-}
-
-<span class="cm">/* 8th-order KO dissipation (pairs with 6th-order FD) &mdash; 9 points, ghost=4 */</span>
-<span class="kw">static inline double</span> <span class="fn">fd_ko_8</span>(<span class="kw">const double</span> *f, <span class="kw">int</span> idx, <span class="kw">int</span> s, <span class="kw">double</span> dx) {
-    <span class="kw">return</span> (<span class="num">1</span>*f[idx-<span class="num">4</span>*s] - <span class="num">8</span>*f[idx-<span class="num">3</span>*s] + <span class="num">28</span>*f[idx-<span class="num">2</span>*s] - <span class="num">56</span>*f[idx-s]
-           + <span class="num">70</span>*f[idx]
-           - <span class="num">56</span>*f[idx+s] + <span class="num">28</span>*f[idx+<span class="num">2</span>*s] - <span class="num">8</span>*f[idx+<span class="num">3</span>*s] + <span class="num">1</span>*f[idx+<span class="num">4</span>*s])
-          / (<span class="num">256.0</span> * dx);
-}</pre>
-</div>
-
-<!-- ================================================================ -->
-<hr>
-<h2>4. CCZ3 Formulation</h2>
-
-<p>arXiv:2501.01055 shows standard CCZ4's kappa1 damping of momentum constraints causes energy to accumulate in unphysical modes, producing a late-time instability at ~10<sup>3</sup>&ndash;10<sup>4</sup> M.</p>
+<p>Standard CCZ4's kappa1 damping causes momentum constraint violations to accumulate, producing instability at ~10<sup>3</sup>&ndash;10<sup>4</sup> M (arXiv:2501.01055). Removing the damping lets violations propagate out through Sommerfeld BCs instead.</p>
 
 <table>
 <tr><th>Aspect</th><th>CCZ4 (current)</th><th>CCZ4&prime;</th><th>CCZ3</th></tr>
-<tr><td>Theta evolved?</td><td>Yes</td><td>Yes</td><td class="good">No (removed)</td></tr>
-<tr><td>Momentum damping</td><td class="warn">kappa1 * Z_i (unstable)</td><td class="good">None (propagates out)</td><td class="good">None (propagates out)</td></tr>
+<tr><td>Momentum damping</td><td class="warn">kappa1 * Z_i</td><td class="good">None</td><td class="good">None</td></tr>
 <tr><td>Long-term stability</td><td class="warn">~10<sup>3</sup>&ndash;10<sup>4</sup> M</td><td class="good">10<sup>5</sup> M</td><td class="good">10<sup>5</sup> M</td></tr>
-<tr><td>Evolved fields</td><td>25</td><td>25</td><td class="good">24</td></tr>
+<tr><td>Evolved fields</td><td>25</td><td>25</td><td class="good">24 (no Theta)</td></tr>
 </table>
 
-<div class="evidence">
-The key insight is counterintuitive: <em>removing</em> constraint damping makes the simulation <em>more</em> stable. Momentum violations propagate to the boundary and leave (via Sommerfeld BCs) instead of accumulating.
-</div>
-
 <div class="card">
-<div class="card-header"><span class="card-title">Implementation</span> <span class="tag tag-best">CCZ4&prime; first, then CCZ3</span></div>
-<pre><span class="cm">// CCZ4&prime;: remove this one line from the Gamma equation</span>
+<div class="card-header"><span class="card-title">Implementation</span></div>
+<pre><span class="cm">// CCZ4&prime;: delete this line from the Gamma equation</span>
 rhs_Gamma[i] += ... - <span class="num">2.0</span> * kappa1_times_lapse * Z_over_chi[i];  <span class="cm">// DELETE</span>
 
-<span class="cm">// CCZ3: also set Theta=0, skip rhs_Theta, "K - 2*Theta" becomes just "K"</span></pre>
-<p>Add <code>--formulation ccz4|ccz4p|ccz3</code> runtime flag.</p>
+<span class="cm">// CCZ3: also set Theta=0, skip rhs_Theta, "K - 2*Theta" becomes "K"</span></pre>
+<p>Add <code>--formulation ccz4|ccz4p|ccz3</code> runtime flag. Synergy with 6th-order FD: fewer truncation-error-generated violations + clean propagation = best long-term stability.</p>
 </div>
-
-<p><strong>Synergy with 6th-order FD:</strong> CCZ3 removes the damping safety net, relying on clean violation propagation. 6th-order FD generates <em>fewer</em> violations (smaller truncation error). Less generation + clean propagation = best long-term stability.</p>
 
 <!-- ================================================================ -->
 <hr>
-<h2>5. Checkpoint/Restart</h2>
-
-<p>Without this, production runs are impossible. A 40-hour inspiral that crashes loses everything.</p>
+<h2>3. Checkpoint/Restart</h2>
 
 <div class="card">
 <div class="card-header"><span class="card-title">Raw binary + text header + CRC32</span> <span class="tag tag-best">Zero dependencies</span></div>
@@ -322,196 +147,281 @@ rhs_Gamma[i] += ... - <span class="num">2.0</span> * kappa1_times_lapse * Z_over
 <li><strong>Header:</strong> ASCII magic, key-value metadata (N, L, step, time, params), endianness marker</li>
 <li><strong>Data:</strong> Interior points only (ghosts reconstructed). Sequential per field, per block for AMR.</li>
 <li><strong>Footer:</strong> CRC32 checksum. Ring buffer of 2 files.</li>
-<li><strong>Performance:</strong> N=128, 31 fields: ~512 MB. On NVMe at 3 GB/s: 0.17 seconds.</li>
-<li><strong>Async:</strong> fork() for CPU (copy-on-write snapshot), pthread + double buffer for GPU.</li>
+<li><strong>Performance:</strong> N=128, 31 fields: ~512 MB. On NVMe at 3 GB/s: 0.17 sec.</li>
+<li><strong>Async:</strong> fork() for CPU (copy-on-write), pthread + double buffer for GPU.</li>
 </ul>
 </div>
 
 <!-- ================================================================ -->
 <hr>
-<h2>6. Waveform Extraction</h2>
+<h2>4. Waveform Extraction</h2>
 
 <table>
-<tr><th>Step</th><th>What</th><th>Status</th></tr>
-<tr><td>1</td><td>Compute Psi4 on grid</td><td class="good">Implemented (psi4.c)</td></tr>
-<tr><td>2</td><td>Interpolate onto spheres at r = {50,75,100,150,200} M</td><td class="warn">Needs wiring</td></tr>
-<tr><td>3</td><td>Decompose into (l,m) modes via s=-2 spherical harmonics</td><td class="warn">Not implemented (~50 LOC)</td></tr>
-<tr><td>4</td><td>Output r*Psi4<sup>lm</sup>(t) time series</td><td class="warn">Not implemented</td></tr>
-<tr><td>5</td><td>FFI to strain, extrapolate 1/r, package LIGO HDF5</td><td class="warn">Python post-processing</td></tr>
+<tr><th>Step</th><th>What</th></tr>
+<tr><td>1</td><td>Compute Psi4 on grid</td></tr>
+<tr><td>2</td><td>Interpolate onto spheres at r = {50, 75, 100, 150, 200} M</td></tr>
+<tr><td>3</td><td>Decompose into (l,m) modes via s=&minus;2 spherical harmonics</td></tr>
+<tr><td>4</td><td>Output r&middot;Psi4<sup>lm</sup>(t) time series</td></tr>
+<tr><td>5</td><td>FFI to strain + 1/r extrapolation (Python post-processing)</td></tr>
 </table>
 
-<h3>Extraction Method</h3>
-<div class="vs">
-<div>
-<strong>Fixed-radius + extrapolation <span class="tag tag-rec">Diagnostics + current LIGO</span></strong><br>
-<p>Psi4 on spheres at 4-6 radii, extrapolate to r&rarr;&infin;. Accuracy &lt;1% for BBH. Standard approach.</p>
-<p class="warn">Limitation: spheres at r=50-100M on coarsest AMR level.</p>
-</div>
-<div>
-<strong>CCE via SpECTRE worldtube <span class="tag tag-best">Next-gen detectors</span></strong><br>
-<p>Output metric on worldtube at r=20-25M (AMR-refined region), feed to SpECTRE CCE. Gauge-invariant at J<sup>+</sup>, captures GW memory. ~300 LOC C for worldtube output.</p>
-<p class="good">Worldtube in refined region sidesteps wave zone resolution problem.</p>
-<p><strong>Spectral filter:</strong> <code>f_lm *= exp(-36 * (l/l_max)^8)</code> kills grid noise, preserves physics modes.</p>
-<table>
-<tr><th>Case</th><th>l<sub>max</sub></th><th>Points on sphere</th></tr>
-<tr><td>Equal-mass BBH</td><td>8</td><td>~150</td></tr>
-<tr><td>Precessing</td><td>12&ndash;16</td><td>~330&ndash;560</td></tr>
-<tr><td>N&gt;10 / next-gen</td><td>16&ndash;20</td><td>~560&ndash;860</td></tr>
-</table>
-</div>
-</div>
+<p>Two extraction approaches: <strong>fixed-radius + extrapolation</strong> (standard, &lt;1% accuracy for BBH) and <strong>CCE via SpECTRE worldtube</strong> (gauge-invariant at J<sup>+</sup>, captures GW memory, needed for LISA/3G). CCE worldtube at r~25M sits in the AMR-refined region, sidestepping wave zone resolution issues. ~300 LOC C for worldtube output.</p>
 
 <div class="evidence">
-The extraction sphere must not cross AMR refinement boundaries. At crossings, data drops to prolongation order and CCE propagates that noise. Constrain regridding so the sphere's bounding box stays within one level (~20 lines in <code>criterion.c</code>).
+The extraction sphere must not cross AMR refinement boundaries. Constrain regridding so the sphere's bounding box stays within one level (~20 lines in <code>criterion.c</code>).
 </div>
 
-<h3>The Accuracy Chain</h3>
-<div class="card" style="border-color: #d29922;">
-<div class="card-header"><span class="card-title">Every link matters for next-gen quality</span> <span class="tag tag-alt">Critical</span></div>
-<p>CCE cannot fix evolution errors. For LISA/3G, <strong>all four</strong> must be addressed:</p>
-<ul>
-<li><strong>6th-order FD</strong> &mdash; reduces truncation error at every point including the worldtube</li>
-<li><strong>6th-order prolongation</strong> &mdash; prevents AMR boundaries from injecting 4th-order error</li>
-<li><strong>Worldtube at r~25M</strong> &mdash; in the refined AMR region, not on the coarse root grid</li>
-<li><strong>CCE</strong> &mdash; gauge-invariant propagation to J<sup>+</sup>, GW memory, no finite-radius artifacts</li>
-</ul>
-</div>
+<p><strong>3D output:</strong> XDMF + raw binary for ParaView/VisIt. Each AMR block is a &lt;Grid&gt; element. ~200 lines of C.</p>
 
 <!-- ================================================================ -->
 <hr>
-<h2>7. 3D Output</h2>
+<h2>5. N=10+ Black Holes</h2>
 
-<div class="card">
-<div class="card-header"><span class="card-title">XDMF + raw binary</span> <span class="tag tag-best">Zero dependencies</span></div>
-<p>Write raw doubles via fwrite, emit XML descriptor for ParaView/VisIt. AMR: each block is a &lt;Grid&gt; element. ~200 lines of C. Temporal series via XDMF CollectionType="Temporal".</p>
-</div>
-
-<!-- ================================================================ -->
-<hr>
-<h2>8. N=10+ Black Holes</h2>
-
-<p>The existing FAS multigrid solver already handles arbitrary N. Bowen-York A_ij is a linear superposition. Only the Hamiltonian constraint needs a nonlinear solve (already works).</p>
+<p>The FAS multigrid solver already handles arbitrary N. Bowen-York A_ij is a linear superposition.</p>
 
 <div class="card">
 <div class="card-header"><span class="card-title">Minimal changes</span></div>
 <ul>
 <li>Raise <code>MAX_PUNCTURES</code> from 16 to 32+ (trivial)</li>
 <li>Position-dependent eta (Section 1)</li>
-<li>Dynamic regridding every 4-8 steps (currently every step)</li>
-<li>Validate solver with N=3 test</li>
+<li>Regrid every 4&ndash;8 steps instead of every step</li>
 </ul>
 </div>
 
 <table>
 <tr><th>Parameter</th><th>N=2</th><th>N=10</th><th>N=25</th></tr>
-<tr><td>AMR levels</td><td>3-4</td><td>5-6</td><td>5-6</td></tr>
+<tr><td>AMR levels</td><td>3&ndash;4</td><td>5&ndash;6</td><td>5&ndash;6</td></tr>
 <tr><td>Memory (CK45, B=32)</td><td>~10 GB</td><td>~27 GB</td><td>~55 GB</td></tr>
 <tr><td>Fits A100 (80 GB)?</td><td class="good">Yes</td><td class="good">Yes</td><td class="good">Yes</td></tr>
 </table>
 
 <!-- ================================================================ -->
 <hr>
-<h2>9. CPU Performance Optimizations</h2>
+<h2>6. Performance Optimizations</h2>
+
+<h3>Quick Wins</h3>
 
 <div class="card">
-<div class="card-header"><span class="card-title">LTO (-flto)</span> <span class="tag tag-rec">Trivial, 5-15% CPU</span></div>
-<p>Add <code>-flto</code> to Makefile for CPU builds only (GPU LTO is broken in GCC 15). Enables cross-TU inlining of ccz4_rhs_point through the function pointer in backend_cpu.c. Full register allocation across the entire 500-line RHS kernel.</p>
+<div class="card-header"><span class="card-title">LTO (-flto)</span> <span class="tag tag-rec">5&ndash;15% CPU</span></div>
+<p>Add <code>-flto</code> to CFLAGS_OPT in the Makefile (CPU only; GPU LTO broken in GCC 15). Enables cross-TU inlining of <code>ccz4_rhs_point</code> through the function pointer in <code>backend_cpu.c</code>. One line change.</p>
 </div>
 
 <div class="card">
-<div class="card-header"><span class="card-title">Fused d1/d2 stencil</span> <span class="tag tag-rec">Low effort, 10-15% CPU</span></div>
-<p>11 fields need both d1 and d2 per direction (chi, lapse, 6&times;h_ij, 3&times;shift). Currently loads the same 5 stencil points twice. Fusing into <code>fd_d1_d2()</code> saves 33&times;3 = 99 redundant load sequences.</p>
+<div class="card-header"><span class="card-title"><code>__restrict__</code> on RHS pointers</span> <span class="tag tag-rec">3&ndash;8%</span></div>
+<p>The compiler cannot assume <code>rhs[f]</code> and <code>src[FIELD_CHI]</code> don't alias, so it re-loads from memory after every write. Add <code>__restrict__</code> to <code>ccz4_rhs_point</code> signature and backend dispatch functions. GPU-safe. 5 lines.</p>
+</div>
+
+<div class="card">
+<div class="card-header"><span class="card-title">Conditional EM allocation</span> <span class="tag tag-rec">19% memory</span></div>
+<p>The 6 EM fields (E<sup>i</sup>, B<sup>i</sup><sub>mag</sub>) are always allocated even when <code>--em</code> is off. <code>NUM_FIELDS=31</code> is baked into every allocation. Check <code>em_enabled</code> in <code>grid_alloc()</code> and skip EM fields. Saves ~970 MB at N=256, ~4.5 GB for 200-block AMR. ~20 lines.</p>
+</div>
+
+<div class="card">
+<div class="card-header"><span class="card-title">Hoist <code>em_enabled</code> branch</span> <span class="tag tag-rec">~5% GPU</span></div>
+<p>In <code>backend_cpu.c:176</code> and <code>backend_gpu.c:227</code>, the EM dispatch check is inside the innermost loop. Hoist outside, use two code paths. Marginal on CPU (branch predictor), ~5% on GPU (eliminates warp divergence).</p>
+</div>
+
+<h3>CPU</h3>
+
+<div class="card">
+<div class="card-header"><span class="card-title">Fused d1/d2 stencil</span> <span class="tag tag-rec">15&ndash;20% CPU, 5&ndash;10% GPU</span></div>
+<p>11 fields need both d1 and d2 per direction (chi, lapse, 6&times;h_ij, 3&times;shift). Currently loads the same 7 stencil points twice. A fused <code>fd_d1_d2()</code> halves the load count: 33&times;3 = 99 redundant load sequences eliminated.</p>
 <pre><span class="kw">static inline void</span> <span class="fn">fd_d1_d2</span>(<span class="kw">const double</span> *f, <span class="kw">int</span> idx, <span class="kw">int</span> s, <span class="kw">double</span> dx,
-                             <span class="kw">double</span> *d1, <span class="kw">double</span> *d2) {
-    <span class="kw">double</span> fm2=f[idx-<span class="num">2</span>*s], fm1=f[idx-s], f0=f[idx], fp1=f[idx+s], fp2=f[idx+<span class="num">2</span>*s];
-    *d1 = ((<span class="num">1.0</span>/<span class="num">12</span>)*fm2 - (<span class="num">2.0</span>/<span class="num">3</span>)*fm1 + (<span class="num">2.0</span>/<span class="num">3</span>)*fp1 - (<span class="num">1.0</span>/<span class="num">12</span>)*fp2) / dx;
-    *d2 = (-(<span class="num">1.0</span>/<span class="num">12</span>)*fm2 + (<span class="num">4.0</span>/<span class="num">3</span>)*fm1 - (<span class="num">5.0</span>/<span class="num">2</span>)*f0 + (<span class="num">4.0</span>/<span class="num">3</span>)*fp1 - (<span class="num">1.0</span>/<span class="num">12</span>)*fp2) / (dx*dx);
+                            <span class="kw">double</span> *d1, <span class="kw">double</span> *d2) {
+    <span class="kw">double</span> fm3=f[idx-<span class="num">3</span>*s], fm2=f[idx-<span class="num">2</span>*s], fm1=f[idx-s], f0=f[idx];
+    <span class="kw">double</span> fp1=f[idx+s], fp2=f[idx+<span class="num">2</span>*s], fp3=f[idx+<span class="num">3</span>*s];
+    *d1 = (<span class="num">-1.0/60</span>*fm3 + <span class="num">3.0/20</span>*fm2 - <span class="num">3.0/4</span>*fm1
+           + <span class="num">3.0/4</span>*fp1 - <span class="num">3.0/20</span>*fp2 + <span class="num">1.0/60</span>*fp3) / dx;
+    *d2 = (<span class="num">1.0/90</span>*fm3 - <span class="num">3.0/20</span>*fm2 + <span class="num">3.0/2</span>*fm1
+           - <span class="num">49.0/18</span>*f0
+           + <span class="num">3.0/2</span>*fp1 - <span class="num">3.0/20</span>*fp2 + <span class="num">1.0/90</span>*fp3) / (dx*dx);
 }</pre>
 </div>
 
 <div class="card">
-<div class="card-header"><span class="card-title">Fused RHS + CK45 update</span> <span class="tag tag-alt">Medium effort, 15-25% CPU</span></div>
-<p>Eliminate the intermediate RHS buffer. Instead of writing ~500 MB of RHS then reading it back in the CK45 update kernel, fuse both inside ccz4_rhs_point. Saves one full memory pass per stage (5 stages = 5 GB avoided at N=128).</p>
+<div class="card-header"><span class="card-title">Common subexpression elimination</span> <span class="tag tag-alt">10&ndash;20% FLOPs</span></div>
+<p><code>chris.ULL[m][kk][ll]</code> is reused across Ricci, Gamma RHS, and A_ij RHS. Products like <code>lapse * K</code> and <code>h_UU[i][j]</code> contracted with various tensors appear multiple times. The compiler's CSE pass is limited by C aliasing rules. Manual extraction of Christoffel products and metric contractions is low effort. NRPy+ reports ~21% instruction reduction via SymPy CSE (arXiv:2501.14030). ~50 lines.</p>
+</div>
+
+<div class="card">
+<div class="card-header"><span class="card-title">Symmetric tensor raise</span> <span class="tag tag-alt">2&ndash;3%</span></div>
+<p><code>raise_all_2()</code> in <code>tensor_utils.h</code> computes all 9 entries of A<sup>ij</sup> but only 6 are unique. Compute diagonal (3) + upper triangle (3) and copy: 54 FMAs &rarr; 36 (33% reduction). ~20 lines.</p>
+</div>
+
+<div class="card">
+<div class="card-header"><span class="card-title">Derivative precomputation for mixed d2</span> <span class="tag tag-alt">30&ndash;50% fewer loads</span></div>
+<p><code>fd_d2_mixed()</code> uses a 7&times;7 = 49-point stencil (6th-order). Store first derivatives in scratch arrays, then compute mixed second derivatives as 1D stencils on the stored d1 values: 7 loads instead of 49 per mixed pair. 11 fields &times; 3 mixed direction pairs = 33 instances. Requires scratch storage for d1 arrays.</p>
+</div>
+
+<div class="card">
+<div class="card-header"><span class="card-title">Interior/boundary RHS split</span> <span class="tag tag-alt">10&ndash;20% AMR</span></div>
+<p>Compute interior cells' RHS (no ghost dependency) while ghost exchange runs concurrently. Interior cells vastly outnumber boundary cells. Used by GR-Athena++, SpECTRE, ExaGRyPE. Medium effort (~150 lines).</p>
+</div>
+
+<h3>GPU</h3>
+
+<div class="card">
+<div class="card-header"><span class="card-title">Persistent pack allocation</span> <span class="tag tag-alt">10&ndash;20%</span></div>
+<p>Lattice rebuilds the entire <code>meshblock_pack_t</code> every time step: malloc + field copy + <code>omp target enter data</code> + compute + <code>omp target exit data</code> + store + free. AthenaK keeps all field data on GPU permanently, only rebuilding after regridding. Eliminates two full-buffer host&ndash;device transfers per step. ~100 lines.</p>
+</div>
+
+<div class="card">
+<div class="card-header"><span class="card-title">Device-side ghost exchange</span> <span class="tag tag-future">2&ndash;5x GPU overall</span></div>
+<p><strong>The single largest GPU bottleneck.</strong> <code>backend_gpu.c:879-910</code> syncs the entire pack to host, runs all 5 ghost exchange phases on CPU, then syncs back. For 100 blocks at 64<sup>3</sup>: ~1.6 GB round-trip per CK45 stage, 5 stages = ~8 GB/step of PCIe traffic. AthenaK does all ghost exchange on-device. Phase 0+1 (same-level copy) is trivially parallelizable as a GPU kernel. ~300 lines.</p>
+</div>
+
+<div class="card">
+<div class="card-header"><span class="card-title">Eliminate per-thread GPU overhead</span> <span class="tag tag-alt">15&ndash;30% occupancy</span></div>
+<p>Every GPU thread in <code>backend_gpu.c:205-221</code> constructs a <code>grid_t</code> on stack (~872 bytes) via <code>memset</code> and builds two 31-element pointer arrays (~496 bytes). Total: ~1.4 KB per thread. Grid dimensions are identical for all threads in a block. Pass as kernel parameters instead. ~30 lines.</p>
+</div>
+
+<div class="card">
+<div class="card-header"><span class="card-title">Kernel splitting for occupancy</span> <span class="tag tag-future">20&ndash;40% GPU</span></div>
+<p>The CCZ4 RHS kernel uses ~400 registers/thread = ~25% occupancy on A100. Split into Phase A (derivatives + Christoffels, ~200 registers) and Phase B (Ricci + RHS assembly from scratch buffer, ~200 registers). Each phase achieves ~75&ndash;80% occupancy. ~400 lines.</p>
+</div>
+
+<div class="card">
+<div class="card-header"><span class="card-title">Optimal block size</span> <span class="tag tag-best">2&ndash;30x GPU</span></div>
+<p>Parthenon-VIBE benchmarks (arXiv:2509.19701) show N_block=16 makes GPU slower than 96-core CPU. N_block=32 is minimum for GPU; 64 is optimal for weak scaling. Already a runtime parameter in Lattice. <strong>Zero code changes.</strong></p>
+</div>
+
+<div class="card">
+<div class="card-header"><span class="card-title">Reorder d2 for instruction cache</span> <span class="tag tag-alt">10&ndash;20% GPU</span></div>
+<p>Reorder second derivative computations to maximize instruction reuse (sort <code>d2[min(i,j)][max(i,j)]</code>). Fits within the 32 KB instruction cache. NR101 blog reports ~20% GPU speedup. Low effort.</p>
+</div>
+
+<h3>Memory</h3>
+
+<div class="evidence">
+<strong>Already sound:</strong> CK45 uses 3 memory blocks (optimal) vs Classic RK4's 4. No malloc/free inside time-stepping loops. Page-alignment waste is &lt;4 KB per block. Ghost width=4 is required for 6th-order FD + 8th-order KO (unavoidable). At N_block=16: 4.1x ghost overhead; N_block=32: 1.95x; N_block=64: 1.51x.
 </div>
 
 <!-- ================================================================ -->
 <hr>
-<h2>10. GPU Performance Optimizations</h2>
+<h2>7. Mathematical Methods</h2>
 
 <div class="card">
-<div class="card-header"><span class="card-title">Persistent pack</span> <span class="tag tag-alt">10-20% GPU</span></div>
-<p>Currently the meshblock pack is allocated, loaded, computed, stored, and freed <strong>every timestep</strong>. Build pack once; reuse across steps; invalidate only on regrid. Eliminates ~4 GB of memcpy per step.</p>
+<div class="card-header"><span class="card-title">Dense output for temporal interpolation</span> <span class="tag tag-rec">HIGH IMPACT</span></div>
+<p>Current quartic interpolation at coarse&ndash;fine boundaries stores 5 quantities per point. RK4 dense output achieves 4th-order temporal accuracy using the 4 stage vectors + pre-step state:</p>
+<pre>y(t_n + &theta;&middot;h) = y_n + h&middot;[b1(&theta;)&middot;k1 + b2(&theta;)&middot;k2 + b3(&theta;)&middot;k3 + b4(&theta;)&middot;k4]
+b1 = &theta; - 3&theta;<sup>2</sup>/2 + 2&theta;<sup>3</sup>/3
+b2 = b3 = &theta;<sup>2</sup> - 2&theta;<sup>3</sup>/3
+b4 = -&theta;<sup>2</sup>/2 + 2&theta;<sup>3</sup>/3</pre>
+<p>CarpetX (arXiv:2503.09629) uses this to achieve 4th-order convergence at AMR boundaries with fewer prolongation operations. Simpler than the current fields_old/fields_older/rhs_old/rhs_older scheme. ~200 lines.</p>
+<div class="evidence"><strong>Caveat:</strong> Works naturally with classic RK4 (k1&ndash;k4 explicit). CK45's 2N storage overwrites stage vectors, so subcycling steps would need to use classic RK4.</div>
 </div>
 
 <div class="card">
-<div class="card-header"><span class="card-title">Selective GPU transfer (ghost slabs only)</span> <span class="tag tag-alt">3-8x transfer reduction</span></div>
-<p>Ghost exchange currently syncs the entire data buffer to host and back (684 MB round-trip for 200 blocks). Ghost slabs are ~12% of that. Smart slicing reduces PCIe traffic by 4-8x.</p>
+<div class="card-header"><span class="card-title">Optimized-stability 2N RK methods</span> <span class="tag tag-alt">20&ndash;50% fewer steps</span></div>
+<p>Niegemann et al. (2012) constructed 2N methods with 8&ndash;14 stages optimized for maximum CFL rather than higher order. 1.5&ndash;2x larger stable timestep at the cost of more stages. Net savings if CFL-limited. Swapping in new coefficients is trivial (same <code>CK_A[s]</code>, <code>CK_B[s]</code> infrastructure).</p>
+<p>Ketcheson (2010) found 2S methods achieving 4th order in only 4 stages (vs CK45's 5), saving 20% RHS evaluations. Different update formula but similar memory.</p>
 </div>
 
 <div class="card">
-<div class="card-header"><span class="card-title">GPU-native ghost exchange</span> <span class="tag tag-future">2-5x overall GPU</span></div>
-<p>Run all 5 phases of ghost exchange as GPU kernels. Eliminates the host round-trip entirely. The biggest single GPU optimization. Same-level exchange is device-to-device copies; prolongation/restriction are natural GPU kernels.</p>
+<div class="card-header"><span class="card-title">P-ERK (Paired Explicit Runge-Kutta)</span> <span class="tag tag-future">2&ndash;5x on AMR</span></div>
+<p>Different AMR blocks use different RK stage counts based on local stiffness. Coarse blocks (80% of mesh) get fewer stages. Reported 1.5&ndash;5x speedup for 4&ndash;6 AMR levels (arXiv:2403.05144). Fourth-order P-ERK now exists (arXiv:2408.05470).</p>
+<div class="evidence"><strong>Caveat:</strong> Very high implementation complexity. Requires spectral radius estimation per block. No existing NR implementation.</div>
 </div>
 
 <div class="card">
-<div class="card-header"><span class="card-title">Kernel splitting for occupancy</span> <span class="tag tag-future">20-40% GPU</span></div>
-<p>Split ccz4_rhs_point into two stages: (1) all derivatives, (2) algebra+Christoffels+Ricci. Currently ~400 registers per thread = 15% occupancy on A100. Splitting doubles occupancy.</p>
+<div class="card-header"><span class="card-title">Mixed-order stencils near punctures</span> <span class="tag tag-alt">10&ndash;20% on fine levels</span></div>
+<p>Use 4th-order FD (5-point) on finest AMR levels wrapping the puncture (where solution is only C<sup>2</sup>&ndash;C<sup>4</sup>), 6th-order elsewhere. Both already implemented in <code>finite_diff.h</code> (compile-time <code>FD_ORDER</code>). Making it per-block at runtime requires two RHS versions or function pointer dispatch. Medium effort.</p>
 </div>
 
 <div class="card">
-<div class="card-header"><span class="card-title">Larger AMR blocks (32<sup>3</sup>)</span> <span class="tag tag-rec">Config change</span></div>
-<p>At N=16 with ghost=4: 70% overhead. At N=32: 49%. At N=64: 30%. Parthenon-VIBE warns 16<sup>3</sup> makes GPU <em>slower</em> than 96-core CPU. N_block is already a runtime parameter.</p>
+<div class="card-header"><span class="card-title">KO dissipation stage reduction</span> <span class="tag tag-alt">Few %</span></div>
+<p>Apply Kreiss-Oliger dissipation at 1 RK stage instead of all 5. Saves ~80% of KO computation. Low effort but stability risk near punctures.</p>
 </div>
 
 <!-- ================================================================ -->
 <hr>
-<h2>11. Long-term Scaling</h2>
+<h2>8. What Other Codes Do</h2>
+
+<table>
+<tr><th>Technique</th><th>Used by</th><th>Our status</th><th>Worth it?</th></tr>
+<tr><td>Persistent GPU data residency</td><td>AthenaK</td><td class="warn">Rebuild every step</td><td class="good">Yes &sect;6</td></tr>
+<tr><td>Device-side ghost exchange</td><td>AthenaK</td><td class="warn">Host round-trip</td><td class="good">Yes &sect;6</td></tr>
+<tr><td>Dense output for subcycling</td><td>CarpetX</td><td class="warn">Quartic interp</td><td class="good">Yes &sect;7</td></tr>
+<tr><td>Code generation from SymPy</td><td>NRPy+</td><td>Hand-written C</td><td class="note">Future</td></tr>
+<tr><td>Task-based parallelism</td><td>SpECTRE, GR-Athena++</td><td>Bulk-synchronous</td><td class="note">Partial &sect;6</td></tr>
+<tr><td>Enclave tasking for GPU</td><td>ExaGRyPE</td><td>Full-step offload</td><td>Not worth it</td></tr>
+<tr><td>Taylor-based AMR interpolation</td><td>ExaHyPE</td><td>Lagrange tensor-product</td><td class="note">Investigate</td></tr>
+<tr><td>Vertex-centered grids</td><td>GR-Athena++</td><td>Cell-centered</td><td>N/A</td></tr>
+<tr><td>Kokkos portability layer</td><td>AthenaK</td><td>OpenMP target</td><td>Not worth switching</td></tr>
+<tr><td>Block size 32&ndash;64 for GPU</td><td>AthenaK, Parthenon-VIBE</td><td class="good">N_block configurable</td><td class="good">Yes &sect;6</td></tr>
+</table>
+
+<!-- ================================================================ -->
+<hr>
+<h2>9. Long-term Scaling</h2>
 
 <div class="card">
-<div class="card-header"><span class="card-title">Multi-GPU</span> <span class="tag tag-future">1.5-3.5x on 4 GPUs</span></div>
-<p>Split meshblock_pack across devices. Morton ordering provides spatial locality for partitioning. Inter-device ghost exchange via host staging.</p>
+<div class="card-header"><span class="card-title">Multi-GPU</span> <span class="tag tag-future">1.5&ndash;3.5x on 4 GPUs</span></div>
+<p>Split meshblock_pack across devices. Morton ordering provides spatial locality for partitioning.</p>
 </div>
 
 <div class="card">
 <div class="card-header"><span class="card-title">MPI domain decomposition</span> <span class="tag tag-future">Linear scaling</span></div>
-<p>Partition Morton-sorted blocks across MPI ranks. AthenaK demonstrates 80% scaling to 65,536 GPUs. The subcycling complication: fine blocks needing coarse neighbor data across rank boundaries need temporal interpolation.</p>
-</div>
-
-<div class="card">
-<div class="card-header"><span class="card-title">P-ERK multi-rate RK</span> <span class="tag tag-future">2-5x on AMR</span></div>
-<p>Different blocks use different RK stage counts based on local stiffness. Outer 80% of blocks (non-stiff) get fewer stages, saving 2-5x total work.</p>
+<p>Partition Morton-sorted blocks across MPI ranks. AthenaK demonstrates 80% scaling to 65,536 GPUs.</p>
 </div>
 
 <!-- ================================================================ -->
 <hr>
-<h2>12. Not Recommended</h2>
+<h2>10. Not Recommended</h2>
 
 <table>
 <tr><th>Idea</th><th>Why not</th></tr>
-<tr><td>Mixed precision (float32)</td><td>~10<sup>&minus;5</sup> roundoff near punctures <span class="warn">breaks 4th-order convergence</span>. GPU kernel is compute-bound, not bandwidth-bound.</td></tr>
-<tr><td>Precomputed inverse metric</td><td>30 FLOPs (0.6% of kernel) vs 48 bytes/point extra bandwidth. Net negative on GPU.</td></tr>
-<tr><td>Operator splitting</td><td>CCZ4 equations are tightly coupled. Strang splitting caps accuracy at 2nd order, <span class="warn">breaking convergence</span>.</td></tr>
-<tr><td>Unified GPU memory</td><td>Page faults serialize stencil code. GCC OpenMP unified memory is immature.</td></tr>
-<tr><td>Task-based parallelism</td><td>5-15% benefit, 2-4 month effort. Breaks simple bulk-synchronous model.</td></tr>
+<tr><td>Mixed precision (float32)</td><td>~10<sup>&minus;5</sup> roundoff near punctures <span class="warn">breaks convergence</span></td></tr>
+<tr><td>Precomputed inverse metric</td><td>30 FLOPs saved vs 48 bytes/point extra bandwidth; net negative on GPU</td></tr>
+<tr><td>Operator splitting</td><td>CCZ4 tightly coupled; Strang splitting caps at 2nd order</td></tr>
+<tr><td>Unified GPU memory</td><td>Page faults serialize stencil code; GCC OpenMP unified memory immature</td></tr>
+<tr><td>SBP operators</td><td>Very high effort; constraint damping + KO works fine</td></tr>
+<tr><td>Constraint-preserving BCs</td><td>High effort; Sommerfeld sufficient for current goals</td></tr>
+<tr><td>FCCZ4 / Z4c formulation</td><td>Same cost as CCZ4, no meaningful advantage</td></tr>
+<tr><td>Full shared memory tiling (GPU)</td><td>6th-order 3D stencil footprint (14<sup>3</sup> = 22 KB) exceeds shared memory; OpenMP target has limited control</td></tr>
+<tr><td>Loop tiling for cache (CPU)</td><td>x-innermost already optimal; ~2&ndash;3% gain for high complexity</td></tr>
+<tr><td>Reducing ghost width</td><td>Would break 6th-order FD + 8th-order KO</td></tr>
+<tr><td>AoS field grouping</td><td>Violates SoA invariant; minimal cache benefit (~5%)</td></tr>
 </table>
 
 <!-- ================================================================ -->
 <hr>
-<h2>13. Implementation Roadmap</h2>
+<h2>Why 6th-Order FD</h2>
 
+<p>6th order is the production standard among FD-based NR codes (AthenaK, GR-Athena++, BAM). We upgraded in February 2026 with <strong>zero infrastructure changes</strong> &mdash; GHOST_WIDTH=4 already supported 6th-order FD + 8th-order KO. The key numbers:</p>
+
+<ul>
+<li><strong>170x cheaper</strong> than 4th order at &epsilon;=10<sup>&minus;6</sup> (despite 1.63x more FLOPs/point, you need far fewer grid points)</li>
+<li><strong>N=91 at 6th order matches N=256 at 4th order</strong> for the same accuracy</li>
+<li><strong>Prolongation/restriction matched at 6th order</strong> &mdash; no operator mismatch at AMR boundaries</li>
+</ul>
+
+<p>Going to 8th order is not worth it: requires ghost=5 (breaking change to grid, AMR, boundaries), puncture solutions are C<sup>2</sup>&ndash;C<sup>4</sup> (saturates beyond 6th), and RK4 time error O(h<sup>4</sup>) dominates.</p>
+
+<details>
+<summary>Scorecard: 6th vs 8th order</summary>
 <table>
-<tr><th>Priority</th><th>Item</th><th>Effort</th><th>Enables</th></tr>
-<tr><td>1</td><td>Position-dependent eta</td><td>1 line + flag</td><td>N-body, unequal mass</td></tr>
-<tr><td>2</td><td>Checkpoint/restart</td><td>~300 lines</td><td>Production runs</td></tr>
-<tr><td>3</td><td>6th-order FD stencils</td><td>~100 lines + tests</td><td>100-1000x cost reduction</td></tr>
-<tr><td>4</td><td>CCZ4&prime; formulation mode</td><td>Remove 1 line + flag</td><td>Long-term stability</td></tr>
-<tr><td>5</td><td>LTO + fused d1/d2</td><td>~50 lines</td><td>20-30% CPU speedup</td></tr>
-<tr><td>6</td><td>Waveform extraction</td><td>~300 lines</td><td>Science output</td></tr>
-<tr><td>7</td><td>3D output (XDMF)</td><td>~200 lines</td><td>Visualization</td></tr>
-<tr><td>8</td><td>Persistent GPU pack</td><td>~200 lines refactor</td><td>10-20% GPU speedup</td></tr>
-<tr><td>9</td><td>N=10+ validation</td><td>~50 lines + testing</td><td>Multi-body science</td></tr>
-<tr><td>10</td><td>6th-order prolongation</td><td>~150 lines</td><td>Clean AMR convergence</td></tr>
+<tr><th>Criterion</th><th>6th (current)</th><th>8th</th></tr>
+<tr><td>Ghost cells</td><td class="good">4 (have it)</td><td class="warn">5 (breaking)</td></tr>
+<tr><td>Prolongation match</td><td class="good">matched (6th/6th)</td><td class="warn">severe mismatch</td></tr>
+<tr><td>Puncture regularity</td><td class="good">OK</td><td class="note">saturated</td></tr>
+<tr><td>Time integrator</td><td class="good">close (RK4)</td><td class="warn">time-dominated</td></tr>
+<tr><td>Per-point FLOPs</td><td class="good">1.0x</td><td class="note">1.47x</td></tr>
+<tr><td>Used by major codes</td><td class="good">AthenaK, GR-Athena++, BAM</td><td>optional in some</td></tr>
 </table>
+</details>
+
+<details>
+<summary>What real NR codes use</summary>
+<table>
+<tr><th>Code</th><th>FD order</th><th>Ghost</th><th>Notes</th></tr>
+<tr><td class="good">AthenaK</td><td class="good">6th</td><td>4</td><td>arXiv:2409.10383</td></tr>
+<tr><td class="good">GR-Athena++</td><td class="good">6th</td><td>4</td><td>arXiv:2101.08289</td></tr>
+<tr><td>GRChombo</td><td>4th</td><td>3</td><td>Legacy choice</td></tr>
+<tr><td>BAM</td><td>6th</td><td>varies</td><td>Production BBH</td></tr>
+<tr><td>SpECTRE</td><td>Spectral/DG</td><td>N/A</td><td>Different paradigm</td></tr>
+</table>
+</details>
 
 <!-- ================================================================ -->
 <hr>
@@ -524,17 +434,25 @@ The extraction sphere must not cross AMR refinement boundaries. At crossings, da
 <li>arXiv:2409.10383 &mdash; Zhu et al.: AthenaK NR with 6th-order FD</li>
 <li>arXiv:2409.16053 &mdash; Stone et al.: AthenaK framework</li>
 <li>arXiv:2101.08289 &mdash; Daszuta et al.: GR-Athena++ (4th/6th/8th FD)</li>
-<li>arXiv:2509.19701 &mdash; Parthenon-VIBE: Block size vs GPU performance</li>
-<li>arXiv:1504.07609 &mdash; Mongwane: High-order AMR prolongation</li>
+<li>arXiv:2503.09629 &mdash; CarpetX subcycling with dense output</li>
+<li>arXiv:2406.11626 &mdash; ExaGRyPE</li>
+<li>arXiv:2504.15814 &mdash; ExaHyPE higher-order AMR interpolation</li>
+<li>arXiv:2501.14030 &mdash; NRPy GPU code generation</li>
+<li>arXiv:2505.00097 &mdash; superB/NRPy task-based NR</li>
+<li>arXiv:2509.19701 &mdash; Parthenon-VIBE block size benchmarks</li>
+<li>arXiv:2408.05470 &mdash; Doehring et al.: 4th-order P-ERK</li>
+<li>arXiv:2403.05144 &mdash; Doehring et al.: P-ERK with AMR</li>
+<li>arXiv:1909.12256 &mdash; Vermeire: Original P-ERK</li>
 <li>arXiv:1004.1353 &mdash; Lousto &amp; Zlochower: N-body puncture data</li>
-<li>arXiv:1006.1632 &mdash; Reisswig &amp; Pollney: Fixed-frequency integration</li>
-<li>arXiv:1703.01076 &mdash; LIGO NR injection infrastructure</li>
 <li>gr-qc/0606099 &mdash; Hannam et al.: Moving puncture regularity</li>
+<li>Ketcheson 2010 &mdash; Low-storage RK methods</li>
+<li>Niegemann et al. 2012 &mdash; Optimized-stability 2N RK</li>
+<li>NR101/NR102 blog &mdash; GPU NR optimization (James Brown 2024&ndash;2025)</li>
 </ul>
 
 <hr>
 <p style="text-align: center; color: #484f58; font-size: 0.8em; margin-top: 20px;">
-  Lattice Phase 3 Production Roadmap &mdash; consolidated from optimization proposals + phase 3 options + FD order analysis. February 2026.
+  Lattice Phase 3 Production Roadmap. February 2026.
 </p>
 
 </body>
