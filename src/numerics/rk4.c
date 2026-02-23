@@ -744,6 +744,30 @@ static void classic_rk4_step_mesh_packed(mesh_t *m, const sim_params_t *p,
  * ======================================================================== */
 
 /*
+ * Save k1 (Stage 1 RHS) from pack into blocks' rhs_old for quartic
+ * temporal interpolation. Called after Stage 1 RHS + Sommerfeld,
+ * before Stage 2 overwrites the pack's RHS buffer.
+ *
+ * Only copies for blocks that have rhs_old allocated (level < max_level).
+ * Ref: Quartic temporal prolongation design (tools/compute_amr_weights.py).
+ */
+static void save_k1_from_pack(const meshblock_pack_t *pack, block_t **blocks)
+{
+    for (int b = 0; b < pack->n_blocks; b++) {
+        block_t *blk = blocks[pack->block_ids[b]];
+        if (!blk->rhs_old_block) continue;
+
+        size_t npts = pack->npts;
+        for (int f = 0; f < NUM_FIELDS; f++) {
+            size_t src_off = (size_t)f * pack->n_blocks * npts
+                           + (size_t)b * npts;
+            memcpy(blk->rhs_old[f], pack->rhs + src_off,
+                   npts * sizeof(double));
+        }
+    }
+}
+
+/*
  * Build a meshblock_pack_t containing only leaf blocks at the specified level.
  * Same as mesh_build_leaf_pack but filtered by level.
  *
@@ -862,6 +886,10 @@ static void step_level(mesh_t *m, const sim_params_t *p,
         backend_ghost_exchange_packed(pack);
         backend_compute_rhs_packed(pack, p);
         backend_sommerfeld_packed(pack, p);
+        /* Save k1 (beginning-of-step RHS) for quartic temporal interpolation.
+         * Must happen before Stage 2 overwrites the pack's RHS buffer.
+         * Only saves for blocks with rhs_old allocated (level < max_level). */
+        save_k1_from_pack(pack, m->blocks);
         backend_accum_add_packed(pack, 1.0/6.0, dt_level);
         backend_axpy_packed(pack, 0.5, dt_level);
 

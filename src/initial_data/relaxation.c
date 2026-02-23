@@ -22,10 +22,20 @@
 #include "kerr_quasi_isotropic.h"
 #include "../numerics/finite_diff.h"
 #include "../geometry/tensor_utils.h"
+#include "../amr/prolongation.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+/* Center weight of fd_d2 for Jacobian diagonal computation.
+ * 4th-order: -5/2,  6th-order: -49/18.
+ * 3D Laplacian diagonal = 3 * FD_D2_CENTER_WEIGHT / dx^2. */
+#if FD_ORDER == 6
+#define FD_D2_CENTER_WEIGHT (-49.0 / 18.0)
+#else
+#define FD_D2_CENTER_WEIGHT (-5.0 / 2.0)
+#endif
 
 /* ================================================================
  * Multigrid parameters
@@ -423,23 +433,17 @@ static void mg_prolongate_add_field(const double *coarse, int Nc_total,
 }
 
 /* ================================================================
- * FMG prolongation: 4th-order Lagrange, OVERWRITE fine
+ * FMG prolongation: 6th-order Lagrange, OVERWRITE fine
  * Same weights as AMR prolongation (prolong_w from prolongation.c)
- * Ref: AthenaK 5-point Lagrange interpolation stencil
+ * Ref: Fornberg, SIAM Review 40 (1998) — Lagrange interpolation weights
  * ================================================================ */
-static const double fmg_pw[5] = {
-    -45.0 / 2048.0,     /* -0.02197265625 */
-     105.0 / 512.0,     /*  0.20507812500 */
-     945.0 / 1024.0,    /*  0.92285156250 */
-     -63.0 / 512.0,     /* -0.12304687500 */
-      35.0 / 2048.0     /*  0.01708984375 */
-};
+#define FMG_STENCIL PROLONG_STENCIL
 
 static void mg_prolongate_fmg_field(const double *coarse, int Nc_total,
                                     double *fine, int Nf_total,
                                     int Nf, int ghost)
 {
-    int half = 2;   /* stencil half-width */
+    int half = FMG_STENCIL / 2;
     int syc = Nc_total;
     int szc = Nc_total * Nc_total;
     int syf = Nf_total;
@@ -456,17 +460,17 @@ static void mg_prolongate_fmg_field(const double *coarse, int Nc_total,
                 int oi = (i - ghost) % 2;
 
                 double val = 0.0;
-                for (int sk = 0; sk < 5; sk++) {
-                    int wk = ok ? (4 - sk) : sk;
-                    for (int sj = 0; sj < 5; sj++) {
-                        int wj = oj ? (4 - sj) : sj;
-                        double wkj = fmg_pw[wk] * fmg_pw[wj];
-                        for (int si = 0; si < 5; si++) {
-                            int wi = oi ? (4 - si) : si;
+                for (int sk = 0; sk < FMG_STENCIL; sk++) {
+                    int wk = ok ? (FMG_STENCIL - 1 - sk) : sk;
+                    for (int sj = 0; sj < FMG_STENCIL; sj++) {
+                        int wj = oj ? (FMG_STENCIL - 1 - sj) : sj;
+                        double wkj = prolong_w[wk] * prolong_w[wj];
+                        for (int si = 0; si < FMG_STENCIL; si++) {
+                            int wi = oi ? (FMG_STENCIL - 1 - si) : si;
                             int src = (Kc - half + sk) * szc
                                     + (Jc - half + sj) * syc
                                     + (Ic - half + si);
-                            val += wkj * fmg_pw[wi] * coarse[src];
+                            val += wkj * prolong_w[wi] * coarse[src];
                         }
                     }
                 }
@@ -480,7 +484,7 @@ static void mg_prolongate_fmg_field(const double *coarse, int Nc_total,
  * Newton-GS smoother — 1-field (BY Hamiltonian)
  *
  * L(psi) = Lap(psi) + (1/8)*A^2*psi_total^{-7}
- * Jacobian diagonal: -7.5/dx^2 + dS/dpsi
+ * Jacobian diagonal: 3*FD_D2_CENTER_WEIGHT/dx^2 + dS/dpsi
  *   where dS/dpsi = -(7/8)*A^2*psi_total^{-8}
  *
  * 8-color ordering: color = (i%2) + 2*(j%2) + 4*(k%2)
@@ -495,7 +499,7 @@ static void newton_gs_sweep_1field(mg_level_t *lev)
     double dx = lev->dx;
     double dx2 = dx * dx;
     int sx = 1, sy = Nt, sz = Nt * Nt;
-    double J_lap = -7.5 / dx2;
+    double J_lap = 3.0 * FD_D2_CENTER_WEIGHT / dx2;
 
     for (int color = 0; color < 8; color++) {
         int c0 = color & 1;
@@ -537,8 +541,8 @@ static void newton_gs_sweep_1field(mg_level_t *lev)
  * Hamiltonian: L(psi) = Lap(psi) + (R_tilde/8)*psi_tot + (A^2/8)*psi_tot^{-7}
  * Momentum:   L(V^d) = Lap(V^d) + (1/3)*d_d(div V) + S_M^d
  *
- * Psi Jacobian:  -7.5/dx^2 + R_tilde/8 - (7/8)*A^2*psi_tot^{-8}
- * V^d Jacobian:  -7.5/dx^2 - 5/(6*dx^2)  [Lap + (1/3)*d^2V^d/dx_d^2]
+ * Psi Jacobian:  3*FD_D2_CENTER_WEIGHT/dx^2 + R_tilde/8 - (7/8)*A^2*psi_tot^{-8}
+ * V^d Jacobian:  3*FD_D2_CENTER_WEIGHT/dx^2 + (1/3)*FD_D2_CENTER_WEIGHT/dx^2
  * ================================================================ */
 static void newton_gs_sweep_4field(mg_level_t *lev)
 {
@@ -549,8 +553,8 @@ static void newton_gs_sweep_4field(mg_level_t *lev)
     double dx2 = dx * dx;
     int sx = 1, sy = Nt, sz = Nt * Nt;
     int strides[3] = { sx, sy, sz };
-    double J_lap = -7.5 / dx2;
-    double J_V_diag = J_lap - 5.0 / (6.0 * dx2);
+    double J_lap = 3.0 * FD_D2_CENTER_WEIGHT / dx2;
+    double J_V_diag = J_lap + (1.0 / 3.0) * FD_D2_CENTER_WEIGHT / dx2;
 
     for (int color = 0; color < 8; color++) {
         int c0 = color & 1;

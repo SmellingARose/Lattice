@@ -14,6 +14,7 @@
 #include "refine.h"
 #include "prolongation.h"
 #include "restriction.h"
+#include "ghost_exchange.h"
 #include "../core/fields.h"
 #include "../geometry/tensor_utils.h"
 #include <stdio.h>
@@ -203,8 +204,9 @@ int mesh_refine_block(mesh_t *m, int block_id)
  * Restrict one child's interior into the overlapping region of the parent.
  * Child at octant (cx,cy,cz) covers parent interior cells [cx*N/2, (cx+1)*N/2).
  *
- * Uses 4th-order cell-average Lagrange restriction (restrict_w[] weights)
- * with 2nd-order fallback at boundaries where stencil exits child grid.
+ * 6th-order cell-average Lagrange restriction (restrict_w[] weights).
+ * Stencil [base-2, base+3] always fits within [0, child_Nt) since
+ * fi_base ∈ [ghost, ghost+N-2] and ghost=4 gives margin of 2 on each side.
  *
  * Ref: ExaHyPE (arXiv:2504.15814) — matching restriction to prolongation order
  */
@@ -217,7 +219,6 @@ static void restrict_child_into_parent(const block_t *child, block_t *parent,
     const int N = pg->N;
     const int half_N = N / 2;
     const int child_ghost = cg->ghost;
-    const int child_Nt = cg->Ntotal;
 
     int p_off_i = cx * half_N;
     int p_off_j = cy * half_N;
@@ -234,37 +235,19 @@ static void restrict_child_into_parent(const block_t *child, block_t *parent,
                     int fj_base = child_ghost + 2 * pj;
                     int fk_base = child_ghost + 2 * pk;
 
-                    double val;
-
-                    /* Check if 4-point stencil fits within child grid */
-                    if (fi_base - 1 >= 0 && fi_base + 2 < child_Nt &&
-                        fj_base - 1 >= 0 && fj_base + 2 < child_Nt &&
-                        fk_base - 1 >= 0 && fk_base + 2 < child_Nt) {
-
-                        /* 4th-order: 3D tensor product of 4-point stencil */
-                        val = 0.0;
-                        for (int sk = 0; sk < RESTRICT_STENCIL; sk++) {
-                            int fk = fk_base - 1 + sk;
-                            for (int sj = 0; sj < RESTRICT_STENCIL; sj++) {
-                                double wkj = restrict_w[sk] * restrict_w[sj];
-                                int fj = fj_base - 1 + sj;
-                                for (int si = 0; si < RESTRICT_STENCIL; si++) {
-                                    int fi = fi_base - 1 + si;
-                                    val += wkj * restrict_w[si] *
-                                           src[IDX(cg, fi, fj, fk)];
-                                }
+                    /* 6th-order: 3D tensor product of 6-point stencil */
+                    double val = 0.0;
+                    for (int sk = 0; sk < RESTRICT_STENCIL; sk++) {
+                        int fk = fk_base - 2 + sk;
+                        for (int sj = 0; sj < RESTRICT_STENCIL; sj++) {
+                            double wkj = restrict_w[sk] * restrict_w[sj];
+                            int fj = fj_base - 2 + sj;
+                            for (int si = 0; si < RESTRICT_STENCIL; si++) {
+                                int fi = fi_base - 2 + si;
+                                val += wkj * restrict_w[si] *
+                                       src[IDX(cg, fi, fj, fk)];
                             }
                         }
-                    } else {
-                        /* 2nd-order fallback: 8-cell average */
-                        val = 0.0;
-                        for (int ok = 0; ok < 2; ok++)
-                            for (int oj = 0; oj < 2; oj++)
-                                for (int oi = 0; oi < 2; oi++)
-                                    val += src[IDX(cg, fi_base + oi,
-                                                       fj_base + oj,
-                                                       fk_base + ok)];
-                        val *= 0.125;
                     }
 
                     int pii = ghost + p_off_i + pi;
@@ -488,6 +471,65 @@ int mesh_regrid(mesh_t *m, const amr_params_t *ap)
     if (refine_count > 0 || coarsen_count > 0) {
         mesh_compact(m);
         mesh_rebuild_neighbors(m);
+
+        /* Step 6: Fill ghost zones of newly created blocks.
+         * Prolongation only fills interior cells; ghost zones are zero.
+         * Ghost exchange fills from same-level neighbors. Then extrapolate
+         * boundary ghost cells to prevent chi=0 → NaN in the CCZ4 RHS.
+         * Ref: Athena++ AMR post-regrid boundary fill. */
+        if (m->max_level > 0)
+            ghost_exchange_multilevel(m);
+        else
+            ghost_exchange(m);
+
+        /* Extrapolate boundary ghost cells from interior data.
+         * Domain-boundary ghosts have no neighbor to exchange with, so they
+         * remain zero after ghost exchange. Copy nearest interior plane
+         * into all ghost layers to prevent chi=0 blowup. */
+        for (int bid = 0; bid < m->num_blocks; bid++) {
+            block_t *b = m->blocks[bid];
+            if (!b || !b->is_leaf) continue;
+            grid_t *g = b->grid;
+            int gw = g->ghost;
+            int N = g->N;
+
+            for (int face = 0; face < 6; face++) {
+                if (!b->on_boundary[face]) continue;
+
+                /* Fill boundary ghost cells by copying nearest interior plane */
+                for (int f = 0; f < NUM_FIELDS; f++) {
+                    for (int k = 0; k < g->Ntotal; k++) {
+                        for (int j = 0; j < g->Ntotal; j++) {
+                            for (int i = 0; i < g->Ntotal; i++) {
+                                int target = -1;
+                                switch (face) {
+                                case 0: /* x- */
+                                    if (i < gw) target = IDX(g, gw, j, k);
+                                    break;
+                                case 1: /* x+ */
+                                    if (i >= gw + N) target = IDX(g, gw + N - 1, j, k);
+                                    break;
+                                case 2: /* y- */
+                                    if (j < gw) target = IDX(g, i, gw, k);
+                                    break;
+                                case 3: /* y+ */
+                                    if (j >= gw + N) target = IDX(g, i, gw + N - 1, k);
+                                    break;
+                                case 4: /* z- */
+                                    if (k < gw) target = IDX(g, i, j, gw);
+                                    break;
+                                case 5: /* z+ */
+                                    if (k >= gw + N) target = IDX(g, i, j, gw + N - 1);
+                                    break;
+                                }
+                                if (target >= 0)
+                                    g->fields[f][IDX(g, i, j, k)] = g->fields[f][target];
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         printf("[AMR] Regrid: +%d refined, -%d coarsened, %d total leaves "
                "(was %d)\n", refine_count, coarsen_count,

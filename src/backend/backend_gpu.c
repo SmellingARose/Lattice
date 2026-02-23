@@ -512,22 +512,19 @@ static void packed_exchange_same_level(meshblock_pack_t *pack)
     }
 }
 
-/* Phase 2: Restrict fine → coarse_data */
+/* Phase 2: Restrict fine → coarse_data (6th-order, no fallback) */
 static void packed_restrict_to_coarse(meshblock_pack_t *pack)
 {
     if (pack->n_refined == 0) return;
 
     int nb = pack->n_blocks;
     int ghost_f = pack->ghost;
-    int N_f = pack->N;
     int Nt_f = pack->Ntotal;
     int ghost_c = pack->ghost;
     int N_c = pack->coarse_N;
     int Nt_c = pack->coarse_Ntotal;
     size_t npts = pack->npts;
     size_t cnpts = pack->coarse_npts;
-    int lo_f = ghost_f;
-    int hi_f = ghost_f + N_f;
 
     for (int b = 0; b < nb; b++) {
         int r = pack->refined_map[b];
@@ -546,33 +543,20 @@ static void packed_restrict_to_coarse(meshblock_pack_t *pack)
                     for (int ci = ghost_c; ci < ghost_c + N_c; ci++) {
                         int fi_base = 2 * (ci - ghost_c) + ghost_f;
 
-                        if (fi_base - 1 >= lo_f && fi_base + 2 < hi_f &&
-                            fj_base - 1 >= lo_f && fj_base + 2 < hi_f &&
-                            fk_base - 1 >= lo_f && fk_base + 2 < hi_f) {
-                            double val = 0.0;
-                            for (int sk = 0; sk < RESTRICT_STENCIL; sk++) {
-                                int fk = fk_base - 1 + sk;
-                                for (int sj = 0; sj < RESTRICT_STENCIL; sj++) {
-                                    double wkj = restrict_w[sk] * restrict_w[sj];
-                                    int fj = fj_base - 1 + sj;
-                                    for (int si = 0; si < RESTRICT_STENCIL; si++) {
-                                        int fi = fi_base - 1 + si;
-                                        val += wkj * restrict_w[si]
-                                            * src[fi + fj*Nt_f + fk*Nt_f*Nt_f];
-                                    }
+                        double val = 0.0;
+                        for (int sk = 0; sk < RESTRICT_STENCIL; sk++) {
+                            int fk = fk_base - 2 + sk;
+                            for (int sj = 0; sj < RESTRICT_STENCIL; sj++) {
+                                double wkj = restrict_w[sk] * restrict_w[sj];
+                                int fj = fj_base - 2 + sj;
+                                for (int si = 0; si < RESTRICT_STENCIL; si++) {
+                                    int fi = fi_base - 2 + si;
+                                    val += wkj * restrict_w[si]
+                                        * src[fi + fj*Nt_f + fk*Nt_f*Nt_f];
                                 }
                             }
-                            dst[ci + cj*Nt_c + ck*Nt_c*Nt_c] = val;
-                        } else {
-                            double sum = 0.0;
-                            for (int ok = 0; ok < 2; ok++)
-                                for (int oj = 0; oj < 2; oj++)
-                                    for (int oi = 0; oi < 2; oi++)
-                                        sum += src[(fi_base+oi)
-                                            + (fj_base+oj)*Nt_f
-                                            + (fk_base+ok)*Nt_f*Nt_f];
-                            dst[ci + cj*Nt_c + ck*Nt_c*Nt_c] = sum * 0.125;
                         }
+                        dst[ci + cj*Nt_c + ck*Nt_c*Nt_c] = val;
                     }
                 }
             }

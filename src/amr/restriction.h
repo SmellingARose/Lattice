@@ -1,17 +1,18 @@
 /*
  * Lattice — 3D Numerical Relativity
- * 4th-order cell-average restriction (fine → coarse).
+ * 6th-order cell-average restriction (fine → coarse).
  *
- * Symmetric 4-point Lagrange stencil (exact for degree ≤ 3):
- *   w = { 1/48, 23/48, 23/48, 1/48 }
- * 3D tensor product: 4³ = 64 fine cells per coarse cell.
+ * Symmetric 6-point Lagrange stencil (exact for degree ≤ 5):
+ *   w = { -17/11520, 97/3840, 2743/5760, 2743/5760, 97/3840, -17/11520 }
+ * 3D tensor product: 6³ = 216 fine cells per coarse cell.
  *
- * Falls back to 2nd-order (8-cell average) if stencil exits fine grid.
+ * The 6-point stencil reaches at most 2 cells into ghost zones, which always
+ * contain valid data (ghost width = 4). No fallback needed.
  *
  * Ref: ExaHyPE (arXiv:2504.15814) — upgrading restriction to match
  *      prolongation order eliminates Hamiltonian violations at AMR boundaries.
- * Ref: GRChombo CoarseAverage (Chombo library) — 2nd-order baseline.
- * Ref: AthenaK Lagrange restriction matching FD order.
+ * Ref: GRChombo CoarseAverage (Chombo library) — 0th-order baseline.
+ * Ref: Fornberg, SIAM Review 40 (1998) — FD weight generation algorithm.
  */
 
 #ifndef LATTICE_RESTRICTION_H
@@ -22,27 +23,31 @@
 /* Forward declaration for restrict_to_coarse_buf */
 struct block_s;
 
-/* 4-point symmetric Lagrange restriction stencil.
- * Fine positions relative to coarse center: {-3δ/2, -δ/2, +δ/2, +3δ/2}.
- * Weights are cell-average integrals of Lagrange basis polynomials
- * over the coarse cell: (1/Δx_c) ∫ L_j(x) dx.
+/* 6-point symmetric Lagrange restriction stencil.
+ * Fine cell centers at {-5δ/2, -3δ/2, -δ/2, +δ/2, +3δ/2, +5δ/2}
+ * where δ = dx_fine = dx_coarse/2.
  *
- * Ref: Fornberg's FD weight algorithm (SIAM Review 40, 1998) */
-#define RESTRICT_STENCIL 4
+ * Weights are cell-average integrals of degree-5 Lagrange basis polynomials
+ * over the coarse cell: (1/Δx_c) ∫_{-Δx_c/2}^{+Δx_c/2} L_j(x) dx.
+ * Small negative outer weights (necessary for 6th-order accuracy).
+ *
+ * Derived via SymPy (tools/compute_amr_weights.py).
+ * Ref: Fornberg, SIAM Review 40 (1998) */
+#define RESTRICT_STENCIL 6
 
 extern const double restrict_w[RESTRICT_STENCIL];
 
 /* Restrict a single field from fine grid to coarse grid.
  * Fine grid has 2x the resolution (N_fine = 2 * N_coarse).
  * Same physical domain. Fills coarse interior points.
- * Uses 4th-order stencil with 2nd-order fallback at boundaries. */
+ * Uses 6th-order stencil for all cells (stencil fits within ghost zones). */
 void restrict_field(const grid_t *fine_g, int fine_field,
                     grid_t *coarse_g, int coarse_field);
 
 /* Restrict all NUM_FIELDS from fine grid to coarse grid. */
 void restrict_all(const grid_t *fine_g, grid_t *coarse_g);
 
-/* Restrict fine block interior → block's own coarse_buf interior (4th-order).
+/* Restrict fine block interior → block's own coarse_buf interior (6th-order).
  * Block-local operation: no cross-block memory access.
  * Ref: AthenaK coarse-buffer architecture */
 void restrict_to_coarse_buf(struct block_s *b);

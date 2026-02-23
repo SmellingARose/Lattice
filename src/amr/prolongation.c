@@ -1,35 +1,33 @@
 /*
  * Lattice — 3D Numerical Relativity
- * 4th-order cell-centered Lagrange prolongation (coarse → fine).
+ * 6th-order cell-centered Lagrange prolongation (coarse → fine).
  *
  * Tensor-product interpolation: for each coarse interior cell, compute
- * 8 fine children using a 5×5×5 stencil of coarse values weighted by
+ * 8 fine children using a 7×7×7 stencil of coarse values weighted by
  * the 1D Lagrange coefficients.
  *
  * Ref: AthenaK src/mesh/prolongation.hpp (HighOrderProlongCC)
- * Ref: AthenaK src/mesh/mesh_refinement.cpp InitInterpWghts()
+ * Ref: Fornberg, SIAM Review 40 (1998) — Lagrange interpolation weights
  */
 
 #include "prolongation.h"
 #include "../core/fields.h"
 
 /*
- * 4th-order cell-centered Lagrange weights for left child (x = -1/4).
- * Coarse cells at positions {-2, -1, 0, +1, +2} relative to parent.
+ * 6th-order cell-centered Lagrange weights for left child (x = -1/4).
+ * Coarse cells at positions {-3, -2, -1, 0, +1, +2, +3} relative to parent.
  *
- * Ref: AthenaK mesh_refinement.cpp lines ~1300-1320
- *   pro_4th[0] = -45./2048.
- *   pro_4th[1] = 105./512.
- *   pro_4th[2] = 945./1024.
- *   pro_4th[3] = -63./512.
- *   pro_4th[4] = 35./2048.
+ * Derived via SymPy (tools/compute_amr_weights.py).
+ * Verified: sum = 1, exact for polynomials through degree 6.
  */
 const double prolong_w[PROLONG_STENCIL] = {
-    -45.0 / 2048.0,     /* -0.02197265625 */
-     105.0 / 512.0,     /*  0.20507812500 */
-     945.0 / 1024.0,    /*  0.92285156250 */
-     -63.0 / 512.0,     /* -0.12304687500 */
-      35.0 / 2048.0     /*  0.01708984375 */
+      273.0 / 65536.0,     /*  0.00416564941 */
+    -1287.0 / 32768.0,     /* -0.03927612305 */
+    15015.0 / 65536.0,     /*  0.22911071777 */
+    15015.0 / 16384.0,     /*  0.91644287109 */
+    -9009.0 / 65536.0,     /* -0.13746643066 */
+     1001.0 / 32768.0,     /*  0.03054809570 */
+     -231.0 / 65536.0      /* -0.00352478027 */
 };
 
 void prolongate_field(const grid_t *coarse_g, int cf,
@@ -37,7 +35,7 @@ void prolongate_field(const grid_t *coarse_g, int cf,
 {
     const int ghost = coarse_g->ghost;
     const int N_c = coarse_g->N;
-    const int half = PROLONG_STENCIL / 2;  /* = 2 */
+    const int half = PROLONG_STENCIL / 2;  /* = 3 */
     const double *src = coarse_g->fields[cf];
 
     /* Loop over coarse interior cells */
@@ -56,7 +54,7 @@ void prolongate_field(const grid_t *coarse_g, int cf,
                             int fj = 2 * (cj - ghost) + ghost + oj;
                             int fk = 2 * (ck - ghost) + ghost + ok;
 
-                            /* 3D tensor product of 5-point stencils.
+                            /* 3D tensor product of 7-point stencils.
                              * Ref: AthenaK prolongation.hpp ProlongInterpolation */
                             double val = 0.0;
                             for (int sk = 0; sk < PROLONG_STENCIL; sk++) {

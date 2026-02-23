@@ -502,10 +502,11 @@ static void packed_exchange_same_level(meshblock_pack_t *pack)
 
 /*
  * Phase 2: Restrict fine block interior → own coarse_buf in pack.
- * 4th-order cell-average restriction (4×4×4 Lagrange stencil) with
- * 2nd-order (2×2×2 average) fallback near fine block boundaries.
+ * 6th-order cell-average restriction (6×6×6 Lagrange stencil).
+ * Stencil [base-2, base+3] fits within [0, Nt_f) for all coarse cells
+ * since ghost width (4) exceeds stencil reach (2).
  *
- * Reads: pack->data (fine block interior)
+ * Reads: pack->data (fine block)
  * Writes: pack->coarse_data (coarse_buf interior)
  *
  * Ref: restrict_to_coarse_buf() in restriction.c
@@ -516,15 +517,12 @@ static void packed_restrict_to_coarse(meshblock_pack_t *pack)
 
     int nb = pack->n_blocks;
     int ghost_f = pack->ghost;
-    int N_f = pack->N;
     int Nt_f = pack->Ntotal;
     int ghost_c = pack->ghost;
     int N_c = pack->coarse_N;
     int Nt_c = pack->coarse_Ntotal;
     size_t npts = pack->npts;
     size_t cnpts = pack->coarse_npts;
-    int lo_f = ghost_f;
-    int hi_f = ghost_f + N_f;
 
     for (int b = 0; b < nb; b++) {
         int r = pack->refined_map[b];
@@ -543,35 +541,21 @@ static void packed_restrict_to_coarse(meshblock_pack_t *pack)
                     for (int ci = ghost_c; ci < ghost_c + N_c; ci++) {
                         int fi_base = 2 * (ci - ghost_c) + ghost_f;
 
-                        /* 4th-order if stencil stays within fine interior */
-                        if (fi_base - 1 >= lo_f && fi_base + 2 < hi_f &&
-                            fj_base - 1 >= lo_f && fj_base + 2 < hi_f &&
-                            fk_base - 1 >= lo_f && fk_base + 2 < hi_f) {
-                            double val = 0.0;
-                            for (int sk = 0; sk < RESTRICT_STENCIL; sk++) {
-                                int fk = fk_base - 1 + sk;
-                                for (int sj = 0; sj < RESTRICT_STENCIL; sj++) {
-                                    double wkj = restrict_w[sk] * restrict_w[sj];
-                                    int fj = fj_base - 1 + sj;
-                                    for (int si = 0; si < RESTRICT_STENCIL; si++) {
-                                        int fi = fi_base - 1 + si;
-                                        val += wkj * restrict_w[si]
-                                            * src[fi + fj*Nt_f + fk*Nt_f*Nt_f];
-                                    }
+                        /* 6th-order: 6-point stencil */
+                        double val = 0.0;
+                        for (int sk = 0; sk < RESTRICT_STENCIL; sk++) {
+                            int fk = fk_base - 2 + sk;
+                            for (int sj = 0; sj < RESTRICT_STENCIL; sj++) {
+                                double wkj = restrict_w[sk] * restrict_w[sj];
+                                int fj = fj_base - 2 + sj;
+                                for (int si = 0; si < RESTRICT_STENCIL; si++) {
+                                    int fi = fi_base - 2 + si;
+                                    val += wkj * restrict_w[si]
+                                        * src[fi + fj*Nt_f + fk*Nt_f*Nt_f];
                                 }
                             }
-                            dst[ci + cj*Nt_c + ck*Nt_c*Nt_c] = val;
-                        } else {
-                            /* 2nd-order fallback: 2×2×2 average */
-                            double sum = 0.0;
-                            for (int ok = 0; ok < 2; ok++)
-                                for (int oj = 0; oj < 2; oj++)
-                                    for (int oi = 0; oi < 2; oi++)
-                                        sum += src[(fi_base+oi)
-                                            + (fj_base+oj)*Nt_f
-                                            + (fk_base+ok)*Nt_f*Nt_f];
-                            dst[ci + cj*Nt_c + ck*Nt_c*Nt_c] = sum * 0.125;
                         }
+                        dst[ci + cj*Nt_c + ck*Nt_c*Nt_c] = val;
                     }
                 }
             }
@@ -826,7 +810,7 @@ static void packed_fill_coarse_boundary(meshblock_pack_t *pack)
 /*
  * Phase 4: Prolongate from own coarse_buf → fine ghost zones.
  * For each fine ghost cell, if the neighbor direction was NOT filled by
- * Phase 1 (same-level), interpolate from coarse_data using 5×5×5 Lagrange.
+ * Phase 1 (same-level), interpolate from coarse_data using PROLONG_STENCIL^3 Lagrange.
  *
  * Reads: pack->coarse_data
  * Writes: pack->data (ghost zones only)
@@ -846,7 +830,7 @@ static void packed_prolongate_fine_ghosts(meshblock_pack_t *pack)
     int Nt_c = pack->coarse_Ntotal;
     size_t npts = pack->npts;
     size_t cnpts = pack->coarse_npts;
-    int half = PROLONG_STENCIL / 2;  /* = 2 */
+    int half = PROLONG_STENCIL / 2;
 
     for (int b = 0; b < nb; b++) {
         int r = pack->refined_map[b];

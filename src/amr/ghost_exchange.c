@@ -454,7 +454,7 @@ static void prolongate_from_own_coarse_buf(block_t *b)
     const int N_f = fg->N;
     const int Nt_f = fg->Ntotal;
     const int ghost_c = cg->ghost;
-    const int half = PROLONG_STENCIL / 2;  /* = 2 */
+    const int half = PROLONG_STENCIL / 2;
 
     for (int f = 0; f < NUM_FIELDS; f++) {
         const double *src = cg->fields[f];

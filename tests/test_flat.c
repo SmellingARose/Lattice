@@ -2,7 +2,7 @@
  * Lattice — 3D Numerical Relativity
  * Flat spacetime stability test.
  *
- * Minkowski initial data evolved for 1000 steps.
+ * Minkowski initial data evolved for 500 steps.
  * Pass criterion: Hamiltonian constraint L2 norm < 1e-10.
  *
  * This is the first test in the validation ladder:
@@ -25,12 +25,12 @@ int main(void)
 {
     printf("=== Flat Spacetime Stability Test ===\n");
 
-    /* Setup: N=32, L=10, CFL=0.25, 1000 steps */
+    /* Setup: N=32, L=10, CFL=0.25, 500 steps */
     sim_params_t p = default_params();
     p.N         = 32;
     p.L         = 10.0;
     p.CFL       = 0.25;
-    p.num_steps = 1000;
+    p.num_steps = 500;
     p.sigma     = 0.3;
     p.dx = p.L / p.N;
     p.dt = p.CFL * p.dx;

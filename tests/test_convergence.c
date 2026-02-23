@@ -3,7 +3,7 @@
  * 4th-order convergence test.
  *
  * Run single Schwarzschild puncture (M=1) at 3 resolutions with the same
- * domain (L=64). Evolve to T=2M. Measure Hamiltonian constraint L2 in an
+ * domain (L=64). Evolve to T=1M. Measure Hamiltonian constraint L2 in an
  * annular region 5M < r < 25M (away from puncture singularity and boundary).
  *
  * The constraint should be zero for an exact solution, so the measured L2
@@ -63,7 +63,7 @@ static double constraint_l2_annular(const grid_t *g,
 int main(void)
 {
     printf("=== 4th-Order Convergence Test ===\n");
-    printf("  Single BH (M=1), L=64, T=2M, CK45 integrator\n");
+    printf("  Single BH (M=1), L=64, T=1M, CK45 integrator\n");
     printf("  Constraint L2 measured in 5M < r < 25M\n\n");
     fflush(stdout);
 
@@ -72,7 +72,7 @@ int main(void)
     int resolutions[] = {32, 64, 128};
     int n_res = 3;
     double L = 64.0;
-    double T_final = 2.0;
+    double T_final = 1.0;
     double r_min = 5.0;
     double r_max = 25.0;
 

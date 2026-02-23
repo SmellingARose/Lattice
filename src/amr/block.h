@@ -83,13 +83,29 @@ typedef struct block_s {
                                    /* [0]=x-, [1]=x+, [2]=y-, [3]=y+, [4]=z-, [5]=z+ */
 
     /* Subcycling (Berger-Oliger) state for temporal interpolation.
+     *
+     * 4th-order quartic interpolation through 5 constraints:
+     *   p(0) = U_n (fields_old), p(1) = U_{n+1} (fields), p(-1) = U_{n-1} (fields_older)
+     *   p'(0) = dt*F_n (rhs_old), p'(-1) = dt*F_{n-1} (rhs_older)
+     *
+     * Ramps up: step 0 → copy (no data), step 1 → linear, step 2+ → quartic.
+     * Only allocated for leaf blocks at level < max_level.
+     *
      * Ref: Chombo AMRLevel::m_old_data / m_new_data pattern.
      * Ref: Athena++ MeshRefinement::ProlongateBoundaries time interp. */
     double   time;                 /* simulation time this block is at          */
-    double  *fields_old[NUM_FIELDS]; /* previous time-level state              */
-                                   /* Allocated for leaves at level < max_level */
-                                   /* NULL if not needed (finest level/non-leaf)*/
+    int      interp_order;         /* 0=copy, 1=linear, 4=quartic              */
+    double   time_old;             /* time at t_n (before current step)         */
+    double   dt_old;               /* dt used for step n-1 → n                 */
+
+    double  *fields_old[NUM_FIELDS]; /* state at t_n                           */
     double  *fields_old_block;     /* contiguous backing allocation             */
+    double  *fields_older[NUM_FIELDS]; /* state at t_{n-1}                     */
+    double  *fields_older_block;   /* contiguous backing allocation             */
+    double  *rhs_old[NUM_FIELDS];  /* dU/dt at t_n (k1 from step n → n+1)     */
+    double  *rhs_old_block;        /* contiguous backing allocation             */
+    double  *rhs_older[NUM_FIELDS]; /* dU/dt at t_{n-1}                        */
+    double  *rhs_older_block;      /* contiguous backing allocation             */
 } block_t;
 
 /* Physical coordinate of grid point i in direction dir within a block.
@@ -116,28 +132,48 @@ block_t *block_alloc(int id, int level, int N_block, double dx,
 void block_free(block_t *b);
 
 /*
- * Allocate fields_old arrays for temporal interpolation (subcycling).
+ * Allocate fields_old + fields_older + rhs_old + rhs_older arrays for
+ * 4th-order temporal interpolation (subcycling).
  * Only needed for leaf blocks at level < max_level.
- * fields_old[f] gets the same size as grid->fields[f].
- * No-op if fields_old_block is already allocated.
+ * No-op if already allocated.
  */
 void block_alloc_fields_old(block_t *b);
 
-/* Free fields_old arrays. Safe to call if already NULL. */
+/* Free all temporal interpolation arrays. Safe to call if already NULL. */
 void block_free_fields_old(block_t *b);
 
 /*
- * Save current fields → fields_old (memcpy all NUM_FIELDS arrays).
+ * Rotate time history and save current fields → fields_old.
  * Called before advancing a level so finer levels can time-interpolate.
+ *
+ * Rotation: fields_older ← fields_old (pointer swap)
+ *           rhs_older ← rhs_old (pointer swap)
+ *           fields_old ← current fields (memcpy)
+ *           interp_order ramps: 0 → 1 → 4
+ *
  * Ref: Chombo AMRLevel m_old_data save pattern.
  */
 void block_save_old(block_t *b);
 
+/* Reset interp_order to 0 (e.g. after regridding). */
+void block_reset_interp(block_t *b);
+
 /*
- * Time-interpolate between fields_old and fields.
- *   out[f][i] = (1 - frac) * fields_old[f][i] + frac * fields[f][i]
- * frac in [0,1]: 0 = old state, 1 = new state.
+ * Save RHS (k1) into rhs_old for temporal interpolation.
+ * Called after RK4 Stage 1 RHS evaluation with beginning-of-step data.
+ * The caller provides the RHS array (from pack or grid).
+ */
+void block_save_rhs_old(block_t *b, const double *const *rhs_src, size_t npoints);
+
+/*
+ * Multi-order time interpolation between saved time levels.
+ *   interp_order == 0: copy fields_old (no interpolation)
+ *   interp_order == 1: linear (1st-order)
+ *   interp_order == 4: quartic (4th-order, using 5 constraints)
+ *
+ * frac in [0,1]: 0 = old state (t_n), 1 = new state (t_{n+1}).
  * Writes into the provided out[] array (caller-owned, same layout as fields[]).
+ *
  * Ref: Athena++ MeshRefinement::ProlongateBoundaries temporal interpolation.
  */
 void block_time_interp(const block_t *b, double frac,

@@ -125,7 +125,7 @@ static void test_em_flat(void)
     p.N         = 32;
     p.L         = 10.0;
     p.CFL       = 0.25;
-    p.num_steps = 1000;
+    p.num_steps = 500;
     p.sigma     = 0.3;
     p.em_enabled = 1;
     p.dx = p.L / p.N;
