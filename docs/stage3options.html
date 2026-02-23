@@ -19,6 +19,7 @@
   .tag-alt { background: #9e6a0050; color: #d29922; border: 1px solid #9e6a0080; }
   .tag-future { background: #8b1d3250; color: #f47067; border: 1px solid #8b1d3280; }
   .tag-best { background: #1f6feb50; color: #58a6ff; border: 1px solid #1f6feb80; }
+  .tag-bug { background: #da363450; color: #ff7b72; border: 1px solid #da363480; }
   p, li { font-size: 0.9em; color: #b1bac4; }
   ul { padding-left: 20px; margin: 6px 0; }
   li { margin-bottom: 3px; }
@@ -48,19 +49,31 @@
 <h2>At a Glance</h2>
 <table>
 <tr><th>Improvement</th><th>What it means</th><th>Benefit</th><th>Effort</th><th>Status</th></tr>
+<tr><td class="good">Fix correctness bugs</td><td>0th-order restriction, CK45 k1 save, fast_inv_cbrt in refine</td><td>Correct AMR convergence</td><td>~35 LOC</td><td class="good">Done</td></tr>
 <tr><td>Position-dependent eta</td><td>Gamma-driver damping scales with local BH mass</td><td>Enables unequal-mass and N-body</td><td>1 line</td><td class="warn">Todo</td></tr>
 <tr><td>CCZ3 formulation</td><td>Remove momentum constraint damping term</td><td>Stable to 10<sup>5</sup> M (100x longer)</td><td>1 line + flag</td><td class="warn">Todo</td></tr>
 <tr><td>Checkpoint/restart</td><td>Binary dump of all fields to disk</td><td>Survive crashes on multi-day runs</td><td>~300 LOC</td><td class="warn">Todo</td></tr>
 <tr><td>Waveform extraction</td><td>Psi4 on spheres &rarr; (l,m) modes &rarr; strain</td><td>Science output (GW waveforms)</td><td>~300 LOC</td><td class="warn">Todo</td></tr>
-<tr><td>LTO + <code>__restrict__</code></td><td>Cross-TU inlining + pointer aliasing hints</td><td>8&ndash;23% CPU speedup</td><td>~5 LOC</td><td class="warn">Todo</td></tr>
+<tr><td class="good">LTO + <code>__restrict__</code></td><td>Cross-TU inlining + pointer aliasing hints</td><td>8&ndash;23% CPU speedup</td><td>~5 LOC</td><td class="good">Done</td></tr>
 <tr><td>Fused d1/d2 stencil</td><td>Load 7 stencil points once for both derivatives</td><td>15&ndash;20% CPU, 5&ndash;10% GPU</td><td>~50 LOC</td><td class="warn">Todo</td></tr>
+<tr><td class="good">OpenMP ghost exchange</td><td>Parallelize packed ghost exchange + Sommerfeld on CPU</td><td>10&ndash;15% CPU</td><td>~5 LOC</td><td class="good">Done</td></tr>
+<tr><td>Persistent per-level packs</td><td>One pack per AMR level, survives across subcycle steps</td><td>15&ndash;30% CPU, eliminates 95% GPU PCIe</td><td>~200 LOC</td><td class="warn">Todo</td></tr>
+<tr><td>Compile-time EM dispatch</td><td>Separate build targets for CCZ4-only vs CCZ4+EM</td><td>4&ndash;5% (subsumes all EM overhead)</td><td>~20 LOC</td><td class="warn">Todo</td></tr>
 <tr><td>Conditional EM allocation</td><td>Skip 6 EM fields when <code>--em</code> off</td><td>19% memory savings</td><td>~20 LOC</td><td class="warn">Todo</td></tr>
 <tr><td>Manual CSE in RHS</td><td>Cache repeated Christoffel/metric contractions</td><td>10&ndash;20% FLOP reduction</td><td>~50 LOC</td><td class="warn">Todo</td></tr>
 <tr><td>Dense output for subcycling</td><td>RK4 stage vectors for temporal interpolation</td><td>4th-order at AMR boundaries</td><td>~200 LOC</td><td class="warn">Todo</td></tr>
+<tr><td>enforce_algebraic on GPU</td><td>Move det/trace enforcement to device kernel</td><td>~130 ms/step saved on GPU</td><td>~60 LOC</td><td class="warn">Todo</td></tr>
+<tr><td>Richardson refinement criteria</td><td>Truncation error estimate from AMR hierarchy</td><td>10&ndash;30% fewer blocks</td><td>~150 LOC</td><td class="warn">Todo</td></tr>
 <tr><td>3D output (XDMF)</td><td>Raw binary + XML for ParaView/VisIt</td><td>Visualization</td><td>~200 LOC</td><td class="warn">Todo</td></tr>
 <tr><td>N=10+ validation</td><td>Raise MAX_PUNCTURES, test solver at N=3+</td><td>Multi-body science</td><td>~50 LOC</td><td class="warn">Todo</td></tr>
-<tr><td>GPU optimizations</td><td>Persistent pack, device-side ghost, kernel splitting</td><td>2&ndash;5x GPU speedup</td><td>Medium&ndash;High</td><td class="warn">Todo</td></tr>
+<tr><td>GPU optimizations</td><td>Device-side ghost, kernel splitting, occupancy tuning</td><td>2&ndash;5x GPU speedup</td><td>Medium&ndash;High</td><td class="warn">Todo</td></tr>
 <tr><td>Multi-GPU / MPI</td><td>Partition Morton-sorted blocks across ranks</td><td>Linear scaling to 1000s of GPUs</td><td>High</td><td class="warn">Future</td></tr>
+<tr style="border-top: 2px solid #30363d"><td class="good">Fast-path pow + skip EM in dissipation</td><td>Eliminate slow pow(lapse,1) and skip 6 EM fields in KO/Sommerfeld</td><td>~2% CPU + reduced overhead</td><td>&mdash;</td><td class="good">Done</td></tr>
+<tr><td class="good">Flattened RK4 update + hoisted GPU grid_t</td><td>Single OMP region over all fields, pass grid as params</td><td>5&ndash;10% single-grid, better GPU occupancy</td><td>&mdash;</td><td class="good">Done</td></tr>
+<tr><td class="good">Pre-computed AMR weight tables</td><td>232-entry restriction/prolongation product tables (bit-exact verified)</td><td>Eliminates 4.6B multiplies</td><td>&mdash;</td><td class="good">Done</td></tr>
+<tr><td class="good">Default integrator: classic RK4</td><td>4 stages, faster than CK45 (5 stages); 25% more memory</td><td>Faster wall-clock per step</td><td>&mdash;</td><td class="good">Done</td></tr>
+<tr style="border-top: 2px solid #da3634"><td class="good">AMR dynamic-regrid NaN</td><td>ghost_fill_from_coarser ordering bug: restrict&rarr;exchange per block read stale coarse_bufs</td><td class="good">Fixed</td><td>&mdash;</td><td class="good">Done</td></tr>
+<tr><td class="warn">Classic RK4 packed mesh divergence</td><td>classic_rk4_step_mesh_packed() 10x higher constraints than CK45</td><td class="warn">Blocks classic packed path</td><td>~50 LOC</td><td class="warn">Investigate</td></tr>
 <tr style="border-top: 2px solid #30363d"><td class="good">6th-order FD + 8th-order KO</td><td>Wider stencils, smaller truncation error</td><td>170x cheaper at &epsilon;=10<sup>&minus;6</sup></td><td>&mdash;</td><td class="good">Done</td></tr>
 <tr><td class="good">6th-order prolongation + restriction</td><td>Matched AMR operator order, no fallbacks</td><td>Clean convergence at refinement boundaries</td><td>&mdash;</td><td class="good">Done</td></tr>
 <tr><td class="good">4th-order Sommerfeld BCs</td><td>5 Fornberg stencil variants, no 2nd-order fallback</td><td>Reduced boundary reflections</td><td>&mdash;</td><td class="good">Done</td></tr>
@@ -70,36 +83,96 @@
 <!-- ================================================================ -->
 <h2>Priority Roadmap</h2>
 
-<p class="tier-label" style="color: #3fb950;">Tier 1: Do Now <span style="font-weight: normal; color: #8b949e;">(days, 30&ndash;50% combined improvement)</span></p>
+<p class="tier-label" style="color: #3fb950;">Tier 0: Correctness Bugs <span style="font-weight: normal; color: #8b949e;">(all fixed)</span></p>
 <ol class="tier-items">
-<li>LTO in Makefile (1 line)</li>
-<li><code>__restrict__</code> on RHS pointers (5 lines)</li>
-<li>Fused d1/d2 stencil (~50 lines)</li>
-<li>Conditional EM allocation (~20 lines)</li>
-<li>Eliminate per-thread GPU overhead (~30 lines)</li>
+<li><span class="good">&#10003;</span> 6th-order restriction in parent sync &mdash; <code>restrict_cell()</code> in <code>rk4.c</code> (commit 32290ab)</li>
+<li><span class="good">&#10003;</span> CK45 subcycling k1 save &mdash; <code>save_k1_from_pack()</code> added (commit 32290ab)</li>
+<li><span class="good">&#10003;</span> enforce_algebraic_block uses fast_inv_cbrt &mdash; <code>refine.c</code> fixed, removed <code>if (det > 0)</code> guard</li>
 </ol>
 
-<p class="tier-label" style="color: #d29922;">Tier 2: Do Soon <span style="font-weight: normal; color: #8b949e;">(weeks, 20&ndash;40% additional)</span></p>
-<ol class="tier-items" start="6">
-<li>Persistent pack allocation (~100 lines)</li>
+<p class="tier-label" style="color: #3fb950;">Tier 1: Quick Wins <span style="font-weight: normal; color: #8b949e;">(days, 25&ndash;45% combined CPU improvement)</span></p>
+<ol class="tier-items" start="4">
+<li><span class="good">&#10003;</span> LTO in Makefile (commit 32290ab)</li>
+<li><span class="good">&#10003;</span> <code>__restrict__</code> on RHS pointers (commit 32290ab)</li>
+<li>Fused d1/d2 stencil (~50 lines)</li>
+<li><span class="good">&#10003;</span> OpenMP-parallelize ghost exchange + Sommerfeld (commit 32290ab)</li>
+<li>Conditional EM allocation (~20 lines)</li>
+<li><span class="good">&#10003;</span> Skip EM in dissipation/Sommerfeld (commit 32290ab)</li>
+<li><span class="good">&#10003;</span> Hoist GPU grid_t construction (commit 32290ab)</li>
+<li><span class="good">&#10003;</span> Flatten per-grid RK4 update &mdash; single OMP region (commit 32290ab)</li>
+<li><span class="good">&#10003;</span> Fast-path pow(lapse, 1.0) (commit 32290ab)</li>
+<li><span class="good">&#10003;</span> Pre-compute restriction/prolongation weight products &mdash; 232 entries, bit-exact (commit 32290ab)</li>
+</ol>
+
+<p class="tier-label" style="color: #d29922;">Tier 2: Medium Effort <span style="font-weight: normal; color: #8b949e;">(weeks, 20&ndash;40% additional)</span></p>
+<ol class="tier-items" start="14">
+<li>Persistent per-level packs for subcycling (~200 lines)</li>
 <li>Manual CSE in ccz4_rhs.c (~50 lines)</li>
 <li>Symmetric tensor raise (~20 lines)</li>
 <li>Dense output for subcycling (~200 lines)</li>
+<li>Direct ghost-region iteration &mdash; prolongation + Sommerfeld (~160 lines)</li>
+<li>enforce_algebraic on GPU (~60 lines)</li>
+<li>Pre-allocate ghost exchange scratch buffers (~15 lines)</li>
+<li>Hash table for neighbor lookup (~40 lines)</li>
+<li>Adaptive kappa1 / formulation hierarchy (~20 lines)</li>
+<li>Eliminate refinement memory spike (~50 lines)</li>
+<li>Richardson extrapolation refinement criteria (~150 lines)</li>
 </ol>
 
-<p class="tier-label" style="color: #f47067;">Tier 3: Major GPU Work <span style="font-weight: normal; color: #8b949e;">(weeks&ndash;months, 2&ndash;5x GPU)</span></p>
-<ol class="tier-items" start="10">
+<p class="tier-label" style="color: #f47067;">Tier 3: Major Work <span style="font-weight: normal; color: #8b949e;">(weeks&ndash;months, 2&ndash;5x GPU)</span></p>
+<ol class="tier-items" start="25">
 <li>Device-side ghost exchange (~300 lines)</li>
 <li>Kernel splitting for occupancy (~400 lines)</li>
 <li>Interior/boundary RHS split for async overlap (~150 lines)</li>
+<li>GPU kernel occupancy tuning via num_teams/thread_limit (~25 lines, needs profiling)</li>
+<li>IMEX for constraint damping (~300 lines)</li>
+<li>Hyperbolic relaxation for initial data (~500 lines)</li>
 </ol>
 
 <p class="tier-label" style="color: #8b949e;">Tier 4: Future</p>
-<ol class="tier-items" start="13">
+<ol class="tier-items" start="31">
 <li>P-ERK multirate time integration</li>
 <li>Code generation from SymPy for full CSE</li>
 <li>Optimized-stability RK methods</li>
+<li>AMR-enabled constraint solver (GRTresna)</li>
+<li>Taylor-based AMR prolongation (ExaHyPE)</li>
 </ol>
+
+<!-- ================================================================ -->
+<hr>
+<h2>0. Correctness Bugs <span class="good" style="font-size: 0.7em;">(all fixed)</span></h2>
+
+<div class="card" style="border-color: #238830;">
+<div class="card-header"><span class="card-title">0th-order restriction in parent sync</span> <span class="tag tag-rec">FIXED</span></div>
+<p><code>restrict_level_to_parents()</code> used simple 2&times;2&times;2 averaging (0th-order) to populate non-leaf parent data. Fine-level RHS saw O(h<sup>2</sup>) ghost data at coarse&ndash;fine boundaries.</p>
+<p><strong>Fix (commit 32290ab):</strong> <code>restrict_cell()</code> moved to <code>restriction.h</code> as <code>static inline</code>, called from <code>restrict_level_to_parents()</code>. Now uses the same 6th-order Lagrange stencil as all other restriction paths.</p>
+</div>
+
+<div class="card" style="border-color: #238830;">
+<div class="card-header"><span class="card-title">CK45 subcycling never saves k1</span> <span class="tag tag-rec">FIXED</span></div>
+<p>The CK45 subcycling path never called <code>save_k1_from_pack</code>. <code>rhs_old</code> stayed all-zeros, degrading quartic temporal interpolation.</p>
+<p><strong>Fix (commit 32290ab):</strong> Added <code>if (s == 0) save_k1_from_pack(pack, m->blocks);</code> in the CK45 subcycling stage loop.</p>
+</div>
+
+<div class="card" style="border-color: #238830;">
+<div class="card-header"><span class="card-title">enforce_algebraic_block uses slow path</span> <span class="tag tag-rec">FIXED</span></div>
+<p><code>refine.c</code> had a copy of <code>enforce_algebraic</code> using <code>1.0 / cbrt(det)</code> (3&ndash;5x slower) with a divergent <code>if (det > 0.0)</code> guard that could skip enforcement entirely.</p>
+<p><strong>Fix:</strong> <code>fast_inv_cbrt()</code> moved to <code>tensor_utils.h</code> (commit 32290ab). <code>enforce_algebraic_block()</code> in <code>refine.c</code> updated to use <code>fast_inv_cbrt(det)</code> unconditionally, matching <code>rk4.c</code>.</p>
+</div>
+
+<h3 style="color: #f47067;">Known Issues (discovered during Tier 0 work)</h3>
+
+<div class="card" style="border-color: #238830;">
+<div class="card-header"><span class="card-title">AMR dynamic-regrid produces NaN</span> <span class="tag tag-rec">FIXED</span></div>
+<p><code>ghost_fill_from_coarser()</code> had an ordering bug: restrict &rarr; exchange &rarr; prolongate ran per block in a single loop, so block B could read neighbor C's <code>coarse_buf</code> before C had been restricted (stale/zero data &rarr; NaN).</p>
+<p><strong>Fix:</strong> Split into two passes &mdash; Pass 1 restricts <em>all</em> fine blocks, Pass 2 does exchange + prolongate. Removed <code>has_coarser_leaves</code> workaround from <code>step_level()</code>. Test 2 now passes with classic RK4 (Ham L2 = 2.9e-03).</p>
+</div>
+
+<div class="card" style="border-color: #da3634;">
+<div class="card-header"><span class="card-title">Classic RK4 packed mesh divergence</span> <span class="tag tag-bug">INVESTIGATE</span></div>
+<p><code>test_amr_evolve</code> Test 1: classic RK4 packed mesh stepper produces 10x higher constraint violations than CK45 packed stepper (ratio 11.87 vs expected ~1.0). <strong>Pre-existing</strong> &mdash; <code>classic_rk4_step_mesh_packed()</code> was never tested before (tests always used CK45). Single-grid classic RK4 works correctly.</p>
+<p><strong>Likely cause:</strong> Bug in <code>classic_rk4_step_mesh_packed()</code> stage ordering or buffer management. CK45 packed path (<code>ck45_step_mesh_packed()</code>) works correctly as the reference.</p>
+</div>
 
 <!-- ================================================================ -->
 <hr>
@@ -129,12 +202,19 @@ rhs_B[ii] = ... + rhs_Gamma[ii] - eta_local * B[ii];</pre>
 </table>
 
 <div class="card">
-<div class="card-header"><span class="card-title">Implementation</span></div>
+<div class="card-header"><span class="card-title">Formulation hierarchy</span></div>
+<p>Implement as a <code>--formulation</code> flag with progressive options:</p>
+<table>
+<tr><th>Flag</th><th>Damping</th><th>Stability</th><th>Notes</th></tr>
+<tr><td><code>ccz4</code></td><td>Fixed kappa1</td><td>~10<sup>3</sup> M</td><td>Current default</td></tr>
+<tr><td><code>ccz4-adaptive</code></td><td>kappa1 &times; f(Ham, Mom)</td><td>~10<sup>4&ndash;5</sup> M</td><td>Strong early, weak late (~20 LOC)</td></tr>
+<tr><td><code>ccz4p</code></td><td>No momentum damping</td><td>10<sup>5</sup> M</td><td>= Z4c (AthenaK uses this)</td></tr>
+<tr><td><code>ccz3</code></td><td>None, no Theta</td><td>10<sup>5</sup> M</td><td>24 fields</td></tr>
+</table>
 <pre><span class="cm">// CCZ4&prime;: delete this line from the Gamma equation</span>
 rhs_Gamma[i] += ... - <span class="num">2.0</span> * kappa1_times_lapse * Z_over_chi[i];  <span class="cm">// DELETE</span>
 
 <span class="cm">// CCZ3: also set Theta=0, skip rhs_Theta, "K - 2*Theta" becomes "K"</span></pre>
-<p>Add <code>--formulation ccz4|ccz4p|ccz3</code> runtime flag. Synergy with 6th-order FD: fewer truncation-error-generated violations + clean propagation = best long-term stability.</p>
 </div>
 
 <!-- ================================================================ -->
@@ -191,7 +271,7 @@ The extraction sphere must not cross AMR refinement boundaries. Constrain regrid
 <table>
 <tr><th>Parameter</th><th>N=2</th><th>N=10</th><th>N=25</th></tr>
 <tr><td>AMR levels</td><td>3&ndash;4</td><td>5&ndash;6</td><td>5&ndash;6</td></tr>
-<tr><td>Memory (CK45, B=32)</td><td>~10 GB</td><td>~27 GB</td><td>~55 GB</td></tr>
+<tr><td>Memory (classic RK4, B=32)</td><td>~13 GB</td><td>~36 GB</td><td>~73 GB</td></tr>
 <tr><td>Fits A100 (80 GB)?</td><td class="good">Yes</td><td class="good">Yes</td><td class="good">Yes</td></tr>
 </table>
 
@@ -201,99 +281,181 @@ The extraction sphere must not cross AMR refinement boundaries. Constrain regrid
 
 <h3>Quick Wins</h3>
 
-<div class="card">
-<div class="card-header"><span class="card-title">LTO (-flto)</span> <span class="tag tag-rec">5&ndash;15% CPU</span></div>
-<p>Add <code>-flto</code> to CFLAGS_OPT in the Makefile (CPU only; GPU LTO broken in GCC 15). Enables cross-TU inlining of <code>ccz4_rhs_point</code> through the function pointer in <code>backend_cpu.c</code>. One line change.</p>
+<div class="card" style="border-color: #238830;">
+<div class="card-header"><span class="card-title">LTO (-flto)</span> <span class="tag tag-rec">DONE</span></div>
+<p>Added <code>-flto</code> to CFLAGS_OPT in the Makefile (CPU only; GPU LTO broken in GCC 15). Enables cross-TU inlining of <code>ccz4_rhs_point</code> through the function pointer in <code>backend_cpu.c</code>. Commit 32290ab.</p>
 </div>
 
-<div class="card">
-<div class="card-header"><span class="card-title"><code>__restrict__</code> on RHS pointers</span> <span class="tag tag-rec">3&ndash;8%</span></div>
-<p>The compiler cannot assume <code>rhs[f]</code> and <code>src[FIELD_CHI]</code> don't alias, so it re-loads from memory after every write. Add <code>__restrict__</code> to <code>ccz4_rhs_point</code> signature and backend dispatch functions. GPU-safe. 5 lines.</p>
+<div class="card" style="border-color: #238830;">
+<div class="card-header"><span class="card-title"><code>__restrict__</code> on RHS pointers</span> <span class="tag tag-rec">DONE</span></div>
+<p>Added <code>__restrict__</code> to <code>ccz4_rhs_point</code> signature and backend dispatch functions. GPU-safe. Commit 32290ab.</p>
+</div>
+
+<div class="card" style="border-color: #238830;">
+<div class="card-header"><span class="card-title">OpenMP-parallelize ghost exchange + Sommerfeld</span> <span class="tag tag-rec">DONE</span></div>
+<p>Both packed ghost exchange and Sommerfeld BCs now use <code>#pragma omp parallel for schedule(dynamic)</code>. Commit 32290ab.</p>
 </div>
 
 <div class="card">
 <div class="card-header"><span class="card-title">Conditional EM allocation</span> <span class="tag tag-rec">19% memory</span></div>
-<p>The 6 EM fields (E<sup>i</sup>, B<sup>i</sup><sub>mag</sub>) are always allocated even when <code>--em</code> is off. <code>NUM_FIELDS=31</code> is baked into every allocation. Check <code>em_enabled</code> in <code>grid_alloc()</code> and skip EM fields. Saves ~970 MB at N=256, ~4.5 GB for 200-block AMR. ~20 lines.</p>
+<p>The 6 EM fields are always allocated even when <code>--em</code> is off. Saves ~970 MB at N=256, ~4.5 GB for 200-block AMR. ~20 lines.</p>
 </div>
 
 <div class="card">
-<div class="card-header"><span class="card-title">Hoist <code>em_enabled</code> branch</span> <span class="tag tag-rec">~5% GPU</span></div>
-<p>In <code>backend_cpu.c:176</code> and <code>backend_gpu.c:227</code>, the EM dispatch check is inside the innermost loop. Hoist outside, use two code paths. Marginal on CPU (branch predictor), ~5% on GPU (eliminates warp divergence).</p>
+<div class="card-header"><span class="card-title">Compile-time EM dispatch</span> <span class="tag tag-rec">4&ndash;5%</span></div>
+<p>Build two object files: <code>backend_cpu_ccz4.o</code> (NUM_ACTIVE_FIELDS=25) and <code>backend_cpu_em.o</code> (31). Eliminates all runtime EM branches, wasted dissipation, wasted allocation. Subsumes the "hoist em_enabled" and "skip EM in dissipation" items. AthenaK does this via C++ templates. ~20 LOC Makefile change.</p>
 </div>
 
 <h3>CPU</h3>
 
 <div class="card">
 <div class="card-header"><span class="card-title">Fused d1/d2 stencil</span> <span class="tag tag-rec">15&ndash;20% CPU, 5&ndash;10% GPU</span></div>
-<p>11 fields need both d1 and d2 per direction (chi, lapse, 6&times;h_ij, 3&times;shift). Currently loads the same 7 stencil points twice. A fused <code>fd_d1_d2()</code> halves the load count: 33&times;3 = 99 redundant load sequences eliminated.</p>
-<pre><span class="kw">static inline void</span> <span class="fn">fd_d1_d2</span>(<span class="kw">const double</span> *f, <span class="kw">int</span> idx, <span class="kw">int</span> s, <span class="kw">double</span> dx,
-                            <span class="kw">double</span> *d1, <span class="kw">double</span> *d2) {
-    <span class="kw">double</span> fm3=f[idx-<span class="num">3</span>*s], fm2=f[idx-<span class="num">2</span>*s], fm1=f[idx-s], f0=f[idx];
-    <span class="kw">double</span> fp1=f[idx+s], fp2=f[idx+<span class="num">2</span>*s], fp3=f[idx+<span class="num">3</span>*s];
-    *d1 = (<span class="num">-1.0/60</span>*fm3 + <span class="num">3.0/20</span>*fm2 - <span class="num">3.0/4</span>*fm1
-           + <span class="num">3.0/4</span>*fp1 - <span class="num">3.0/20</span>*fp2 + <span class="num">1.0/60</span>*fp3) / dx;
-    *d2 = (<span class="num">1.0/90</span>*fm3 - <span class="num">3.0/20</span>*fm2 + <span class="num">3.0/2</span>*fm1
-           - <span class="num">49.0/18</span>*f0
-           + <span class="num">3.0/2</span>*fp1 - <span class="num">3.0/20</span>*fp2 + <span class="num">1.0/90</span>*fp3) / (dx*dx);
-}</pre>
+<p>11 fields need both d1 and d2 per direction. Currently loads the same 7 stencil points twice. A fused <code>fd_d1_d2()</code> halves the load count: 33&times;3 = 99 redundant load sequences eliminated. ~50 lines.</p>
+</div>
+
+<div class="card">
+<div class="card-header"><span class="card-title">Triple-fused d1/d2/advection stencil</span> <span class="tag tag-alt">2&ndash;3% additional</span></div>
+<p>Extension of d1/d2 fusion. The 4 scalar fields needing all three derivatives per direction (chi, K, Theta, lapse) share overlapping stencil points {-4..+4}. Currently 21 loads per field per direction; fused: 9. Saves 144 loads/point. ~40 LOC.</p>
 </div>
 
 <div class="card">
 <div class="card-header"><span class="card-title">Common subexpression elimination</span> <span class="tag tag-alt">10&ndash;20% FLOPs</span></div>
-<p><code>chris.ULL[m][kk][ll]</code> is reused across Ricci, Gamma RHS, and A_ij RHS. Products like <code>lapse * K</code> and <code>h_UU[i][j]</code> contracted with various tensors appear multiple times. The compiler's CSE pass is limited by C aliasing rules. Manual extraction of Christoffel products and metric contractions is low effort. NRPy+ reports ~21% instruction reduction via SymPy CSE (arXiv:2501.14030). ~50 lines.</p>
+<p><code>chris.ULL[m][kk][ll]</code> is reused across Ricci, Gamma RHS, and A_ij RHS. Manual extraction of Christoffel products and metric contractions. NRPy+ reports ~21% instruction reduction via SymPy CSE (arXiv:2501.14030). ~50 lines.</p>
+</div>
+
+<div class="card">
+<div class="card-header"><span class="card-title">Exploit Ricci symmetry</span> <span class="tag tag-alt">~1%</span></div>
+<p><code>ccz4_rhs.c:203-238</code>: Ricci is symmetric (R_ij = R_ji) but <code>FOR2(ii,jj)</code> computes all 9 entries (243 Christoffel FMAs). Compute upper triangle only: 162 unique FMAs. ~15 lines.</p>
 </div>
 
 <div class="card">
 <div class="card-header"><span class="card-title">Symmetric tensor raise</span> <span class="tag tag-alt">2&ndash;3%</span></div>
-<p><code>raise_all_2()</code> in <code>tensor_utils.h</code> computes all 9 entries of A<sup>ij</sup> but only 6 are unique. Compute diagonal (3) + upper triangle (3) and copy: 54 FMAs &rarr; 36 (33% reduction). ~20 lines.</p>
+<p><code>raise_all_2()</code> in <code>tensor_utils.h</code> computes all 9 entries of A<sup>ij</sup> but only 6 are unique. 54 FMAs &rarr; 36. ~20 lines.</p>
 </div>
 
 <div class="card">
 <div class="card-header"><span class="card-title">Derivative precomputation for mixed d2</span> <span class="tag tag-alt">30&ndash;50% fewer loads</span></div>
-<p><code>fd_d2_mixed()</code> uses a 7&times;7 = 49-point stencil (6th-order). Store first derivatives in scratch arrays, then compute mixed second derivatives as 1D stencils on the stored d1 values: 7 loads instead of 49 per mixed pair. 11 fields &times; 3 mixed direction pairs = 33 instances. Requires scratch storage for d1 arrays.</p>
+<p><code>fd_d2_mixed()</code> uses a 7&times;7 = 49-point stencil. Store d1 in scratch, compute mixed d2 as 1D stencils: 7 loads instead of 49 per mixed pair. 33 instances. Requires scratch storage.</p>
+</div>
+
+<div class="card" style="border-color: #238830;">
+<div class="card-header"><span class="card-title">Flatten per-grid RK4 update</span> <span class="tag tag-rec">DONE</span></div>
+<p>Flattened to single OMP region over <code>NUM_FIELDS * npoints</code>. Eliminates 31 separate OpenMP dispatch cycles. Commit 32290ab.</p>
+</div>
+
+<div class="card" style="border-color: #238830;">
+<div class="card-header"><span class="card-title">Fast-path pow(lapse, 1.0)</span> <span class="tag tag-rec">DONE</span></div>
+<p>Default <code>lapse_power=1.0</code> now uses identity fast path, avoiding 50&ndash;100 cycle <code>pow()</code> call. Commit 32290ab.</p>
+</div>
+
+<div class="card">
+<div class="card-header"><span class="card-title">Hoist advection sign check</span> <span class="tag tag-alt">5&ndash;8% GPU</span></div>
+<p><code>fd_adv()</code> branches on <code>vel > 0.0</code> at every call. Same shift direction for all ~22 field advections per direction = 66 redundant branches. Add branchless <code>fd_adv_pos()/fd_adv_neg()</code>, select once per direction. ~25 lines.</p>
+</div>
+
+<div class="card">
+<div class="card-header"><span class="card-title">Fuse Hamiltonian + momentum constraints</span> <span class="tag tag-alt">40&ndash;45% diagnostics</span></div>
+<p><code>constraints.c:82</code> and <code>constraints.c:254</code> independently compute derivatives, inverse metric, and Christoffel symbols. Share intermediates when both are evaluated. ~80 LOC. Diagnostics only, not RHS hot path.</p>
+</div>
+
+<div class="card">
+<div class="card-header"><span class="card-title">Unroll Levi-Civita curl in Maxwell RHS</span> <span class="tag tag-alt">5&ndash;8% Maxwell</span></div>
+<p><code>maxwell_rhs.c:265-273</code>: <code>FOR4(a,b,c,d_idx)</code> = 81 iterations per component but Levi-Civita is nonzero for only 6 of 27 triplets. 78% wasted. Unroll explicitly. ~30 LOC.</p>
 </div>
 
 <div class="card">
 <div class="card-header"><span class="card-title">Interior/boundary RHS split</span> <span class="tag tag-alt">10&ndash;20% AMR</span></div>
-<p>Compute interior cells' RHS (no ghost dependency) while ghost exchange runs concurrently. Interior cells vastly outnumber boundary cells. Used by GR-Athena++, SpECTRE, ExaGRyPE. Medium effort (~150 lines).</p>
+<p>Compute interior RHS while ghost exchange runs concurrently. Used by GR-Athena++, SpECTRE, ExaGRyPE. ~150 lines.</p>
 </div>
 
 <h3>GPU</h3>
 
 <div class="card">
-<div class="card-header"><span class="card-title">Persistent pack allocation</span> <span class="tag tag-alt">10&ndash;20%</span></div>
-<p>Lattice rebuilds the entire <code>meshblock_pack_t</code> every time step: malloc + field copy + <code>omp target enter data</code> + compute + <code>omp target exit data</code> + store + free. AthenaK keeps all field data on GPU permanently, only rebuilding after regridding. Eliminates two full-buffer host&ndash;device transfers per step. ~100 lines.</p>
+<div class="card-header"><span class="card-title">Persistent per-level packs</span> <span class="tag tag-rec">15&ndash;30% CPU, eliminates 95% GPU PCIe</span></div>
+<p><strong>Biggest AMR performance issue.</strong> With 4-level subcycling, packs are rebuilt 2<sup>L</sup>&minus;1 = 15 times per coarse step. Each rebuild: malloc&times;4 + calloc&times;7 + memcpy load + GPU map + 5 CK45 stages + GPU unmap + memcpy store + free. For 100 blocks at N_block=32: ~48 GB memcpy/step CPU, ~142 GB PCIe/step GPU. Fix: one pack per level, rebuild metadata only after regrid. ~200 lines.</p>
 </div>
 
 <div class="card">
 <div class="card-header"><span class="card-title">Device-side ghost exchange</span> <span class="tag tag-future">2&ndash;5x GPU overall</span></div>
-<p><strong>The single largest GPU bottleneck.</strong> <code>backend_gpu.c:879-910</code> syncs the entire pack to host, runs all 5 ghost exchange phases on CPU, then syncs back. For 100 blocks at 64<sup>3</sup>: ~1.6 GB round-trip per CK45 stage, 5 stages = ~8 GB/step of PCIe traffic. AthenaK does all ghost exchange on-device. Phase 0+1 (same-level copy) is trivially parallelizable as a GPU kernel. ~300 lines.</p>
+<p><strong>The single largest GPU bottleneck.</strong> <code>backend_gpu.c:879-910</code> syncs entire pack to host, runs all 5 ghost phases on CPU, syncs back. ~8 GB/step PCIe. AthenaK does all ghost exchange on-device. ~300 lines.</p>
 </div>
 
-<div class="card">
-<div class="card-header"><span class="card-title">Eliminate per-thread GPU overhead</span> <span class="tag tag-alt">15&ndash;30% occupancy</span></div>
-<p>Every GPU thread in <code>backend_gpu.c:205-221</code> constructs a <code>grid_t</code> on stack (~872 bytes) via <code>memset</code> and builds two 31-element pointer arrays (~496 bytes). Total: ~1.4 KB per thread. Grid dimensions are identical for all threads in a block. Pass as kernel parameters instead. ~30 lines.</p>
+<div class="card" style="border-color: #238830;">
+<div class="card-header"><span class="card-title">Hoist GPU grid_t construction</span> <span class="tag tag-rec">DONE</span></div>
+<p>GPU grid_t construction hoisted out of per-thread scope. Commit 32290ab.</p>
 </div>
 
 <div class="card">
 <div class="card-header"><span class="card-title">Kernel splitting for occupancy</span> <span class="tag tag-future">20&ndash;40% GPU</span></div>
-<p>The CCZ4 RHS kernel uses ~400 registers/thread = ~25% occupancy on A100. Split into Phase A (derivatives + Christoffels, ~200 registers) and Phase B (Ricci + RHS assembly from scratch buffer, ~200 registers). Each phase achieves ~75&ndash;80% occupancy. ~400 lines.</p>
+<p>RHS kernel uses ~400 registers = ~25% occupancy on A100. Split into Phase A (derivatives, ~200 registers) and Phase B (Ricci + assembly, ~200 registers). ~400 lines.</p>
+</div>
+
+<div class="card">
+<div class="card-header"><span class="card-title">GPU kernel occupancy tuning</span> <span class="tag tag-alt">5&ndash;15% GPU</span></div>
+<p><code>backend_gpu.c:44,198,268,349</code>: All GPU kernels lack <code>num_teams</code> / <code>thread_limit</code> clauses. The RHS kernel should use <code>thread_limit(64)</code> to avoid register spill; bandwidth-limited kernels (CK45 update, zero) should use <code>thread_limit(256)</code>. ~5 lines per kernel, requires profiling.</p>
+</div>
+
+<div class="card">
+<div class="card-header"><span class="card-title">Sommerfeld switch/case &rarr; array lookup</span> <span class="tag tag-alt">Warp divergence fix</span></div>
+<p><code>sommerfeld.c:24-34</code>: <code>asymptotic_value()</code> switch with 31 cases causes warp divergence on GPU. Replace with <code>static const double asym_values[NUM_FIELDS]</code>. ~5 lines.</p>
+</div>
+
+<div class="card">
+<div class="card-header"><span class="card-title">enforce_algebraic on GPU</span> <span class="tag tag-alt">~130 ms/step</span></div>
+<p><code>rk4.c:649-659</code>: After <code>backend_unmap_pack()</code>, enforce runs on CPU requiring full D2H. It's per-point (no neighbor access) &mdash; trivially a GPU kernel. Port <code>fast_inv_cbrt</code>, <code>compute_det_sym</code>, etc. to <code>omp declare target</code>. ~60 LOC.</p>
+</div>
+
+<div class="card">
+<div class="card-header"><span class="card-title">save_k1 on device</span> <span class="tag tag-alt">~130 ms/step</span></div>
+<p><code>rk4.c:754-768</code>: <code>save_k1_from_pack()</code> copies entire RHS buffer (~1.58 GB) to host mid-step. Store k1 in a dedicated device buffer instead. ~30 LOC.</p>
 </div>
 
 <div class="card">
 <div class="card-header"><span class="card-title">Optimal block size</span> <span class="tag tag-best">2&ndash;30x GPU</span></div>
-<p>Parthenon-VIBE benchmarks (arXiv:2509.19701) show N_block=16 makes GPU slower than 96-core CPU. N_block=32 is minimum for GPU; 64 is optimal for weak scaling. Already a runtime parameter in Lattice. <strong>Zero code changes.</strong></p>
+<p>N_block=32 minimum, 64 optimal for GPU (Parthenon-VIBE, arXiv:2509.19701). Already configurable. <strong>Zero code changes.</strong></p>
 </div>
 
 <div class="card">
 <div class="card-header"><span class="card-title">Reorder d2 for instruction cache</span> <span class="tag tag-alt">10&ndash;20% GPU</span></div>
-<p>Reorder second derivative computations to maximize instruction reuse (sort <code>d2[min(i,j)][max(i,j)]</code>). Fits within the 32 KB instruction cache. NR101 blog reports ~20% GPU speedup. Low effort.</p>
+<p>Sort <code>d2[min(i,j)][max(i,j)]</code> to maximize instruction reuse within 32 KB instruction cache. Low effort.</p>
+</div>
+
+<div class="card">
+<div class="card-header"><span class="card-title">Direct ghost-region iteration</span> <span class="tag tag-alt">2x prolongation, 40x fewer Sommerfeld threads</span></div>
+<p><code>ghost_exchange.c:462-536</code>, <code>backend_gpu.c:253-330</code>: Currently iterate over all Nt<sup>3</sup> points and skip interiors via branch. For N_block=32: 51% skipped. Replace with 6 face + 12 edge + 8 corner loops. For Sommerfeld GPU: build boundary-cell index list. ~160 lines total.</p>
+</div>
+
+<h3>AMR</h3>
+
+<div class="card">
+<div class="card-header"><span class="card-title">Eliminate refinement memory spike</span> <span class="tag tag-alt">~2.3 GB saved</span></div>
+<p><code>refine.c:34-72</code>: Allocates temporary fine grid at 2x parent resolution (~282 MB per child, &times;8 = ~2.3 GB peak). Prolongate directly into each child using octant-aware stencil. ~50 LOC.</p>
+</div>
+
+<div class="card">
+<div class="card-header"><span class="card-title">Pre-allocate ghost exchange scratch buffers</span> <span class="tag tag-alt">Eliminates malloc/free</span></div>
+<p><code>ghost_exchange.c:611-638</code>: Allocates/frees ~15.9 MB interpolation buffer per coarse neighbor per fine block. 50+ malloc/free cycles per ghost fill. Pre-allocate thread-local scratch. ~15 LOC.</p>
+</div>
+
+<div class="card">
+<div class="card-header"><span class="card-title">Hash table for neighbor lookup</span> <span class="tag tag-alt">O(n) regrid</span></div>
+<p><code>mesh.c:367-465</code>: O(n<sup>2</sup>) linear scan for each block &times; 26 neighbors &times; max_level. For 1000 blocks: ~100M comparisons per regrid. Hash <code>(level, lx1, lx2, lx3) &rarr; block_id</code>. ~40 LOC.</p>
+</div>
+
+<div class="card" style="border-color: #238830;">
+<div class="card-header"><span class="card-title">Pre-compute restriction/prolongation weights</span> <span class="tag tag-rec">DONE</span></div>
+<p>232-entry weight product tables pre-computed as <code>static const</code>. Bit-exact verified against runtime computation via <code>tools/verify_weights.c</code>. Commit 32290ab.</p>
+</div>
+
+<div class="card">
+<div class="card-header"><span class="card-title">Fix subcycling temporal fraction drift</span> <span class="tag tag-alt">Correctness</span></div>
+<p><code>rk4.c:1037</code>: <code>floor(t_start / dt_coarse) * dt_coarse</code> accumulates rounding errors over 10<sup>4</sup>+ steps. Pass <code>frac</code> directly from recursive call site. ~10 LOC.</p>
 </div>
 
 <h3>Memory</h3>
 
 <div class="evidence">
-<strong>Already sound:</strong> CK45 uses 3 memory blocks (optimal) vs Classic RK4's 4. No malloc/free inside time-stepping loops. Page-alignment waste is &lt;4 KB per block. Ghost width=4 is required for 6th-order FD + 8th-order KO (unavoidable). At N_block=16: 4.1x ghost overhead; N_block=32: 1.95x; N_block=64: 1.51x.
+<strong>Already sound:</strong> Classic RK4 (default) uses 4 memory blocks; CK45 uses 3 (25% less memory but 5 stages vs 4). No malloc/free inside time-stepping loops. Page-alignment waste is &lt;4 KB per block. Ghost width=4 is required for 6th-order FD + 8th-order KO (unavoidable). At N_block=16: 4.1x ghost overhead; N_block=32: 1.95x; N_block=64: 1.51x.
 </div>
 
 <!-- ================================================================ -->
@@ -307,30 +469,58 @@ The extraction sphere must not cross AMR refinement boundaries. Constrain regrid
 b1 = &theta; - 3&theta;<sup>2</sup>/2 + 2&theta;<sup>3</sup>/3
 b2 = b3 = &theta;<sup>2</sup> - 2&theta;<sup>3</sup>/3
 b4 = -&theta;<sup>2</sup>/2 + 2&theta;<sup>3</sup>/3</pre>
-<p>CarpetX (arXiv:2503.09629) uses this to achieve 4th-order convergence at AMR boundaries with fewer prolongation operations. Simpler than the current fields_old/fields_older/rhs_old/rhs_older scheme. ~200 lines.</p>
-<div class="evidence"><strong>Caveat:</strong> Works naturally with classic RK4 (k1&ndash;k4 explicit). CK45's 2N storage overwrites stage vectors, so subcycling steps would need to use classic RK4.</div>
+<p>CarpetX (arXiv:2503.09629) uses this for 4th-order convergence at AMR boundaries. ~200 lines.</p>
+<div class="evidence"><strong>Note:</strong> Works naturally with classic RK4 (now the default). CK45's 2N storage overwrites stage vectors, so subcycling steps would need classic RK4 anyway.</div>
+</div>
+
+<div class="card">
+<div class="card-header"><span class="card-title">Adaptive constraint damping (dynamic kappa1)</span> <span class="tag tag-alt">Better than fixed CCZ4</span></div>
+<p>Instead of fixed <code>kappa1=0.1</code>, adapt based on local constraint magnitude: <code>kappa1_local = kappa1_base * f(Ham, Mom)</code>. Strong early damping during junk radiation, weak late for long-term stability. Middle ground between CCZ4 (unstable ~10<sup>3</sup> M) and CCZ3 (no damping). ~20 LOC. Ref: arXiv:2409.01939.</p>
+</div>
+
+<div class="card">
+<div class="card-header"><span class="card-title">Taylor-based AMR prolongation</span> <span class="tag tag-alt">ExaHyPE approach</span></div>
+<p>Instead of tensor-product Lagrange, use Taylor expansion around nearest cell center: compute local derivatives on source grid, evaluate polynomial at target cells. ExaHyPE demonstrates reduced accumulated errors near AMR boundaries. ~200 LOC. Ref: arXiv:2504.15814.</p>
+</div>
+
+<div class="card">
+<div class="card-header"><span class="card-title">Richardson extrapolation refinement criteria</span> <span class="tag tag-alt">10&ndash;30% fewer blocks</span></div>
+<p>Instead of chi-gradient heuristic (<code>criterion.c</code>), estimate local truncation error by comparing leaf solution against coarser parent level. Physics-agnostic, catches truncation error in any field. Coarse solution already available from AMR hierarchy. ~150 LOC. Ref: arXiv:2404.16648.</p>
 </div>
 
 <div class="card">
 <div class="card-header"><span class="card-title">Optimized-stability 2N RK methods</span> <span class="tag tag-alt">20&ndash;50% fewer steps</span></div>
-<p>Niegemann et al. (2012) constructed 2N methods with 8&ndash;14 stages optimized for maximum CFL rather than higher order. 1.5&ndash;2x larger stable timestep at the cost of more stages. Net savings if CFL-limited. Swapping in new coefficients is trivial (same <code>CK_A[s]</code>, <code>CK_B[s]</code> infrastructure).</p>
-<p>Ketcheson (2010) found 2S methods achieving 4th order in only 4 stages (vs CK45's 5), saving 20% RHS evaluations. Different update formula but similar memory.</p>
+<p>Niegemann et al. (2012): 2N methods with 8&ndash;14 stages optimized for max CFL. 1.5&ndash;2x larger stable timestep. Ketcheson (2010): 4th order in 4 stages (vs CK45's 5). Swapping coefficients is trivial.</p>
 </div>
 
 <div class="card">
 <div class="card-header"><span class="card-title">P-ERK (Paired Explicit Runge-Kutta)</span> <span class="tag tag-future">2&ndash;5x on AMR</span></div>
-<p>Different AMR blocks use different RK stage counts based on local stiffness. Coarse blocks (80% of mesh) get fewer stages. Reported 1.5&ndash;5x speedup for 4&ndash;6 AMR levels (arXiv:2403.05144). Fourth-order P-ERK now exists (arXiv:2408.05470).</p>
-<div class="evidence"><strong>Caveat:</strong> Very high implementation complexity. Requires spectral radius estimation per block. No existing NR implementation.</div>
+<p>Different blocks use different RK stage counts by local stiffness. 1.5&ndash;5x for 4&ndash;6 AMR levels (arXiv:2403.05144). Very high complexity.</p>
+</div>
+
+<div class="card">
+<div class="card-header"><span class="card-title">IMEX for constraint damping</span> <span class="tag tag-future">Larger dt with strong kappa1</span></div>
+<p>Treat stiff damping sources (kappa1&middot;Theta, kappa1&middot;Z_i) implicitly, spatial derivatives explicitly. The implicit part is purely local (no spatial derivatives) &mdash; just point-wise algebraic inversion. Allows larger kappa1 without reducing dt. ~300 LOC. Ref: arXiv:2411.23015.</p>
+</div>
+
+<div class="card">
+<div class="card-header"><span class="card-title">Hyperbolic relaxation for initial data</span> <span class="tag tag-future">2&ndash;4x GPU speedup for ID</span></div>
+<p>Transform elliptic Hamiltonian constraint into a damped hyperbolic PDE and evolve to steady state. Maps naturally onto GPU kernels (same FD infrastructure). No tridiagonal solves, no colored sweeps. ~500 LOC. Ref: arXiv:2501.14030 (NRPyEllipticGPU), arXiv:2111.02424.</p>
+</div>
+
+<div class="card">
+<div class="card-header"><span class="card-title">AMR-enabled constraint solver</span> <span class="tag tag-future">5&ndash;10x for N-body</span></div>
+<p>Use AMR during the constraint solve itself, concentrating resolution near punctures. For N=10+ widely-separated punctures, most of the domain is flat. ~500+ LOC. Ref: arXiv:2501.13046 (GRTresna).</p>
 </div>
 
 <div class="card">
 <div class="card-header"><span class="card-title">Mixed-order stencils near punctures</span> <span class="tag tag-alt">10&ndash;20% on fine levels</span></div>
-<p>Use 4th-order FD (5-point) on finest AMR levels wrapping the puncture (where solution is only C<sup>2</sup>&ndash;C<sup>4</sup>), 6th-order elsewhere. Both already implemented in <code>finite_diff.h</code> (compile-time <code>FD_ORDER</code>). Making it per-block at runtime requires two RHS versions or function pointer dispatch. Medium effort.</p>
+<p>4th-order FD on finest levels (solution is C<sup>2</sup>&ndash;C<sup>4</sup>), 6th-order elsewhere. Both in <code>finite_diff.h</code>. Per-block runtime selection needs two RHS versions.</p>
 </div>
 
 <div class="card">
 <div class="card-header"><span class="card-title">KO dissipation stage reduction</span> <span class="tag tag-alt">Few %</span></div>
-<p>Apply Kreiss-Oliger dissipation at 1 RK stage instead of all 5. Saves ~80% of KO computation. Low effort but stability risk near punctures.</p>
+<p>Apply KO at 1 RK stage instead of all 5. Low effort but stability risk near punctures.</p>
 </div>
 
 <!-- ================================================================ -->
@@ -342,13 +532,20 @@ b4 = -&theta;<sup>2</sup>/2 + 2&theta;<sup>3</sup>/3</pre>
 <tr><td>Persistent GPU data residency</td><td>AthenaK</td><td class="warn">Rebuild every step</td><td class="good">Yes &sect;6</td></tr>
 <tr><td>Device-side ghost exchange</td><td>AthenaK</td><td class="warn">Host round-trip</td><td class="good">Yes &sect;6</td></tr>
 <tr><td>Dense output for subcycling</td><td>CarpetX</td><td class="warn">Quartic interp</td><td class="good">Yes &sect;7</td></tr>
+<tr><td>Compile-time physics dispatch</td><td>AthenaK (C++ templates)</td><td class="warn">Runtime branches</td><td class="good">Yes &sect;6</td></tr>
+<tr><td>Taylor-based AMR interpolation</td><td>ExaHyPE</td><td>Lagrange tensor-product</td><td class="note">Investigate &sect;7</td></tr>
+<tr><td>Wavelet error indicators</td><td>Dendro-GR</td><td>Chi-gradient heuristic</td><td class="note">Richardson &sect;7</td></tr>
+<tr><td>Hyperbolic relaxation for ID</td><td>NRPyEllipticGPU</td><td>FAS multigrid (CPU)</td><td class="note">Future &sect;7</td></tr>
+<tr><td>AMR constraint solver</td><td>GRTresna</td><td>Uniform multigrid</td><td class="note">Future &sect;7</td></tr>
+<tr><td>Troubled-cell indicators for FD order</td><td>SpECTRE</td><td>Compile-time FD_ORDER</td><td class="note">Mixed-order &sect;7</td></tr>
 <tr><td>Code generation from SymPy</td><td>NRPy+</td><td>Hand-written C</td><td class="note">Future</td></tr>
 <tr><td>Task-based parallelism</td><td>SpECTRE, GR-Athena++</td><td>Bulk-synchronous</td><td class="note">Partial &sect;6</td></tr>
+<tr><td>25-BH N-body regridding</td><td>GRChombo</td><td>Support exists</td><td class="good">Test at N=10+</td></tr>
+<tr><td>Apple M4 SME (matrix extensions)</td><td>&mdash;</td><td>Not used</td><td class="note">Investigate</td></tr>
+<tr><td>Block size 32&ndash;64 for GPU</td><td>AthenaK, Parthenon-VIBE</td><td class="good">N_block configurable</td><td class="good">Yes &sect;6</td></tr>
 <tr><td>Enclave tasking for GPU</td><td>ExaGRyPE</td><td>Full-step offload</td><td>Not worth it</td></tr>
-<tr><td>Taylor-based AMR interpolation</td><td>ExaHyPE</td><td>Lagrange tensor-product</td><td class="note">Investigate</td></tr>
 <tr><td>Vertex-centered grids</td><td>GR-Athena++</td><td>Cell-centered</td><td>N/A</td></tr>
 <tr><td>Kokkos portability layer</td><td>AthenaK</td><td>OpenMP target</td><td>Not worth switching</td></tr>
-<tr><td>Block size 32&ndash;64 for GPU</td><td>AthenaK, Parthenon-VIBE</td><td class="good">N_block configurable</td><td class="good">Yes &sect;6</td></tr>
 </table>
 
 <!-- ================================================================ -->
@@ -378,10 +575,18 @@ b4 = -&theta;<sup>2</sup>/2 + 2&theta;<sup>3</sup>/3</pre>
 <tr><td>SBP operators</td><td>Very high effort; constraint damping + KO works fine</td></tr>
 <tr><td>Constraint-preserving BCs</td><td>High effort; Sommerfeld sufficient for current goals</td></tr>
 <tr><td>FCCZ4 / Z4c formulation</td><td>Same cost as CCZ4, no meaningful advantage</td></tr>
-<tr><td>Full shared memory tiling (GPU)</td><td>6th-order 3D stencil footprint (14<sup>3</sup> = 22 KB) exceeds shared memory; OpenMP target has limited control</td></tr>
+<tr><td>Full shared memory tiling (GPU)</td><td>6th-order 3D stencil footprint (14<sup>3</sup> = 22 KB) exceeds shared memory; OpenMP target limited control</td></tr>
 <tr><td>Loop tiling for cache (CPU)</td><td>x-innermost already optimal; ~2&ndash;3% gain for high complexity</td></tr>
 <tr><td>Reducing ghost width</td><td>Would break 6th-order FD + 8th-order KO</td></tr>
 <tr><td>AoS field grouping</td><td>Violates SoA invariant; minimal cache benefit (~5%)</td></tr>
+<tr><td>Structure-preserving exponential integrators</td><td>Requires Hamiltonian reformulation of CCZ4 + matrix exponentials (arXiv:2408.06613)</td></tr>
+<tr><td>Spectral deferred corrections</td><td>~500+ LOC; adaptive dt achievable more simply via embedded RK error estimates</td></tr>
+<tr><td>Compact finite differences</td><td>Requires tridiagonal solve per line; explicit 6th-order stencils work well</td></tr>
+<tr><td>PML boundary conditions</td><td>CCZ4 not purely hyperbolic; Sommerfeld + constraint damping works fine</td></tr>
+<tr><td>Parallel-in-time (Parareal)</td><td>Convergence requires many iterations; explicit RK4 already efficient</td></tr>
+<tr><td>WENO/ENO for AMR operators</td><td>Designed for shocks; NR solutions smooth (C<sup>2</sup>&ndash;C<sup>&infin;</sup>)</td></tr>
+<tr><td>Block-major pack layout</td><td>Better GPU coalescing but breaks field-major SoA invariant across entire codebase</td></tr>
+<tr><td>Cache-oblivious stencil algorithms</td><td>x-innermost already provides optimal cache behavior; ~2&ndash;3% gain</td></tr>
 </table>
 
 <!-- ================================================================ -->
@@ -420,6 +625,7 @@ b4 = -&theta;<sup>2</sup>/2 + 2&theta;<sup>3</sup>/3</pre>
 <tr><td>GRChombo</td><td>4th</td><td>3</td><td>Legacy choice</td></tr>
 <tr><td>BAM</td><td>6th</td><td>varies</td><td>Production BBH</td></tr>
 <tr><td>SpECTRE</td><td>Spectral/DG</td><td>N/A</td><td>Different paradigm</td></tr>
+<tr><td>Dendro-GR</td><td>6th</td><td>3&ndash;4</td><td>Octree AMR</td></tr>
 </table>
 </details>
 
@@ -437,13 +643,20 @@ b4 = -&theta;<sup>2</sup>/2 + 2&theta;<sup>3</sup>/3</pre>
 <li>arXiv:2503.09629 &mdash; CarpetX subcycling with dense output</li>
 <li>arXiv:2406.11626 &mdash; ExaGRyPE</li>
 <li>arXiv:2504.15814 &mdash; ExaHyPE higher-order AMR interpolation</li>
-<li>arXiv:2501.14030 &mdash; NRPy GPU code generation</li>
+<li>arXiv:2501.14030 &mdash; NRPy GPU code generation + hyperbolic relaxation</li>
+<li>arXiv:2501.13046 &mdash; GRTresna AMR constraint solver</li>
 <li>arXiv:2505.00097 &mdash; superB/NRPy task-based NR</li>
 <li>arXiv:2509.19701 &mdash; Parthenon-VIBE block size benchmarks</li>
 <li>arXiv:2408.05470 &mdash; Doehring et al.: 4th-order P-ERK</li>
 <li>arXiv:2403.05144 &mdash; Doehring et al.: P-ERK with AMR</li>
 <li>arXiv:1909.12256 &mdash; Vermeire: Original P-ERK</li>
 <li>arXiv:1004.1353 &mdash; Lousto &amp; Zlochower: N-body puncture data</li>
+<li>arXiv:2404.16648 &mdash; AMR refinement technique comparison</li>
+<li>arXiv:2411.23015 &mdash; Structure-preserving IMEX methods</li>
+<li>arXiv:2111.02424 &mdash; Assumpcao et al.: Hyperbolic relaxation for NR initial data</li>
+<li>arXiv:2409.01939 &mdash; GRChombo cosmology with adaptive damping</li>
+<li>arXiv:2408.06613 &mdash; Exponential integrators for damped Hamiltonian systems</li>
+<li>arXiv:2404.16511 &mdash; Ramos-Buades et al.: Multigrid AH finder</li>
 <li>gr-qc/0606099 &mdash; Hannam et al.: Moving puncture regularity</li>
 <li>Ketcheson 2010 &mdash; Low-storage RK methods</li>
 <li>Niegemann et al. 2012 &mdash; Optimized-stability 2N RK</li>

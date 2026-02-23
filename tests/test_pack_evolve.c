@@ -72,8 +72,8 @@ static void test_packed_vs_perblock(void)
     double center[1][3] = {{0.0, 0.0, 0.0}};
 
     /* Create two identical meshes: 2x2x2 blocks of N_block=16 */
-    mesh_t *m_packed  = mesh_create(2, 16, p.L, RK_CK45);
-    mesh_t *m_perblk  = mesh_create(2, 16, p.L, RK_CK45);
+    mesh_t *m_packed  = mesh_create(2, 16, p.L, RK_CLASSIC);
+    mesh_t *m_perblk  = mesh_create(2, 16, p.L, RK_CLASSIC);
 
     /* Both share the same dx and dt */
     p.dx = m_packed->dx_base;
@@ -156,7 +156,7 @@ static void test_packed_multilevel(void)
     p.CFL = 0.25;
     int nsteps = 20;
 
-    mesh_t *m = mesh_create(2, 16, p.L, RK_CK45);
+    mesh_t *m = mesh_create(2, 16, p.L, RK_CLASSIC);
     p.dx = m->dx_base;
     p.dt = p.CFL * p.dx;
     p.amr.chi_refine  = 0.05;
@@ -226,7 +226,7 @@ static void test_packed_flat_stability(void)
     p.CFL = 0.25;
     int nsteps = 100;
 
-    mesh_t *m = mesh_create(2, 16, p.L, RK_CK45);
+    mesh_t *m = mesh_create(2, 16, p.L, RK_CLASSIC);
     p.dx = m->dx_base;
     p.dt = p.CFL * p.dx;
 

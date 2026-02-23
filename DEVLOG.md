@@ -3,6 +3,60 @@
 > **Note:** When adding/removing/renaming files or functions, also update
 > `docs/architecture.html` — the living map of the codebase structure.
 
+## 2026-02-23: Fix ghost_fill_from_coarser ordering bug
+
+**Root cause:** `ghost_fill_from_coarser()` did restrict → exchange → prolongate
+per block in a single loop. Block B could read neighbor C's `coarse_buf` before
+C had been restricted, getting stale/zero data. This caused NaN in AMR subcycling
+(test_amr_evolve Test 2).
+
+**Fix:** Split the single loop into two passes:
+- **Pass 1:** Restrict ALL fine blocks' interiors into their `coarse_buf`s.
+- **Pass 2:** Exchange coarse_buf ghosts + boundary extrapolate + prolongate.
+  Safe to read neighbors' coarse_bufs — they were all restricted in Pass 1.
+
+**Cleanup:**
+- Removed `has_coarser_leaves` workaround from `step_level()` in `rk4.c`.
+  The two-pass fix makes `ghost_fill_from_coarser` safe to call unconditionally.
+- Removed `RK_CK45` debug override and ~60 lines of NaN diagnostic code from
+  `test_amr_evolve.c`. Test 2 now runs with default classic RK4.
+- Removed unused `fields.h` include from `test_amr_evolve.c`.
+
+**Verification:** `make` zero warnings. test_amr_evolve: 7/8 pass. Test 2 (dynamic
+regrid) now passes with classic RK4 (Ham L2 = 2.9e-03, no NaN). Test 1 still fails
+(pre-existing classic packed mesh divergence, unrelated).
+
+---
+
+## 2026-02-23: Tier 0 Bug Fix + Default RK4 Switch
+
+**Bug 3 fix: `enforce_algebraic_block()` in `refine.c`**
+- Was using `1.0 / cbrt(det)` (~3-5x slower than `fast_inv_cbrt`) and had a
+  divergent `if (det > 0.0)` guard not present in the canonical `rk4.c` version.
+- Fixed: `fast_inv_cbrt(det)` (already in `tensor_utils.h` from Tier 1), removed
+  the `if` guard to match `rk4.c` behavior (always enforce, `fast_inv_cbrt` handles
+  edge cases via `cbrt()` fallback for det outside [0.5, 2.0]).
+- Bugs 1 and 2 (0th-order restriction, missing `save_k1_from_pack` in CK45
+  subcycling) were already fixed in the Tier 1 commit.
+
+**Default integrator changed: CK45 → classic RK4 (`RK_CLASSIC`)**
+- `params.h`: `p.rk_method = RK_CLASSIC` (was `RK_CK45`).
+- Classic RK4 is faster (4 stages vs 5, 20% fewer RHS evaluations per step).
+- Uses 25% more memory (4 blocks vs 3). OK for production GPUs; tight on M4 at N=256.
+- All test files updated: hardcoded `RK_CK45` → `RK_CLASSIC` in grid/mesh allocations.
+  Tests using `default_params()` now get classic by default.
+
+**Discovered issues during testing:**
+1. AMR Test 2 NaN: **Fixed** (see entry above) — `ghost_fill_from_coarser` ordering bug.
+2. Classic RK4 packed mesh diverges from single-grid (ratio 11.87x, should be ~1.0).
+   CK45 packed path is fine (ratio 0.99). Bug is in `classic_rk4_step_mesh_packed()`.
+   Never caught before because all AMR tests used CK45. To investigate.
+
+**Verification:** `make` zero warnings. Flat PASSED. Convergence 6.56/6.25 PASSED.
+Maxwell PASSED (15/15). Test 1 classic packed divergence is pre-existing.
+
+---
+
 ## 2026-02-23: Tier 1 Performance Optimizations (A1–C2)
 
 **Goal:** 25–45% CPU improvement from 8 low-risk optimizations (~280 LOC).
@@ -46,15 +100,13 @@ Implemented in risk order: zero-risk first, hot-path numerics last.
 **Also moved:** `fast_inv_cbrt()` from `rk4.c` to `tensor_utils.h` (shared utility).
 
 **Also upgraded:** `restrict_level_to_parents()` from 0th-order (2x2x2 averaging)
-to 6th-order (`restrict_cell()`). Known issue: child ghost zones may be stale
-after subcycling, causing NaN in the dynamic-regrid AMR test. To be fixed by
-adding ghost exchange before restriction, or reverting to 0th-order for this path.
+to 6th-order (`restrict_cell()`). Previously had NaN from stale ghost zones —
+fixed by splitting `ghost_fill_from_coarser` into two passes (see entry above).
 
 **Remaining Tier 1 items:** C3 (conditional EM allocation), D1 (fused d1/d2 stencil).
 
 **Verification:** `make` zero warnings. Flat spacetime PASSED. Convergence order
-6.55/6.26 PASSED (threshold 3.5). AMR dynamic-regrid test has known NaN (pre-existing
-ghost validity issue in subcycling path).
+6.55/6.26 PASSED (threshold 3.5).
 
 ---
 

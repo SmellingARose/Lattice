@@ -105,7 +105,18 @@ output slices work on AMR meshes.
 - **Spin:** Bowen-York spinning punctures + HiSpID high-spin initial data (quasi-isotropic Kerr conformal metric, coupled 4-field relaxation).
 - **Apparent horizons:** Hyperbolic flow method (BHaHAHA-inspired) with 4th-order off-grid interpolation, mass/spin/area extraction, `--ah` CLI flag. Works on both single-grid and AMR meshes.
 - **AMR:** Block-structured Berger-Oliger with subcycling, Morton-ordered mesh, 6th-order prolongation/restriction, multi-level ghost exchange. AMR-aware 1D output slices and AH finder.
-- **Tests:** Flat spacetime, convergence (order 6.5), Bowen-York (29/29), HiSpID (26/26), AH finder (13/13), Maxwell (15/15). Total: 31 evolved fields (25 CCZ4 + 6 EM). Known issue: AMR dynamic-regrid test produces NaN (stale ghost zones in restrict_level_to_parents).
+- **Tier 0 bug fixes:** `enforce_algebraic_block()` in refine.c fixed (was using slow
+  `1.0/cbrt(det)` with divergent `if (det > 0.0)` guard; now uses `fast_inv_cbrt(det)`
+  unconditionally, matching `rk4.c`).
+- **Default integrator:** Changed from CK45 to classic RK4 (`RK_CLASSIC`). Classic is
+  faster (4 stages vs 5) but uses 25% more memory. All test allocations updated.
+- **Tests:** Flat spacetime, convergence (order 6.5), Bowen-York (29/29), HiSpID (26/26), AH finder (13/13), Maxwell (15/15). Total: 31 evolved fields (25 CCZ4 + 6 EM).
+
+**Known issues (to investigate):**
+- Classic RK4 packed mesh stepper (test_amr_evolve Test 1) produces 10x higher
+  constraint violations than CK45 packed stepper (single-grid classic is fine).
+  Likely a bug in `classic_rk4_step_mesh_packed()`. CK45 packed path works correctly.
+  Not a regression — this path was never tested before (tests always used CK45).
 
 Update as milestones are reached.
 
@@ -209,9 +220,9 @@ make clean
 ```
 
 Backend flag: `BACKEND=cpu|gpu`. Default is `cpu` (OpenMP threads).
-Time integrator: `--rk classic|ck45`. Default is `ck45` (Carpenter-Kennedy 2N
-low-storage, 3 memory blocks). Use `--rk classic` for standard 4-stage RK4
-(4 memory blocks).
+Time integrator: `--rk classic|ck45`. Default is `classic` (standard 4-stage
+RK4, 4 memory blocks). Use `--rk ck45` for Carpenter-Kennedy 2N low-storage
+(5 stages, 3 memory blocks, 25% less memory).
 Compiler: `clang` on macOS (CPU only), `gcc-15` on Linux (CPU + GPU).
 No external dependencies beyond standard C and libomp.
 Debug builds enable NaN/Inf checking — any floating-point trap is a bug.
@@ -310,7 +321,7 @@ constant `GR_SPACEDIM = 3`.
 | `lapse_power` | 1.0 | Power p in Bona-Masso: f(alpha) = c * alpha^(p-2) |
 | `shift_Gamma_coeff` | 0.75 | F in dt(beta^i) = F * B^i |
 | `eta` | 1.0 | Damping in Gamma-driver: dt(B^i) = dt(Gamma^i) - eta * B^i |
-| `rk_method` | `RK_CK45` | Time integrator: `RK_CLASSIC` (4 stages, 4 blocks) or `RK_CK45` (5 stages, 3 blocks) |
+| `rk_method` | `RK_CLASSIC` | Time integrator: `RK_CLASSIC` (4 stages, 4 blocks) or `RK_CK45` (5 stages, 3 blocks) |
 
 ### FAS Multigrid Solver Tuning
 
@@ -360,8 +371,8 @@ flat spacetime -> single BH -> binary.
 
 ## Hardware Constraints
 
-**CPU dev target:** Apple M4 (16 GB). Practical grid limit: 128^3 with CK45
-(~5 GB for 25 fields x 3 blocks). N=256 barely fits (10.3 GB CK45).
+**CPU dev target:** Apple M4 (16 GB). Practical grid limit: 128^3 (~5 GB with
+CK45, ~7 GB with classic RK4). N=256 barely fits (10.3 GB CK45, 13.7 GB classic).
 Measured performance: ~4.5 sec/step at N=128 (~23 GFLOPS effective FP64).
 
 **GPU production targets:** NVIDIA V100/A100/H100 via OpenMP target offloading.

@@ -17,7 +17,6 @@
 #include "../src/amr/refine.h"
 #include "../src/amr/block.h"
 #include "../src/core/params.h"
-#include "../src/core/fields.h"
 #include "../src/initial_data/puncture.h"
 #include "../src/evolution/ccz4_rhs.h"
 #include "../src/numerics/rk4.h"
@@ -62,7 +61,7 @@ static void test_uniform_vs_single_grid(void)
     double center[1][3] = {{0.0, 0.0, 0.0}};
 
     /* (a) Single-grid reference: N=32, L=64 */
-    grid_t *gref = grid_alloc(32, p.L, RK_CK45);
+    grid_t *gref = grid_alloc(32, p.L, p.rk_method);
     p.N  = gref->N;
     p.dx = gref->dx;
     p.dt = p.CFL * p.dx;
@@ -76,7 +75,7 @@ static void test_uniform_vs_single_grid(void)
            ham_ref, nsteps);
 
     /* (b) Multi-block mesh: 2x2x2 x 16^3 = same N_eff=32 */
-    mesh_t *m = mesh_create(2, 16, p.L, RK_CK45);
+    mesh_t *m = mesh_create(2, 16, p.L, p.rk_method);
 
     /* dx/dt from mesh (should match single-grid) */
     p.dx = m->dx_base;
@@ -129,7 +128,7 @@ static void test_dynamic_regridding(void)
     p.CFL = 0.25;
     int nsteps = 20;
 
-    mesh_t *m = mesh_create(2, 16, p.L, RK_CK45);
+    mesh_t *m = mesh_create(2, 16, p.L, p.rk_method);
     p.dx = m->dx_base;
     p.dt = p.CFL * p.dx;
     p.amr.chi_refine  = 0.05;
@@ -155,6 +154,7 @@ static void test_dynamic_regridding(void)
     /* Evolve with regridding */
     for (int step = 1; step <= nsteps; step++) {
         rk4_step_mesh(m, &p, ccz4_rhs_point, p.dt);
+
         if (step % p.amr.regrid_every == 0) {
             int delta = mesh_regrid(m, &p.amr);
             /* Update dt for finest-level CFL (global timestepping) */
@@ -196,7 +196,7 @@ static void test_flat_no_refinement(void)
     p.CFL = 0.25;
     int nsteps = 20;
 
-    mesh_t *m = mesh_create(2, 16, p.L, RK_CK45);
+    mesh_t *m = mesh_create(2, 16, p.L, p.rk_method);
     p.dx = m->dx_base;
     p.dt = p.CFL * p.dx;
     p.amr.chi_refine  = 0.1;

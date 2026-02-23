@@ -98,7 +98,7 @@ static void test_mesh_topology(void)
     printf("\n--- Test: Mesh topology (2x2x2 = 8 blocks) ---\n");
 
     /* Use N_block=16 to keep memory low (~5 MB/block, 40 MB total) */
-    mesh_t *m = mesh_create(2, 16, 10.0, RK_CK45);
+    mesh_t *m = mesh_create(2, 16, 10.0, RK_CLASSIC);
 
     check(m->num_blocks == 8, "8 blocks created");
     check(m->N_root == 2, "N_root = 2");
@@ -245,7 +245,7 @@ static void test_meshblock_pack(void)
     printf("\n--- Test: MeshBlockPack round-trip ---\n");
 
     /* Create a 1-block mesh with some non-trivial data */
-    mesh_t *m = mesh_create(1, 32, 10.0, RK_CK45);
+    mesh_t *m = mesh_create(1, 32, 10.0, RK_CLASSIC);
     block_t *b = mesh_get_block(m, 0);
     grid_t *g = b->grid;
 
@@ -291,7 +291,7 @@ static void test_multiblock_pack(void)
 {
     printf("\n--- Test: MeshBlockPack with 8 blocks ---\n");
 
-    mesh_t *m = mesh_create(2, 16, 10.0, RK_CK45);
+    mesh_t *m = mesh_create(2, 16, 10.0, RK_CLASSIC);
 
     check(m->num_blocks == 8, "8 blocks created (2^3)");
 

@@ -305,7 +305,7 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 <!-- ========================================== -->
 <h2 id="mod-numerics">Module: numerics/</h2>
 
-<p>Finite difference stencils and time integration. All derivatives go through <code>fd_d1()</code>, <code>fd_d2()</code>, <code>fd_d2_mixed()</code>, <code>fd_adv()</code>, and <code>fd_ko()</code> &mdash; direction-independent via a stride parameter. No hand-coded stencils anywhere (Critical Invariant #3). Two RK4 variants: CK45 (default, 5 stages, 3 memory blocks) and classic (4 stages, 4 blocks).</p>
+<p>Finite difference stencils and time integration. All derivatives go through <code>fd_d1()</code>, <code>fd_d2()</code>, <code>fd_d2_mixed()</code>, <code>fd_adv()</code>, and <code>fd_ko()</code> &mdash; direction-independent via a stride parameter. No hand-coded stencils anywhere (Critical Invariant #3). Two RK4 variants: classic (default, 4 stages, 4 memory blocks) and CK45 (5 stages, 3 blocks, 25% less memory).</p>
 
 <table class="file-table">
 <tr><th>File</th><th>Purpose</th></tr>
@@ -658,6 +658,8 @@ Level 0: everywhere (dx ~ M/2)     — outer domain + boundary</code></pre>
   +--&gt; <span class="highlight">Phase 4:</span> Prolongate from coarse_buf into fine ghost zones
         (5-point Lagrange; skips directions already filled in Phase 1)</div>
 
+<p><strong>Cross-level ghost fill (<code>ghost_fill_from_coarser</code>):</strong> Used during subcycling to fill fine-level ghost zones from time-interpolated coarser data. Split into two passes to avoid ordering bugs: Pass 1 restricts <em>all</em> fine blocks into their coarse_bufs; Pass 2 exchanges coarse_buf ghosts, extrapolates boundaries, and prolongates. This ensures same-level neighbor coarse_bufs are always valid when read.</p>
+
 <h3>Subcycling</h3>
 <p>Berger-Oliger subcycling: fine levels take 2x more timesteps at half the dt of their parent level. After the fine level completes its sub-steps, data is restricted back to the coarse level. This respects the CFL condition at each level without wasting work on coarse regions.</p>
 
@@ -706,9 +708,9 @@ Level 0: everywhere (dx ~ M/2)     — outer domain + boundary</code></pre>
 </details>
 
 <details>
-<summary>Why CK45 as the default time integrator?</summary>
+<summary>Why classic RK4 as the default time integrator?</summary>
 <div class="detail-body">
-<p>Carpenter-Kennedy 2N low-storage RK4 uses only 3 memory blocks (fields, rhs, scratch) instead of the classic RK4's 4 (which adds an accumulator). At N=128 with 31 fields, this saves ~1.1 GB. The method is still 4th-order, just with 5 stages instead of 4. The extra RHS evaluation per step (~25% more compute) is worth the 25% memory savings, especially on memory-limited GPUs.</p>
+<p>Classic RK4 (4 stages, 4 memory blocks) is the default because it is faster: 4 RHS evaluations per step vs CK45's 5 (20% less compute). CK45 is available via <code>--rk ck45</code> for memory-constrained scenarios (3 blocks, 25% less memory). At N=128 with 31 fields, CK45 saves ~1.1 GB. At N=256, classic requires ~13.7 GB (tight on M4 16 GB) while CK45 fits in ~10.3 GB. <strong>Known issue:</strong> the classic RK4 packed mesh stepper (<code>classic_rk4_step_mesh_packed</code>) produces higher constraint violations than the CK45 packed path; needs investigation.</p>
 </div>
 </details>
 
@@ -761,7 +763,7 @@ export GOMP_NVPTX_NATIVE_GPU_THREAD_STACK_SIZE=16384
 <tr><td><code>--L</code></td><td>10</td><td>Domain half-length in M</td></tr>
 <tr><td><code>--steps</code></td><td>100</td><td>Number of timesteps</td></tr>
 <tr><td><code>--puncture M,x,y,z[,Px,Py,Pz,Sx,Sy,Sz,Q]</code></td><td>&mdash;</td><td>Add a puncture (up to 16). Mass, position, optional momentum/spin/charge.</td></tr>
-<tr><td><code>--rk classic|ck45</code></td><td>ck45</td><td>Time integrator selection</td></tr>
+<tr><td><code>--rk classic|ck45</code></td><td>classic</td><td>Time integrator selection</td></tr>
 <tr><td><code>--em</code></td><td>off</td><td>Enable Einstein-Maxwell (6 extra evolved fields)</td></tr>
 <tr><td><code>--ah</code></td><td>off</td><td>Enable apparent horizon finder</td></tr>
 <tr><td><code>--N-root</code></td><td>&mdash;</td><td>Root blocks per dimension (enables AMR mode)</td></tr>

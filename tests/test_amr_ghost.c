@@ -58,7 +58,7 @@ static void test_ghost_polynomial(void)
     printf("\n--- Test: Ghost exchange with polynomial f = x + 2y + 3z ---\n");
 
     /* 2x2x2 mesh, N_block=16. Effective N=32. */
-    mesh_t *m = mesh_create(2, 16, 10.0, RK_CK45);
+    mesh_t *m = mesh_create(2, 16, 10.0, RK_CLASSIC);
     check(m->num_blocks == 8, "8 blocks created");
 
     /* Set field 0 (CHI) to f(x,y,z) = x + 2y + 3z on all interiors */
@@ -176,7 +176,7 @@ static void test_multiblock_flat(void)
     double L = 10.0;
 
     /* (a) Single-grid reference run */
-    grid_t *gref = grid_alloc(N_eff, L, RK_CK45);
+    grid_t *gref = grid_alloc(N_eff, L, RK_CLASSIC);
     p.N  = gref->N;
     p.dx = gref->dx;
     p.dt = p.CFL * p.dx;
@@ -191,7 +191,7 @@ static void test_multiblock_flat(void)
            ham_ref, gref->N, p.num_steps);
 
     /* (b) Multi-block mesh: 2x2x2 = 8 blocks of 16^3 */
-    mesh_t *m = mesh_create(2, 16, L, RK_CK45);
+    mesh_t *m = mesh_create(2, 16, L, RK_CLASSIC);
 
     /* Set flat spacetime on all blocks */
     for (int bid = 0; bid < m->num_blocks; bid++) {
@@ -258,7 +258,7 @@ static void test_multiblock_pointwise(void)
     int nsteps = 10;
 
     /* Single grid N=32 */
-    grid_t *gref = grid_alloc(32, L, RK_CK45);
+    grid_t *gref = grid_alloc(32, L, RK_CLASSIC);
     p.N  = gref->N;
     p.dx = gref->dx;
     p.dt = p.CFL * p.dx;
@@ -268,7 +268,7 @@ static void test_multiblock_pointwise(void)
         rk4_step(gref, &p, ccz4_rhs_point, apply_sommerfeld, p.dt);
 
     /* Multi-block 2x2x2 x 16^3 */
-    mesh_t *m = mesh_create(2, 16, L, RK_CK45);
+    mesh_t *m = mesh_create(2, 16, L, RK_CLASSIC);
     for (int bid = 0; bid < m->num_blocks; bid++)
         set_flat_spacetime(m->blocks[bid]->grid);
     for (int s = 0; s < nsteps; s++)
@@ -334,7 +334,7 @@ static void test_sommerfeld_block(void)
 {
     printf("\n--- Test: Sommerfeld block-aware boundary application ---\n");
 
-    mesh_t *m = mesh_create(2, 16, 10.0, RK_CK45);
+    mesh_t *m = mesh_create(2, 16, 10.0, RK_CLASSIC);
 
     /* Set flat spacetime and fill ghost zones */
     for (int bid = 0; bid < m->num_blocks; bid++)
@@ -429,7 +429,7 @@ static void test_multiblock_single_bh(void)
     int nsteps = 4;
 
     /* 2x2x2 x 16^3 = effective N=32. Coarse but enough to test. */
-    mesh_t *m = mesh_create(2, 16, p.L, RK_CK45);
+    mesh_t *m = mesh_create(2, 16, p.L, RK_CLASSIC);
 
     /* Set BH initial data on all blocks */
     double mass = 1.0;

@@ -562,17 +562,25 @@ void ghost_fill_from_coarser(mesh_t *m, int fine_level, double frac)
 {
     if (fine_level <= 0) return;
 
+    /* Pass 1: Restrict ALL fine blocks' interiors into their coarse_bufs.
+     * After this pass, every coarse_buf at fine_level has valid interior data.
+     * Must complete before Pass 2 so same-level neighbor exchanges read
+     * restricted (not stale) coarse_buf data. */
+    for (int bid = 0; bid < m->num_blocks; bid++) {
+        block_t *b = m->blocks[bid];
+        if (!b || !b->is_leaf || b->loc.level != fine_level) continue;
+        if (!b->coarse_buf) continue;
+        restrict_to_coarse_buf(b);
+    }
+
+    /* Pass 2: Exchange coarse_buf ghosts + boundary extrapolate + prolongate.
+     * Safe to read neighbors' coarse_bufs — they were all restricted in Pass 1. */
     for (int bid = 0; bid < m->num_blocks; bid++) {
         block_t *b = m->blocks[bid];
         if (!b || !b->is_leaf || b->loc.level != fine_level) continue;
         if (!b->coarse_buf) continue;
 
-        /* Phase 2: Restrict fine interior → own coarse_buf.
-         * This fills the coarse_buf interior from the fine block's fields. */
-        restrict_to_coarse_buf(b);
-
-        /* Phase 3a: Fill coarse_buf ghosts from same-level siblings
-         * (their coarse_bufs already have valid interiors) */
+        /* Fill coarse_buf ghosts from same-level siblings and coarser neighbors */
         for (int n = 0; n < NUM_NEIGHBORS; n++) {
             int ox = nbr_offset[n][0];
             int oy = nbr_offset[n][1];

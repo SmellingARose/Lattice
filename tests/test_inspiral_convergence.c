@@ -157,7 +157,7 @@ static double *run_resolution(int res_idx, int n_block)
     fflush(stdout);
     time_t t0 = time(NULL);
 
-    grid_t *tmp = grid_alloc(n_eff, L_DOMAIN, RK_CK45);
+    grid_t *tmp = grid_alloc(n_eff, L_DOMAIN, RK_CLASSIC);
     set_bowen_york(tmp, 2, bhs);
 
     printf("  ID solve done (%.0f sec)\n", difftime(time(NULL), t0));

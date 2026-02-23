@@ -52,7 +52,7 @@ static void test_refine_single_block(void)
     printf("\n--- Test 1: Refine single block ---\n");
 
     /* Create 1×1×1 mesh (single block) */
-    mesh_t *m = mesh_create(1, 16, 10.0, RK_CK45);
+    mesh_t *m = mesh_create(1, 16, 10.0, RK_CLASSIC);
     check(m->num_blocks == 1, "Initial mesh has 1 block");
     check(m->blocks[0]->is_leaf == 1, "Block 0 is leaf");
 
@@ -112,7 +112,7 @@ static void test_prolongation_into_children(void)
 {
     printf("\n--- Test 2: Prolongation into children ---\n");
 
-    mesh_t *m = mesh_create(1, 16, 10.0, RK_CK45);
+    mesh_t *m = mesh_create(1, 16, 10.0, RK_CLASSIC);
     grid_t *g = m->blocks[0]->grid;
     int ghost = g->ghost;
     int Nt = g->Ntotal;
@@ -177,7 +177,7 @@ static void test_coarsen_round_trip(void)
 {
     printf("\n--- Test 3: Coarsen round-trip ---\n");
 
-    mesh_t *m = mesh_create(1, 16, 10.0, RK_CK45);
+    mesh_t *m = mesh_create(1, 16, 10.0, RK_CLASSIC);
 
     /* Set up flat spacetime with a smooth chi */
     grid_t *g = m->blocks[0]->grid;
@@ -239,7 +239,7 @@ static void test_2to1_constraint(void)
     printf("\n--- Test 4: 2:1 constraint enforcement ---\n");
 
     /* Create 2×2×2 mesh (8 blocks) */
-    mesh_t *m = mesh_create(2, 16, 10.0, RK_CK45);
+    mesh_t *m = mesh_create(2, 16, 10.0, RK_CLASSIC);
     check(m->num_blocks == 8, "2x2x2 mesh has 8 blocks");
 
     /* Set flat data on all blocks */
@@ -284,7 +284,7 @@ static void test_chi_gradient_criterion(void)
     printf("\n--- Test 5: Chi-gradient criterion ---\n");
 
     /* Create 2×2×2 mesh with single BH at center */
-    mesh_t *m = mesh_create(2, 16, 20.0, RK_CK45);
+    mesh_t *m = mesh_create(2, 16, 20.0, RK_CLASSIC);
     double mass = 1.0;
     double center[1][3] = {{0.0, 0.0, 0.0}};
 
@@ -330,7 +330,7 @@ static void test_multilevel_ghost_exchange(void)
     printf("\n--- Test 6: Multi-level ghost exchange ---\n");
 
     /* Create 2×2×2 mesh, refine the center block (block 0 after Morton sort) */
-    mesh_t *m = mesh_create(2, 16, 10.0, RK_CK45);
+    mesh_t *m = mesh_create(2, 16, 10.0, RK_CLASSIC);
 
     /* Set polynomial f = x^2 + y^2 + z^2 on all blocks */
     for (int bid = 0; bid < m->num_blocks; bid++) {
@@ -435,7 +435,7 @@ static void test_mesh_management(void)
 {
     printf("\n--- Test 7: Mesh find/add/remove/compact ---\n");
 
-    mesh_t *m = mesh_create(2, 16, 10.0, RK_CK45);
+    mesh_t *m = mesh_create(2, 16, 10.0, RK_CLASSIC);
     check(m->num_blocks == 8, "2x2x2 mesh has 8 blocks");
 
     /* Test mesh_find_block */
@@ -450,7 +450,7 @@ static void test_mesh_management(void)
 
     /* Test mesh_add_block */
     double origin[3] = {0.0, 0.0, 0.0};
-    block_t *new_b = block_alloc(0, 1, 16, 0.3125, origin, RK_CK45);
+    block_t *new_b = block_alloc(0, 1, 16, 0.3125, origin, RK_CLASSIC);
     new_b->loc.lx1 = 0;
     new_b->loc.lx2 = 0;
     new_b->loc.lx3 = 0;
@@ -475,7 +475,7 @@ static void test_neighbor_rebuild(void)
 {
     printf("\n--- Test 8: Neighbor rebuild after refinement ---\n");
 
-    mesh_t *m = mesh_create(2, 16, 10.0, RK_CK45);
+    mesh_t *m = mesh_create(2, 16, 10.0, RK_CLASSIC);
 
     /* Set flat data */
     for (int bid = 0; bid < m->num_blocks; bid++)
@@ -540,7 +540,7 @@ static void test_full_regrid(void)
     printf("\n--- Test 9: Full regrid cycle ---\n");
 
     /* Create 2×2×2 mesh with single BH */
-    mesh_t *m = mesh_create(2, 16, 20.0, RK_CK45);
+    mesh_t *m = mesh_create(2, 16, 20.0, RK_CLASSIC);
     double mass = 1.0;
     double center[1][3] = {{0.0, 0.0, 0.0}};
 

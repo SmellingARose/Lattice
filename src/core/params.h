@@ -115,7 +115,7 @@ static inline sim_params_t default_params(void)
     p.num_steps    = 1000;
     p.output_every = 0;
     p.sigma        = 0.3;
-    p.rk_method    = RK_CK45;
+    p.rk_method    = RK_CLASSIC;
 
     p.dx = p.L / p.N;
     p.dt = p.CFL * p.dx;

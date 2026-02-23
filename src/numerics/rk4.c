@@ -829,7 +829,9 @@ static void step_level(mesh_t *m, const sim_params_t *p,
                         int level, double dt_level, double frac)
 {
     /* Cross-level ghost fill (time-interpolated from coarser level).
-     * Done on the mesh BEFORE building the per-level pack. */
+     * Done on the mesh BEFORE building the per-level pack.
+     * ghost_fill_from_coarser restricts all blocks first, then exchanges,
+     * so same-level neighbor coarse_bufs are always valid. */
     if (level > 0)
         ghost_fill_from_coarser(m, level, frac);
 
@@ -1036,9 +1038,19 @@ static void subcycle_level(mesh_t *m, const sim_params_t *p,
                        t_start + dt_level / 2.0);
     }
 
-    /* Restrict fine data into coarse parents at this level boundary */
-    if (level < m->max_level)
+    /* Restrict fine data into coarse parents at this level boundary.
+     * Ghost exchange first: the 6th-order restriction stencil reads 2 cells
+     * into ghost zones. After step_level(), ghosts may be stale (classic RK4
+     * overwrites them with pre-step values in the copy+apply stage, and even
+     * CK45 ghosts are one stage behind). A same-level exchange ensures the
+     * stencil reads valid post-step data.
+     *
+     * Ref: Berger & Oliger (1984) — restrict after subcycling at level boundary.
+     * Ref: Athena++ MeshRefinement::RestrictCellCenteredValues() post-exchange. */
+    if (level < m->max_level) {
+        ghost_exchange(m);
         restrict_level_to_parents(m, level + 1);
+    }
 
     /* Enforce algebraic constraints at this level */
     for (int bid = 0; bid < m->num_blocks; bid++) {

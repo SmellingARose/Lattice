@@ -104,8 +104,8 @@ static void test_prolongation_convergence(void)
         int Nc = N_coarse[r];
         int Nf = 2 * Nc;
 
-        grid_t *gc = grid_alloc(Nc, L, RK_CK45);
-        grid_t *gf = grid_alloc(Nf, L, RK_CK45);
+        grid_t *gc = grid_alloc(Nc, L, RK_CLASSIC);
+        grid_t *gf = grid_alloc(Nf, L, RK_CLASSIC);
 
         /* Set smooth function on coarse grid (including ghost zones) */
         set_smooth(gc, FIELD_CHI, L);
@@ -141,8 +141,8 @@ static void test_restriction_accuracy(void)
     int Nc = 16;
     int Nf = 32;
 
-    grid_t *gc = grid_alloc(Nc, L, RK_CK45);
-    grid_t *gf = grid_alloc(Nf, L, RK_CK45);
+    grid_t *gc = grid_alloc(Nc, L, RK_CLASSIC);
+    grid_t *gf = grid_alloc(Nf, L, RK_CLASSIC);
 
     /* Set smooth function on fine grid */
     set_smooth(gf, FIELD_CHI, L);
@@ -173,9 +173,9 @@ static void test_round_trip(void)
     int Nc = 16;
     int Nf = 32;
 
-    grid_t *gf_orig = grid_alloc(Nf, L, RK_CK45);
-    grid_t *gc      = grid_alloc(Nc, L, RK_CK45);
-    grid_t *gf_rt   = grid_alloc(Nf, L, RK_CK45);
+    grid_t *gf_orig = grid_alloc(Nf, L, RK_CLASSIC);
+    grid_t *gc      = grid_alloc(Nc, L, RK_CLASSIC);
+    grid_t *gf_rt   = grid_alloc(Nf, L, RK_CLASSIC);
 
     /* Set smooth function on fine grid */
     set_smooth(gf_orig, FIELD_CHI, L);
@@ -231,7 +231,7 @@ static void test_cako_flat(void)
     p.dx = p.L / p.N;
     p.dt = p.CFL * p.dx;
     p.num_steps = 100;
-    p.rk_method = RK_CK45;
+    p.rk_method = RK_CLASSIC;
 
     /* Run without CAKO */
     grid_t *g1 = grid_alloc(p.N, p.L, p.rk_method);
@@ -441,8 +441,8 @@ static void test_prolongation_linear(void)
     int Nc = 16;
     int Nf = 32;
 
-    grid_t *gc = grid_alloc(Nc, L, RK_CK45);
-    grid_t *gf = grid_alloc(Nf, L, RK_CK45);
+    grid_t *gc = grid_alloc(Nc, L, RK_CLASSIC);
+    grid_t *gf = grid_alloc(Nf, L, RK_CLASSIC);
 
     /* Set f(x,y,z) = 2x + 3y + 5z on coarse grid (including ghosts) */
     int ghost = gc->ghost;

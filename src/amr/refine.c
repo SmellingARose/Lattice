@@ -94,17 +94,15 @@ static void enforce_algebraic_block(grid_t *g)
                 h_loc[2][2] = g->fields[FIELD_H33][idx];
 
                 double det = compute_det_sym(h_loc);
-                if (det > 0.0) {
-                    double scale = 1.0 / cbrt(det);
-                    FOR2(a, b) h_loc[a][b] *= scale;
+                double scale = fast_inv_cbrt(det);
+                FOR2(a, b) h_loc[a][b] *= scale;
 
-                    g->fields[FIELD_H11][idx] = h_loc[0][0];
-                    g->fields[FIELD_H12][idx] = h_loc[0][1];
-                    g->fields[FIELD_H13][idx] = h_loc[0][2];
-                    g->fields[FIELD_H22][idx] = h_loc[1][1];
-                    g->fields[FIELD_H23][idx] = h_loc[1][2];
-                    g->fields[FIELD_H33][idx] = h_loc[2][2];
-                }
+                g->fields[FIELD_H11][idx] = h_loc[0][0];
+                g->fields[FIELD_H12][idx] = h_loc[0][1];
+                g->fields[FIELD_H13][idx] = h_loc[0][2];
+                g->fields[FIELD_H22][idx] = h_loc[1][1];
+                g->fields[FIELD_H23][idx] = h_loc[1][2];
+                g->fields[FIELD_H33][idx] = h_loc[2][2];
 
                 double h_UU[3][3];
                 compute_inverse_sym(h_loc, h_UU);
