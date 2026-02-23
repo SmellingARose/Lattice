@@ -54,7 +54,7 @@ GRChombo can handle. No charge, no spin, no Maxwell, no AMR. Uniform grid only.
 - Moving puncture gauge (Bona-Masso lapse, Gamma-driver shift with B^i)
 - Christoffel symbols, Ricci tensor with Z terms
 - Hamiltonian + momentum constraints
-- 4th-order finite differences
+- 6th-order finite differences
 - RK4 time integration
 - 6th-order Kreiss-Oliger dissipation
 - Sommerfeld radiative boundary conditions
@@ -87,13 +87,25 @@ Priority order:
 is field-agnostic (copies all NUM_FIELDS including EM). AH finder and
 output slices work on AMR meshes.
 
-**Current status: Phase 2 complete, AMR at parity. Phase 3 (production) next.**
+**Current status: Phase 2 complete, Phase 3 in progress.**
+
+**Phase 3 progress:**
+- **6th-order operators:** FD stencils, KO dissipation, AMR prolongation (7-point)
+  and restriction (6-point) all upgraded from 4th to 6th order. 4th-order Sommerfeld
+  BCs. Quartic temporal interpolation for subcycling.
+- **Tier 1 optimizations (committed):** LTO for CPU builds, fast-path `pow(lapse,1)`,
+  `restrict` qualifiers on RHS pointers, skip EM fields in dissipation/Sommerfeld,
+  OMP-parallelized packed ghost exchange, flattened RK4 update loops (single OMP
+  region over all fields), hoisted GPU grid_t construction, pre-computed
+  restriction/prolongation weight product tables (232 entries, bit-exact verified).
+- **Remaining Tier 1:** Conditional EM allocation (`grid_alloc_ex`), fused d1/d2
+  stencil in `finite_diff.h` + `ccz4_rhs.c`.
 - **N-body initial data:** FAS multigrid constraint solver (FMG + Newton-Gauss-Seidel, 8-color GPU-compatible), O(N³) solve to discretization accuracy, arbitrary puncture count. BY 1-field + HiSpID 4-field coupled solvers.
 - **Einstein-Maxwell:** 6 new evolved fields (E^i, B^i), conformal Maxwell evolution with constraint damping, EM stress-energy coupling to CCZ4 (gated by `--em` flag), charged puncture initial data via `--puncture M,x,y,z,Px,Py,Pz,Sx,Sy,Sz,Q`.
 - **Spin:** Bowen-York spinning punctures + HiSpID high-spin initial data (quasi-isotropic Kerr conformal metric, coupled 4-field relaxation).
 - **Apparent horizons:** Hyperbolic flow method (BHaHAHA-inspired) with 4th-order off-grid interpolation, mass/spin/area extraction, `--ah` CLI flag. Works on both single-grid and AMR meshes.
-- **AMR:** Block-structured Berger-Oliger with subcycling, Morton-ordered mesh, 4th-order prolongation/restriction, multi-level ghost exchange. AMR-aware 1D output slices and AH finder.
-- **Tests:** All passing — flat spacetime, convergence (order 5.4), AMR evolution (8/8), Bowen-York (29/29), HiSpID (26/26), AH finder (13/13), Maxwell (15/15). Total: 31 evolved fields (25 CCZ4 + 6 EM).
+- **AMR:** Block-structured Berger-Oliger with subcycling, Morton-ordered mesh, 6th-order prolongation/restriction, multi-level ghost exchange. AMR-aware 1D output slices and AH finder.
+- **Tests:** Flat spacetime, convergence (order 6.5), Bowen-York (29/29), HiSpID (26/26), AH finder (13/13), Maxwell (15/15). Total: 31 evolved fields (25 CCZ4 + 6 EM). Known issue: AMR dynamic-regrid test produces NaN (stale ghost zones in restrict_level_to_parents).
 
 Update as milestones are reached.
 
@@ -122,7 +134,7 @@ lattice/
 │   ├── geometry/
 │   │   └── tensor_utils.h      # inline tensor operations
 │   ├── numerics/
-│   │   ├── finite_diff.h       # FD_D1, FD_D2 macros (4th-order)
+│   │   ├── finite_diff.h       # FD_D1, FD_D2 macros (6th-order)
 │   │   ├── interpolate.h       # 4th-order off-grid Lagrange interpolation
 │   │   └── rk4.c               # RK4 time integrator (+mesh stepping)
 │   ├── initial_data/
@@ -141,8 +153,8 @@ lattice/
 │   │   ├── block.h / block.c   # block_t: single mesh block with metadata
 │   │   ├── mesh.h / mesh.c     # mesh_t: collection of blocks forming domain
 │   │   ├── ghost_exchange.h/c  # 26-neighbor + multi-level ghost exchange
-│   │   ├── prolongation.h/c    # 4th-order Lagrange coarse→fine (AthenaK)
-│   │   ├── restriction.h/c     # volume-weighted fine→coarse averaging
+│   │   ├── prolongation.h/c    # 6th-order Lagrange coarse→fine (AthenaK)
+│   │   ├── restriction.h/c     # 6th-order Lagrange fine→coarse restriction
 │   │   ├── criterion.h/c       # chi-gradient refinement criterion
 │   │   ├── refine.h/c          # oct-tree split/merge/regrid
 │   │   └── meshblock_pack.h/c  # GPU batch packing (AthenaK-style)
@@ -170,13 +182,15 @@ lattice/
 │   ├── architecture.html       # consolidated architecture & design reference
 │   └── archive/                # older deep-dive guides (preserved, not primary)
 └── tools/
+    ├── compute_amr_weights.py  # SymPy derivation of AMR stencil weights
+    ├── verify_weights.c        # bit-exact verification of pre-computed weight tables
     └── plot_convergence.py
 ```
 
 ## Build & Test
 
 ```bash
-make                    # CPU build (-O3 -ffast-math -march=native)
+make                    # CPU build (-O3 -ffast-math -march=native -flto)
 make BACKEND=gpu        # GPU build (OpenMP target offloading, requires GCC 15+)
 make debug              # debug build (-O0 -g -fsanitize=address,undefined)
 make test               # all tests
@@ -268,7 +282,7 @@ constant `GR_SPACEDIM = 3`.
 
 - **Struct-of-arrays (SoA).** Each field is a contiguous `double*` array.
 - x is the innermost (unit-stride) index. Loops: z (outer) -> y -> x (inner).
-- Ghost zone width = 4 (4th-order stencils + 6th-order KO dissipation).
+- Ghost zone width = 4 (6th-order stencils + 6th-order KO dissipation).
 - Allocations page-aligned (4096 bytes) for zero-copy GPU buffers.
 - NX padded to next multiple of 16 for cache alignment.
 
@@ -281,7 +295,7 @@ constant `GR_SPACEDIM = 3`.
 5. **Field enum ordering is append-only.** Never reorder existing entries.
 6. **det(gambar) = 1 enforced algebraically** after every full RK4 step.
 7. **Abar trace-free enforced algebraically** after every full RK4 step.
-8. **Convergence order = 4** for all CCZ4 variables. Any change that breaks this is a bug.
+8. **Convergence order >= 4** for all CCZ4 variables (measured ~6.5 with 6th-order FD). Any change that breaks this is a bug.
 9. **Physics kernels must never `#include` platform headers.** GPU interaction goes through `backend.h`.
 
 ## CCZ4 Parameters

@@ -187,9 +187,9 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
   <li><strong>31 evolved fields</strong> &mdash; 25 CCZ4 gravitational + 6 Einstein-Maxwell (E, B)</li>
   <li><strong>N-body initial data</strong> &mdash; FAS multigrid constraint solver for arbitrary puncture configurations with mass, momentum, spin, and charge</li>
   <li><strong>High-spin black holes</strong> &mdash; HiSpID (quasi-isotropic Kerr) + Bowen-York initial data</li>
-  <li><strong>Oct-tree AMR</strong> &mdash; block-structured adaptive mesh refinement with subcycling, Morton ordering, and 4th-order prolongation/restriction</li>
+  <li><strong>Oct-tree AMR</strong> &mdash; block-structured adaptive mesh refinement with subcycling, Morton ordering, and 6th-order prolongation/restriction</li>
   <li><strong>Apparent horizon finder</strong> &mdash; hyperbolic flow method (BHaHAHA-inspired) with mass/spin extraction</li>
-  <li><strong>4th-order convergence</strong> verified across the full test suite (measured order: 5.4)</li>
+  <li><strong>6th-order convergence</strong> verified across the full test suite (measured order: 6.5)</li>
 </ul>
 
 <h3>What it is not</h3>
@@ -309,8 +309,8 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 
 <table class="file-table">
 <tr><th>File</th><th>Purpose</th></tr>
-<tr><td><code>finite_diff.h</code></td><td>Header-only 4th-order FD operators: centered 1st/2nd, mixed 2nd, upwind advection, KO dissipation. GPU-annotated.</td></tr>
-<tr><td><code>rk4.c</code></td><td>Single-grid stepper (<code>rk4_step</code>) and AMR mesh stepper (<code>rk4_step_mesh</code>). Packed batch: all leaf blocks in one kernel per operation. Also <code>enforce_algebraic()</code> with fast Newton-Raphson inv_cbrt.</td></tr>
+<tr><td><code>finite_diff.h</code></td><td>Header-only 6th-order FD operators: centered 1st/2nd, mixed 2nd, upwind advection, KO dissipation. GPU-annotated. Compile-time <code>FD_ORDER</code> selects 4th or 6th order.</td></tr>
+<tr><td><code>rk4.c</code></td><td>Single-grid stepper (<code>rk4_step</code>) and AMR mesh stepper (<code>rk4_step_mesh</code>). Packed batch: all leaf blocks in one kernel per operation. Flattened update loops (single OMP region over all fields). Also <code>enforce_algebraic()</code>.</td></tr>
 <tr><td><code>interpolate.h</code></td><td>4th-order off-grid Lagrange interpolation (used by AH finder for field access at non-grid points).</td></tr>
 </table>
 
@@ -321,7 +321,7 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 
 <table class="file-table">
 <tr><th>File</th><th>Purpose</th></tr>
-<tr><td><code>tensor_utils.h</code></td><td>Header-only: <code>compute_inverse_sym</code>, <code>compute_christoffel</code>, <code>compute_trace</code>, <code>raise_all_2</code>, <code>make_trace_free</code>, dot products.</td></tr>
+<tr><td><code>tensor_utils.h</code></td><td>Header-only: <code>compute_inverse_sym</code>, <code>compute_christoffel</code>, <code>compute_trace</code>, <code>raise_all_2</code>, <code>make_trace_free</code>, <code>fast_inv_cbrt</code>, dot products.</td></tr>
 </table>
 
 <!-- ========================================== -->
@@ -369,8 +369,8 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 <tr><td><code>block.h/c</code></td><td><code>block_t</code>: grid_t + coarse_buf + logical location + 26 neighbors + tree links.</td></tr>
 <tr><td><code>mesh.h/c</code></td><td><code>mesh_t</code>: block collection, Morton sort, multi-level neighbor finding.</td></tr>
 <tr><td><code>ghost_exchange.h/c</code></td><td>5-phase coarse-buffer multilevel ghost exchange (AthenaK pattern).</td></tr>
-<tr><td><code>prolongation.h/c</code></td><td>4th-order cell-centered Lagrange interpolation (coarse to fine). 5-point 1D stencil, 3D tensor product.</td></tr>
-<tr><td><code>restriction.h/c</code></td><td>4th-order Lagrange cell-average restriction (fine to coarse). Weights: {1/48, 23/48, 23/48, 1/48}.</td></tr>
+<tr><td><code>prolongation.h/c</code></td><td>6th-order cell-centered Lagrange interpolation (coarse to fine). 7-point 1D stencil, 3D tensor product. Pre-computed <code>prolong_wkj[4][7][7]</code> weight products for 4 octant combos.</td></tr>
+<tr><td><code>restriction.h/c</code></td><td>6th-order Lagrange cell-average restriction (fine to coarse). 6-point symmetric stencil: w = {-17/11520, 97/3840, 2743/5760, ...}. Pre-computed <code>restrict_wkj[6][6]</code> weight products.</td></tr>
 <tr><td><code>criterion.h/c</code></td><td>Chi-gradient refinement criterion with hysteresis: (dx/chi^2)|grad(chi)|.</td></tr>
 <tr><td><code>refine.h/c</code></td><td>Oct-tree split (1 to 8), merge (8 to 1), 2:1 constraint cascade, full regrid cycle.</td></tr>
 <tr><td><code>meshblock_pack.h/c</code></td><td>GPU batch packing: contiguous buffers, per-block metadata, PACK_IDX macro.</td></tr>
@@ -509,7 +509,7 @@ Level 4 block near BH:  dx=0.0625, criterion = 0.08 → STOP   (< 0.1)</code></p
     u_fine[i,j,k]  &rarr;  RHS_fine[i,j,k]     <span class="comment">// standard RHS computation</span>
 
   Restrict to coarse grid (spacing 2dx):
-    u_coarse = <span class="fn">Restrict</span>(u_fine)           <span class="comment">// 4th-order restriction</span>
+    u_coarse = <span class="fn">Restrict</span>(u_fine)           <span class="comment">// 6th-order restriction</span>
     RHS_coarse = <span class="fn">ccz4_rhs</span>(u_coarse)      <span class="comment">// one extra RHS eval on coarse grid</span>
 
   Restricted fine RHS:
@@ -720,9 +720,9 @@ Level 0: everywhere (dx ~ M/2)     — outer domain + boundary</code></pre>
 </details>
 
 <details>
-<summary>Why 4th-order for both prolongation and restriction?</summary>
+<summary>Why 6th-order for both prolongation and restriction?</summary>
 <div class="detail-body">
-<p>Matching the prolongation and restriction orders eliminates Hamiltonian constraint violations at AMR boundaries (arXiv:2504.15814, ExaHyPE). 4th-order restriction uses Lagrange weights {1/48, 23/48, 23/48, 1/48} with a 4-point stencil per direction (64 fine cells per coarse cell in 3D). The 2nd-order fallback near boundaries prevents stencil overshoot without contaminating the interior.</p>
+<p>Matching the prolongation and restriction orders eliminates Hamiltonian constraint violations at AMR boundaries (arXiv:2504.15814, ExaHyPE). 6th-order restriction uses a symmetric 6-point Lagrange stencil with weights {-17/11520, 97/3840, 2743/5760, 2743/5760, 97/3840, -17/11520} (216 fine cells per coarse cell in 3D). 6th-order prolongation uses a 7-point stencil. Stencil reach (2&ndash;3 cells) fits within ghost width (4). Pre-computed weight product tables (<code>restrict_wkj[6][6]</code>, <code>prolong_wkj[4][7][7]</code>) eliminate one multiply per inner loop iteration.</p>
 </div>
 </details>
 
@@ -730,8 +730,8 @@ Level 0: everywhere (dx ~ M/2)     — outer domain + boundary</code></pre>
 <h2 id="build">Build &amp; Run</h2>
 
 <h3>Building</h3>
-<pre><code>make                    # CPU build (-O3 -ffast-math -march=native)
-make BACKEND=gpu        # GPU build (OpenMP target offloading, requires GCC 15+)
+<pre><code>make                    # CPU build (-O3 -ffast-math -march=native -flto)
+make BACKEND=gpu        # GPU build (OpenMP target offloading, requires GCC 15+, no LTO)
 make debug              # debug build (-O0 -g -fsanitize=address,undefined)
 make clean              # rm -rf build/</code></pre>
 
@@ -776,7 +776,7 @@ export GOMP_NVPTX_NATIVE_GPU_THREAD_STACK_SIZE=16384
 <table class="file-table">
 <tr><th>Make target</th><th>What it validates</th><th>Status</th></tr>
 <tr><td><code>make test</code></td><td>Flat spacetime + convergence + AMR evolution (quick suite)</td><td><span class="badge badge-green">Passing</span></td></tr>
-<tr><td><code>make test-convergence</code></td><td>4th-order convergence: single BH at 3 resolutions (order > 3.5, measured 5.4)</td><td><span class="badge badge-green">Passing</span></td></tr>
+<tr><td><code>make test-convergence</code></td><td>Convergence: single BH at 3 resolutions (order > 3.5, measured 6.5 with 6th-order FD)</td><td><span class="badge badge-green">Passing</span></td></tr>
 <tr><td><code>make test-amr-mesh</code></td><td>AMR mesh creation, Morton ordering, MeshBlockPack round-trip (33 tests)</td><td><span class="badge badge-green">Passing</span></td></tr>
 <tr><td><code>make test-amr-ghost</code></td><td>Ghost exchange, multi-block evolution (13 tests)</td><td><span class="badge badge-green">Passing</span></td></tr>
 <tr><td><code>make test-amr-prolong</code></td><td>Prolongation convergence, restriction, CAKO, CAHD, SSL (15 tests)</td><td><span class="badge badge-green">Passing</span></td></tr>
