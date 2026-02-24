@@ -23,6 +23,7 @@ typedef struct {
     double dx;         /* grid spacing                                */
     double L;          /* physical domain size                        */
     size_t npoints;    /* Ntotal^3, total points including ghosts     */
+    int    n_fields;   /* active fields (<= NUM_FIELDS)               */
 
     double *fields[NUM_FIELDS];   /* evolved field arrays       */
     double *rhs[NUM_FIELDS];      /* RHS scratch (for RK stages)*/
@@ -51,9 +52,16 @@ typedef struct {
 /* Physical coordinate of grid point i (cell-centered) */
 #define COORD(g, i) (((i) - (g)->ghost + 0.5) * (g)->dx - (g)->L * 0.5)
 
-/* Allocate and initialize grid (all arrays zeroed).
+/* Allocate grid with explicit field count.
+ * n_fields <= NUM_FIELDS. Pointers for f >= n_fields set to NULL.
  * CK45 skips accum_block allocation (3 blocks instead of 4). */
-grid_t *grid_alloc(int N, double L, rk_method_t method);
+grid_t *grid_alloc_ex(int N, double L, rk_method_t method, int n_fields);
+
+/* Allocate grid with all NUM_FIELDS fields (backward compatible). */
+static inline grid_t *grid_alloc(int N, double L, rk_method_t method)
+{
+    return grid_alloc_ex(N, L, method, NUM_FIELDS);
+}
 
 /* Free all grid arrays */
 void grid_free(grid_t *g);

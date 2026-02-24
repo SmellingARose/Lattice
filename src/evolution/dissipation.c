@@ -53,7 +53,7 @@ void add_ko_dissipation(double ** restrict rhs,
     }
 
     /* Skip EM fields when EM is disabled (saves 6/31 field iterations) */
-    int nf = p->em_enabled ? NUM_FIELDS : NUM_CCZ4_FIELDS;
+    int nf = g->n_fields;
     for (int f = 0; f < nf; f++) {
         /* Per-field sigma: gauge fields get stronger dissipation.
          * When disabled, all fields use p->sigma (existing behavior). */

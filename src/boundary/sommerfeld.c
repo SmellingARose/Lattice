@@ -128,7 +128,7 @@ void apply_sommerfeld(double **rhs, const double *const *src, const grid_t *g)
                 int strides[3] = { STRIDE_X, STRIDE_Y(g), STRIDE_Z(g) };
                 double loc[3] = { x, y, z };
 
-                for (int field = 0; field < NUM_FIELDS; field++) {
+                for (int field = 0; field < g->n_fields; field++) {
                     double sommerfeld = 0.0;
 
                     /* Sum: -d_i f * x^i / r */
@@ -210,7 +210,7 @@ void apply_sommerfeld_block(double **rhs, const double *const *src,
                 int strides[3] = { STRIDE_X, STRIDE_Y(g), STRIDE_Z(g) };
                 double loc[3] = { x, y, z };
 
-                for (int field = 0; field < NUM_FIELDS; field++) {
+                for (int field = 0; field < g->n_fields; field++) {
                     double sommerfeld = 0.0;
 
                     for (int dir = 0; dir < 3; dir++) {

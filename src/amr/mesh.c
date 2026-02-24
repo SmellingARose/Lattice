@@ -50,7 +50,8 @@ static int compare_morton(const void *a, const void *b)
     return (ma > mb) - (ma < mb);
 }
 
-mesh_t *mesh_create(int N_root, int N_block, double L, rk_method_t method)
+mesh_t *mesh_create_ex(int N_root, int N_block, double L, rk_method_t method,
+                       int n_fields)
 {
     mesh_t *m = calloc(1, sizeof(mesh_t));
     if (!m) {
@@ -62,6 +63,7 @@ mesh_t *mesh_create(int N_root, int N_block, double L, rk_method_t method)
     m->N_block   = N_block;
     m->L         = L;
     m->rk_method = method;
+    m->n_fields  = n_fields;
     m->dx_base   = L / ((double)N_root * N_block);
     m->max_level = 0;
 
@@ -100,7 +102,7 @@ mesh_t *mesh_create(int N_root, int N_block, double L, rk_method_t method)
                 };
 
                 tmp_blocks[idx] = block_alloc(idx, 0, N_block, m->dx_base,
-                                               origin, method);
+                                               origin, method, n_fields);
                 tmp_blocks[idx]->loc.lx1  = ix;
                 tmp_blocks[idx]->loc.lx2  = iy;
                 tmp_blocks[idx]->loc.lx3  = iz;

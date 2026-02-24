@@ -44,20 +44,22 @@
 
 /* Copy all field arrays: dst = src.
  * Backing blocks are contiguous (fields[f] = block + f*n), so use single memcpy. */
-static void copy_fields(double **dst, const double *const *src, size_t n)
+static void copy_fields(double **dst, const double *const *src, size_t n,
+                        int nf)
 {
-    memcpy(dst[0], src[0], (size_t)NUM_FIELDS * n * sizeof(double));
+    memcpy(dst[0], src[0], (size_t)nf * n * sizeof(double));
 }
 
 /* Linear combination: dst[i] = a[i] + coeff * b[i] for all fields.
  * Flattened to single OMP region over all fields (eliminates 31 fork/joins). */
 static void axpy_fields(double **dst, const double *const *a,
-                        const double *const *b, double coeff, size_t n)
+                        const double *const *b, double coeff, size_t n,
+                        int nf)
 {
     double *restrict d = dst[0];
     const double *restrict ap = a[0];
     const double *restrict bp = b[0];
-    size_t total = (size_t)NUM_FIELDS * n;
+    size_t total = (size_t)nf * n;
     #pragma omp parallel for simd schedule(static)
     for (size_t i = 0; i < total; i++)
         d[i] = ap[i] + coeff * bp[i];
@@ -66,11 +68,11 @@ static void axpy_fields(double **dst, const double *const *a,
 /* Accumulate: accum[i] += coeff * rhs[i].
  * Flattened to single OMP region over all fields. */
 static void accum_add(double **accum, const double *const *rhs_arr,
-                      double coeff, size_t n)
+                      double coeff, size_t n, int nf)
 {
     double *restrict acc = accum[0];
     const double *restrict rp = rhs_arr[0];
-    size_t total = (size_t)NUM_FIELDS * n;
+    size_t total = (size_t)nf * n;
     #pragma omp parallel for simd schedule(static)
     for (size_t i = 0; i < total; i++)
         acc[i] += coeff * rp[i];
@@ -78,11 +80,12 @@ static void accum_add(double **accum, const double *const *rhs_arr,
 
 /* Apply: fields[i] += accum[i].
  * Flattened to single OMP region over all fields. */
-static void apply_accum(double **fields, const double *const *accum, size_t n)
+static void apply_accum(double **fields, const double *const *accum, size_t n,
+                        int nf)
 {
     double *restrict fp = fields[0];
     const double *restrict ap = accum[0];
-    size_t total = (size_t)NUM_FIELDS * n;
+    size_t total = (size_t)nf * n;
     #pragma omp parallel for simd schedule(static)
     for (size_t i = 0; i < total; i++)
         fp[i] += ap[i];
@@ -90,9 +93,9 @@ static void apply_accum(double **fields, const double *const *accum, size_t n)
 
 /* Zero all field arrays.
  * Backing blocks are contiguous, so use single memset. */
-static void zero_fields(double **arr, size_t n)
+static void zero_fields(double **arr, size_t n, int nf)
 {
-    memset(arr[0], 0, (size_t)NUM_FIELDS * n * sizeof(double));
+    memset(arr[0], 0, (size_t)nf * n * sizeof(double));
 }
 
 /*
@@ -178,40 +181,41 @@ static void classic_rk4_step(grid_t *g, const sim_params_t *p,
                               double dt)
 {
     size_t n = g->npoints;
+    int nf = g->n_fields;
 
     /* Save initial state */
-    copy_fields(g->scratch, (const double *const *)g->fields, n);
-    zero_fields(g->accum, n);
+    copy_fields(g->scratch, (const double *const *)g->fields, n, nf);
+    zero_fields(g->accum, n, nf);
 
     /* --- Stage 1: rhs from fields --- */
     backend_compute_rhs(g->rhs, (const double *const *)g->fields, g, p, rhs_func);
     bc_func(g->rhs, (const double *const *)g->fields, g);
-    accum_add(g->accum, (const double *const *)g->rhs, dt / 6.0, n);
+    accum_add(g->accum, (const double *const *)g->rhs, dt / 6.0, n, nf);
     axpy_fields(g->fields, (const double *const *)g->scratch,
-                (const double *const *)g->rhs, dt / 2.0, n);
+                (const double *const *)g->rhs, dt / 2.0, n, nf);
 
     /* --- Stage 2: rhs from fields (= scratch + dt/2 * k1) --- */
     backend_compute_rhs(g->rhs, (const double *const *)g->fields, g, p, rhs_func);
     bc_func(g->rhs, (const double *const *)g->fields, g);
-    accum_add(g->accum, (const double *const *)g->rhs, dt / 3.0, n);
+    accum_add(g->accum, (const double *const *)g->rhs, dt / 3.0, n, nf);
     axpy_fields(g->fields, (const double *const *)g->scratch,
-                (const double *const *)g->rhs, dt / 2.0, n);
+                (const double *const *)g->rhs, dt / 2.0, n, nf);
 
     /* --- Stage 3: rhs from fields (= scratch + dt/2 * k2) --- */
     backend_compute_rhs(g->rhs, (const double *const *)g->fields, g, p, rhs_func);
     bc_func(g->rhs, (const double *const *)g->fields, g);
-    accum_add(g->accum, (const double *const *)g->rhs, dt / 3.0, n);
+    accum_add(g->accum, (const double *const *)g->rhs, dt / 3.0, n, nf);
     axpy_fields(g->fields, (const double *const *)g->scratch,
-                (const double *const *)g->rhs, dt, n);
+                (const double *const *)g->rhs, dt, n, nf);
 
     /* --- Stage 4: rhs from fields (= scratch + dt * k3) --- */
     backend_compute_rhs(g->rhs, (const double *const *)g->fields, g, p, rhs_func);
     bc_func(g->rhs, (const double *const *)g->fields, g);
-    accum_add(g->accum, (const double *const *)g->rhs, dt / 6.0, n);
+    accum_add(g->accum, (const double *const *)g->rhs, dt / 6.0, n, nf);
 
     /* Apply: fields = scratch + accum */
-    copy_fields(g->fields, (const double *const *)g->scratch, n);
-    apply_accum(g->fields, (const double *const *)g->accum, n);
+    copy_fields(g->fields, (const double *const *)g->scratch, n, nf);
+    apply_accum(g->fields, (const double *const *)g->accum, n, nf);
 
     enforce_algebraic(g);
 }
@@ -242,12 +246,13 @@ static const double CK_B[5] = {
 /* Fused CK45 update: dU = A*dU + dt*F; U += B*dU.
  * Flattened to single OMP region over all fields (eliminates 31 fork/joins). */
 static void ck45_update(double **U, double **dU, const double *const *F,
-                        double A_s, double B_s, double dt, size_t n)
+                        double A_s, double B_s, double dt, size_t n,
+                        int nf)
 {
     double *restrict u = U[0];
     double *restrict du = dU[0];
     const double *restrict fp = F[0];
-    size_t total = (size_t)NUM_FIELDS * n;
+    size_t total = (size_t)nf * n;
     #pragma omp parallel for simd schedule(static)
     for (size_t i = 0; i < total; i++) {
         du[i] = A_s * du[i] + dt * fp[i];
@@ -260,16 +265,17 @@ static void ck45_step(grid_t *g, const sim_params_t *p,
                       double dt)
 {
     size_t n = g->npoints;
+    int nf = g->n_fields;
 
     /* Zero dU (stored in scratch) */
-    zero_fields(g->scratch, n);
+    zero_fields(g->scratch, n, nf);
 
     /* 5 stages */
     for (int s = 0; s < 5; s++) {
         backend_compute_rhs(g->rhs, (const double *const *)g->fields, g, p, rhs_func);
         bc_func(g->rhs, (const double *const *)g->fields, g);
         ck45_update(g->fields, g->scratch, (const double *const *)g->rhs,
-                    CK_A[s], CK_B[s], dt, n);
+                    CK_A[s], CK_B[s], dt, n, nf);
     }
 
     enforce_algebraic(g);
@@ -335,7 +341,7 @@ static void restrict_level_to_parents(mesh_t *m, int level)
                     int p_off_j = cy * half_N;
                     int p_off_k = cz * half_N;
 
-                    for (int f = 0; f < NUM_FIELDS; f++) {
+                    for (int f = 0; f < child->grid->n_fields; f++) {
                         for (int pk = 0; pk < half_N; pk++) {
                             for (int pj = 0; pj < half_N; pj++) {
                                 for (int pi = 0; pi < half_N; pi++) {
@@ -413,8 +419,9 @@ static void classic_rk4_step_mesh_perblock(mesh_t *m, const sim_params_t *p,
         if (!b || !b->is_leaf) continue;
         grid_t *g = b->grid;
         size_t n = g->npoints;
-        copy_fields(g->scratch, (const double *const *)g->fields, n);
-        zero_fields(g->accum, n);
+        int nf = g->n_fields;
+        copy_fields(g->scratch, (const double *const *)g->fields, n, nf);
+        zero_fields(g->accum, n, nf);
     }
 
     /* Stage 1 */
@@ -425,9 +432,10 @@ static void classic_rk4_step_mesh_perblock(mesh_t *m, const sim_params_t *p,
         if (!b || !b->is_leaf) continue;
         grid_t *g = b->grid;
         size_t n = g->npoints;
-        accum_add(g->accum, (const double *const *)g->rhs, dt / 6.0, n);
+        int nf = g->n_fields;
+        accum_add(g->accum, (const double *const *)g->rhs, dt / 6.0, n, nf);
         axpy_fields(g->fields, (const double *const *)g->scratch,
-                    (const double *const *)g->rhs, dt / 2.0, n);
+                    (const double *const *)g->rhs, dt / 2.0, n, nf);
     }
 
     /* Stage 2 */
@@ -438,9 +446,10 @@ static void classic_rk4_step_mesh_perblock(mesh_t *m, const sim_params_t *p,
         if (!b || !b->is_leaf) continue;
         grid_t *g = b->grid;
         size_t n = g->npoints;
-        accum_add(g->accum, (const double *const *)g->rhs, dt / 3.0, n);
+        int nf = g->n_fields;
+        accum_add(g->accum, (const double *const *)g->rhs, dt / 3.0, n, nf);
         axpy_fields(g->fields, (const double *const *)g->scratch,
-                    (const double *const *)g->rhs, dt / 2.0, n);
+                    (const double *const *)g->rhs, dt / 2.0, n, nf);
     }
 
     /* Stage 3 */
@@ -451,9 +460,10 @@ static void classic_rk4_step_mesh_perblock(mesh_t *m, const sim_params_t *p,
         if (!b || !b->is_leaf) continue;
         grid_t *g = b->grid;
         size_t n = g->npoints;
-        accum_add(g->accum, (const double *const *)g->rhs, dt / 3.0, n);
+        int nf = g->n_fields;
+        accum_add(g->accum, (const double *const *)g->rhs, dt / 3.0, n, nf);
         axpy_fields(g->fields, (const double *const *)g->scratch,
-                    (const double *const *)g->rhs, dt, n);
+                    (const double *const *)g->rhs, dt, n, nf);
     }
 
     /* Stage 4 */
@@ -464,9 +474,10 @@ static void classic_rk4_step_mesh_perblock(mesh_t *m, const sim_params_t *p,
         if (!b || !b->is_leaf) continue;
         grid_t *g = b->grid;
         size_t n = g->npoints;
-        accum_add(g->accum, (const double *const *)g->rhs, dt / 6.0, n);
-        copy_fields(g->fields, (const double *const *)g->scratch, n);
-        apply_accum(g->fields, (const double *const *)g->accum, n);
+        int nf = g->n_fields;
+        accum_add(g->accum, (const double *const *)g->rhs, dt / 6.0, n, nf);
+        copy_fields(g->fields, (const double *const *)g->scratch, n, nf);
+        apply_accum(g->fields, (const double *const *)g->accum, n, nf);
     }
 
     mesh_enforce_algebraic(m);
@@ -483,7 +494,7 @@ static void ck45_step_mesh_perblock(mesh_t *m, const sim_params_t *p,
     for (int bid = 0; bid < m->num_blocks; bid++) {
         block_t *b = m->blocks[bid];
         if (!b || !b->is_leaf) continue;
-        zero_fields(b->grid->scratch, b->grid->npoints);
+        zero_fields(b->grid->scratch, b->grid->npoints, b->grid->n_fields);
     }
 
     /* 5 CK45 stages */
@@ -497,7 +508,7 @@ static void ck45_step_mesh_perblock(mesh_t *m, const sim_params_t *p,
             grid_t *g = b->grid;
             ck45_update(g->fields, g->scratch,
                         (const double *const *)g->rhs,
-                        CK_A[s], CK_B[s], dt, g->npoints);
+                        CK_A[s], CK_B[s], dt, g->npoints, g->n_fields);
         }
     }
 
@@ -550,7 +561,7 @@ static meshblock_pack_t *mesh_build_leaf_pack(mesh_t *m,
     /* Create pack: allocates field buffers + metadata arrays.
      * level = -1 (mixed levels, normal for AMR meshes). */
     meshblock_pack_t *pack = meshblock_pack_create(
-        n_leaves, npts, ids, -1, rk_method);
+        n_leaves, npts, ids, -1, rk_method, m->n_fields);
 
     /* Load field data from blocks into pack's contiguous buffers */
     meshblock_pack_load(pack, m->blocks);
@@ -737,7 +748,7 @@ static void save_k1_from_pack(const meshblock_pack_t *pack, block_t **blocks)
         if (!blk->rhs_old_block) continue;
 
         size_t npts = pack->npts;
-        for (int f = 0; f < NUM_FIELDS; f++) {
+        for (int f = 0; f < pack->n_fields; f++) {
             size_t src_off = (size_t)f * pack->n_blocks * npts
                            + (size_t)b * npts;
             memcpy(blk->rhs_old[f], pack->rhs + src_off,
@@ -783,7 +794,7 @@ static meshblock_pack_t *mesh_build_level_pack(mesh_t *m, int level,
     size_t npts = m->blocks[ids[0]]->grid->npoints;
 
     meshblock_pack_t *pack = meshblock_pack_create(
-        n_leaves, npts, ids, level, rk_method);
+        n_leaves, npts, ids, level, rk_method, m->n_fields);
 
     meshblock_pack_load(pack, m->blocks);
     meshblock_pack_load_meta(pack, m->blocks);

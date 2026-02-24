@@ -84,38 +84,37 @@ void ccz4_rhs_point(double ** restrict rhs,
         {FIELD_A13, FIELD_A23, FIELD_A33}
     };
 
-    FOR1(dir) {
-        int s = strides[dir];
-        d1_chi[dir]    = fd_d1(src[FIELD_CHI],   idx, s, dx);
-        d1_K[dir]      = fd_d1(src[FIELD_K],     idx, s, dx);
-        d1_Theta[dir]  = fd_d1(src[FIELD_THETA], idx, s, dx);
-        d1_lapse[dir]  = fd_d1(src[FIELD_LAPSE], idx, s, dx);
-
-        FOR2(a, b) {
-            d1_h[a][b][dir] = fd_d1(src[h_idx[a][b]], idx, s, dx);
-            d1_A[a][b][dir] = fd_d1(src[A_idx[a][b]], idx, s, dx);
-        }
-        FOR1(a) {
-            d1_Gamma[a][dir] = fd_d1(src[FIELD_GAMMA1 + a], idx, s, dx);
-            d1_shift[a][dir] = fd_d1(src[FIELD_SHIFT1 + a], idx, s, dx);
-        }
-    }
-
-    /* ========== 3. Second derivatives ========== */
+    /* ========== 2+3. Fused first + diagonal second derivatives ========== */
+    /* Fields needing both d1 and d2: chi, lapse, h_ij(6), shift^i(3).
+     * Load stencil points once via fd_d1_d2(), saving ~40% memory loads.
+     * Fields needing d1 only: K, Theta, A_ij(6), Gamma^i(3). */
     double d2_chi[3][3], d2_lapse[3][3];
     double d2_h[3][3][3][3];    /* d2_h[i][j][dir1][dir2] */
     double d2_shift[3][3][3];   /* d2_shift[i][dir1][dir2] */
 
     FOR1(dir) {
         int s = strides[dir];
-        d2_chi[dir][dir]   = fd_d2(src[FIELD_CHI],   idx, s, dx);
-        d2_lapse[dir][dir] = fd_d2(src[FIELD_LAPSE], idx, s, dx);
 
+        /* Fused d1+d2 for fields needing both */
+        fd_d1_d2(src[FIELD_CHI],   idx, s, dx, &d1_chi[dir],   &d2_chi[dir][dir]);
+        fd_d1_d2(src[FIELD_LAPSE], idx, s, dx, &d1_lapse[dir], &d2_lapse[dir][dir]);
         FOR2(a, b) {
-            d2_h[a][b][dir][dir] = fd_d2(src[h_idx[a][b]], idx, s, dx);
+            fd_d1_d2(src[h_idx[a][b]], idx, s, dx,
+                     &d1_h[a][b][dir], &d2_h[a][b][dir][dir]);
         }
         FOR1(a) {
-            d2_shift[a][dir][dir] = fd_d2(src[FIELD_SHIFT1 + a], idx, s, dx);
+            fd_d1_d2(src[FIELD_SHIFT1 + a], idx, s, dx,
+                     &d1_shift[a][dir], &d2_shift[a][dir][dir]);
+        }
+
+        /* d1-only fields */
+        d1_K[dir]      = fd_d1(src[FIELD_K],     idx, s, dx);
+        d1_Theta[dir]  = fd_d1(src[FIELD_THETA], idx, s, dx);
+        FOR2(a, b) {
+            d1_A[a][b][dir] = fd_d1(src[A_idx[a][b]], idx, s, dx);
+        }
+        FOR1(a) {
+            d1_Gamma[a][dir] = fd_d1(src[FIELD_GAMMA1 + a], idx, s, dx);
         }
     }
 
@@ -476,9 +475,17 @@ void ccz4_rhs_point(double ** restrict rhs,
         rhs_shift[ii] = p->gauge.shift_advec_coeff * advec_shift[ii]
                        + p->gauge.shift_Gamma_coeff * B[ii];
 
+        /* Position-dependent eta: eta(x) = eta_0 / W(x), W = sqrt(chi).
+         * Increases damping near punctures (chi→0).
+         * Ref: arXiv:1003.0859 (Muller & Brugmann) */
+        double eta_eff = p->gauge.eta;
+        if (p->gauge.position_dependent_eta) {
+            double W = sqrt(fmax(chi, 1.0e-6));
+            eta_eff /= fmax(W, 1.0e-6);
+        }
         rhs_B[ii] = p->gauge.shift_advec_coeff * advec_B[ii]
                    - p->gauge.shift_advec_coeff * advec_Gamma[ii]
-                   + rhs_Gamma[ii] - p->gauge.eta * B[ii];
+                   + rhs_Gamma[ii] - eta_eff * B[ii];
     }
 
     /* ========== 11. Store RHS ========== */

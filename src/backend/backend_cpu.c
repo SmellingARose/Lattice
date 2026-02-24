@@ -164,7 +164,7 @@ void backend_compute_rhs_packed(meshblock_pack_t *pack, const sim_params_t *p)
 
             /* Rebuild per-field pointers when block changes */
             if (b != last_b) {
-                for (int f = 0; f < NUM_FIELDS; f++) {
+                for (int f = 0; f < pack->n_fields; f++) {
                     size_t base = (size_t)f * nb * npts + (size_t)b * npts;
                     src_ptrs[f] = pack->data + base;
                     rhs_ptrs[f] = pack->rhs  + base;
@@ -208,6 +208,7 @@ void backend_compute_rhs_packed(meshblock_pack_t *pack, const sim_params_t *p)
  */
 void backend_sommerfeld_packed(meshblock_pack_t *pack, const sim_params_t *p)
 {
+    (void)p;  /* field count now comes from pack->n_fields */
     int lo = pack->ghost;
     int hi = pack->ghost + pack->N;
     int Nt = pack->Ntotal;
@@ -219,7 +220,7 @@ void backend_sommerfeld_packed(meshblock_pack_t *pack, const sim_params_t *p)
         /* Per-field pointer arrays into pack layout for this block */
         double *rhs_ptrs[NUM_FIELDS];
         const double *src_ptrs[NUM_FIELDS];
-        for (int f = 0; f < NUM_FIELDS; f++) {
+        for (int f = 0; f < pack->n_fields; f++) {
             size_t base = (size_t)f * nb * npts + (size_t)b * npts;
             src_ptrs[f] = pack->data + base;
             rhs_ptrs[f] = pack->rhs  + base;
@@ -293,7 +294,7 @@ void backend_sommerfeld_packed(meshblock_pack_t *pack, const sim_params_t *p)
                      *      + (f_asymptotic - f) / r
                      * Skip EM fields when disabled (saves 6/31 iterations).
                      * Ref: GRChombo BoundaryConditions.cpp:593-661 */
-                    int nf = p->em_enabled ? NUM_FIELDS : NUM_CCZ4_FIELDS;
+                    int nf = pack->n_fields;
                     for (int field = 0; field < nf; field++) {
                         double sommerfeld = 0.0;
 
@@ -484,7 +485,7 @@ static void packed_exchange_same_level(meshblock_pack_t *pack)
 
             int nx = dx_hi - dx_lo;
 
-            for (int f = 0; f < NUM_FIELDS; f++) {
+            for (int f = 0; f < pack->n_fields; f++) {
                 size_t dst_base = (size_t)f * nb * npts + (size_t)b * npts;
                 size_t src_base = (size_t)f * nb * npts + (size_t)nbr * npts;
 
@@ -534,11 +535,11 @@ static void packed_restrict_to_coarse(meshblock_pack_t *pack)
         int r = pack->refined_map[b];
         if (r < 0) continue;
 
-        for (int f = 0; f < NUM_FIELDS; f++) {
+        for (int f = 0; f < pack->n_fields; f++) {
             const double *src = pack->data
                 + (size_t)f * nb * npts + (size_t)b * npts;
             double *dst = pack->coarse_data
-                + (size_t)r * NUM_FIELDS * cnpts + (size_t)f * cnpts;
+                + (size_t)r * pack->n_fields * cnpts + (size_t)f * cnpts;
 
             for (int ck = ghost_c; ck < ghost_c + N_c; ck++) {
                 int fk_base = 2 * (ck - ghost_c) + ghost_f;
@@ -622,10 +623,10 @@ static void packed_fill_coarse_buf_ghosts(meshblock_pack_t *pack)
 
                 int nx = dx_hi - dx_lo;
 
-                for (int f = 0; f < NUM_FIELDS; f++) {
-                    size_t dst_off = (size_t)r * NUM_FIELDS * cnpts
+                for (int f = 0; f < pack->n_fields; f++) {
+                    size_t dst_off = (size_t)r * pack->n_fields * cnpts
                                    + (size_t)f * cnpts;
-                    size_t src_off = (size_t)coarse_nbr * NUM_FIELDS * cnpts
+                    size_t src_off = (size_t)coarse_nbr * pack->n_fields * cnpts
                                    + (size_t)f * cnpts;
 
                     for (int k = 0; k < (dz_hi - dz_lo); k++) {
@@ -669,8 +670,8 @@ static void packed_fill_coarse_buf_ghosts(meshblock_pack_t *pack)
                 ghost_range_pack(oz, ghost, N_c, Nt_c,
                                  &dz_lo, &dz_hi, &dummy5, &dummy6);
 
-                for (int f = 0; f < NUM_FIELDS; f++) {
-                    size_t dst_off = (size_t)r * NUM_FIELDS * cnpts
+                for (int f = 0; f < pack->n_fields; f++) {
+                    size_t dst_off = (size_t)r * pack->n_fields * cnpts
                                    + (size_t)f * cnpts;
                     size_t src_off = (size_t)f * nb * npts
                                    + (size_t)pack_nbr * npts;
@@ -738,9 +739,9 @@ static void packed_fill_coarse_boundary(meshblock_pack_t *pack)
         int zm = pack->nblevel_table[b*27 + 0*9 + 1*3 + 1] < 0;
         int zp = pack->nblevel_table[b*27 + 2*9 + 1*3 + 1] < 0;
 
-        for (int f = 0; f < NUM_FIELDS; f++) {
+        for (int f = 0; f < pack->n_fields; f++) {
             double *data = pack->coarse_data
-                + (size_t)r * NUM_FIELDS * cnpts + (size_t)f * cnpts;
+                + (size_t)r * pack->n_fields * cnpts + (size_t)f * cnpts;
 
             /* X-faces */
             if (xm) {
@@ -847,9 +848,9 @@ static void packed_prolongate_fine_ghosts(meshblock_pack_t *pack)
 
         int blk_level = pack->levels[b];
 
-        for (int f = 0; f < NUM_FIELDS; f++) {
+        for (int f = 0; f < pack->n_fields; f++) {
             const double *csrc = pack->coarse_data
-                + (size_t)r * NUM_FIELDS * cnpts + (size_t)f * cnpts;
+                + (size_t)r * pack->n_fields * cnpts + (size_t)f * cnpts;
             double *fdata = pack->data
                 + (size_t)f * nb * npts + (size_t)b * npts;
 

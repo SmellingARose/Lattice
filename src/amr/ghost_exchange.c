@@ -106,7 +106,7 @@ static void exchange_neighbor(block_t *b, const block_t *nbr,
 
     int nx = dx_hi - dx_lo;
 
-    for (int f = 0; f < NUM_FIELDS; f++) {
+    for (int f = 0; f < dg->n_fields; f++) {
         for (int k = 0; k < (dz_hi - dz_lo); k++) {
             int dk = dz_lo + k;
             int sk = sz_lo + k;
@@ -145,7 +145,7 @@ static void exchange_grid_pair(grid_t *dg, const grid_t *sg,
 
     int nx = dx_hi - dx_lo;
 
-    for (int f = 0; f < NUM_FIELDS; f++) {
+    for (int f = 0; f < dg->n_fields; f++) {
         for (int k = 0; k < (dz_hi - dz_lo); k++) {
             int dk = dz_lo + k;
             int sk = sz_lo + k;
@@ -225,7 +225,7 @@ static void copy_from_coarse_grid(grid_t *dst, const double *dst_origin,
     ghost_range(oy, ghost_d, N_d, Nt_d, &dy_lo, &dy_hi, &dummy_s3, &dummy_s4);
     ghost_range(oz, ghost_d, N_d, Nt_d, &dz_lo, &dz_hi, &dummy_s5, &dummy_s6);
 
-    for (int f = 0; f < NUM_FIELDS; f++) {
+    for (int f = 0; f < dst->n_fields; f++) {
         for (int k = dz_lo; k < dz_hi; k++) {
             int sk = k + off_k;
             if (sk < 0 || sk >= src->Ntotal) continue;
@@ -337,7 +337,7 @@ static void fill_coarse_buf_boundary(block_t *b)
         c[d][2] = t * (t - 1.0) / 2.0;
     }
 
-    for (int f = 0; f < NUM_FIELDS; f++) {
+    for (int f = 0; f < cg->n_fields; f++) {
         double *data = cg->fields[f];
 
         /* X-faces: extrapolate in i for ALL j, k (full array width).
@@ -456,7 +456,7 @@ static void prolongate_from_own_coarse_buf(block_t *b)
     const int ghost_c = cg->ghost;
     const int half = PROLONG_STENCIL / 2;
 
-    for (int f = 0; f < NUM_FIELDS; f++) {
+    for (int f = 0; f < fg->n_fields; f++) {
         const double *src = cg->fields[f];
 
         for (int fk = 0; fk < Nt_f; fk++) {
@@ -618,20 +618,20 @@ void ghost_fill_from_coarser(mesh_t *m, int fine_level, double frac)
 
                     /* Allocate temporary for interpolated fields */
                     double *interp_ptrs[NUM_FIELDS];
-                    double *interp_block = malloc((size_t)NUM_FIELDS * npts
+                    double *interp_block = malloc((size_t)cg->n_fields * npts
                                                    * sizeof(double));
                     if (!interp_block) {
                         fprintf(stderr, "ghost_fill_from_coarser: malloc failed\n");
                         exit(1);
                     }
-                    for (int f = 0; f < NUM_FIELDS; f++)
+                    for (int f = 0; f < cg->n_fields; f++)
                         interp_ptrs[f] = interp_block + f * npts;
 
                     block_time_interp(nbr, frac, interp_ptrs, npts);
 
                     /* Temporarily swap fields to interpolated data for copy */
                     double *saved_fields[NUM_FIELDS];
-                    for (int f = 0; f < NUM_FIELDS; f++) {
+                    for (int f = 0; f < cg->n_fields; f++) {
                         saved_fields[f] = cg->fields[f];
                         cg->fields[f] = interp_ptrs[f];
                     }
@@ -640,7 +640,7 @@ void ghost_fill_from_coarser(mesh_t *m, int fine_level, double frac)
                                           cg, nbr->origin, ox, oy, oz);
 
                     /* Restore original fields */
-                    for (int f = 0; f < NUM_FIELDS; f++)
+                    for (int f = 0; f < cg->n_fields; f++)
                         cg->fields[f] = saved_fields[f];
 
                     free(interp_block);

@@ -3,6 +3,37 @@
 > **Note:** When adding/removing/renaming files or functions, also update
 > `docs/architecture.html` — the living map of the codebase structure.
 
+## 2026-02-23: Tier 1 complete + position-dependent eta
+
+Three changes completing all remaining Tier 1 optimizations plus one Phase 3 item:
+
+**1. Position-dependent eta** (`params.h`, `ccz4_rhs.c`)
+Gamma-driver shift damping: `eta(x) = eta_0 / W(x)` where `W = sqrt(chi)`.
+Increases damping near punctures (chi→0) for stable unequal-mass evolution.
+Gated behind `position_dependent_eta` flag (default 1). Guards: `fmax(chi, 1e-6)`
+for sqrt, `fmax(W, 1e-6)` for division. Ref: arXiv:1003.0859.
+
+**2. Fused d1/d2 stencil** (`finite_diff.h`, `ccz4_rhs.c`)
+New `fd_d1_d2()` inline: loads 7 stencil points once, computes both 1st and 2nd
+derivatives. Merged separate d1 loop (section 2) and d2 diagonal loop (section 3)
+in `ccz4_rhs_point()` for the 11 fields needing both (chi, lapse, h_ij(6),
+shift^i(3)). Eliminates ~40% redundant memory loads in the RHS kernel.
+Both 6th-order (7-point) and 4th-order (5-point) versions provided.
+Convergence order unchanged: 6.56 / 6.25.
+
+**3. Conditional EM allocation** (`grid_alloc_ex` + n_fields threading)
+When `--em` is off (default), allocate only 25 fields instead of 31, saving 19%
+memory (~1.2 GB at N=128). Added `n_fields` member to `grid_t`, `mesh_t`,
+`meshblock_pack_t`. New `_ex()` API variants (`grid_alloc_ex`, `mesh_create_ex`,
+`meshblock_pack_create` with n_fields). Old APIs are backward-compatible wrappers
+defaulting to `NUM_FIELDS`. Converted ~50 `NUM_FIELDS` → `n_fields` references
+across 17 source files: grid, block, mesh, ghost_exchange, prolongation,
+restriction, refine, meshblock_pack, rk4, backend_cpu, backend_gpu, sommerfeld,
+dissipation, main. All field loops iterate `f < n_fields` instead of `f < NUM_FIELDS`.
+
+All tests pass: flat (4.9e-14), convergence (6.56/6.25), AMR evolve (8/8),
+AMR mesh (33/33), Maxwell (15/15), subcycle (7/7).
+
 ## 2026-02-23: Fix two AMR packed-stepper bugs (test_amr_evolve 8/8)
 
 **Bug 1: ghost_fill_from_coarser ordering (Test 2 NaN)**

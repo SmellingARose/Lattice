@@ -79,6 +79,30 @@ static inline double fd_d2(const double *f, int idx, int s, double dx)
 }
 
 /*
+ * 6th-order fused first + second derivative (diagonal d2 only).
+ * Loads 7 stencil points once, computes both d1 and d2, saving ~40%
+ * memory loads for fields needing both derivatives.
+ * Ref: Fornberg table, 6th-order centered d1 + d2
+ */
+static inline void fd_d1_d2(const double *f, int idx, int s, double dx,
+                            double *out_d1, double *out_d2)
+{
+    double fm3 = f[idx - 3*s], fm2 = f[idx - 2*s], fm1 = f[idx - s];
+    double f0  = f[idx];
+    double fp1 = f[idx + s],   fp2 = f[idx + 2*s], fp3 = f[idx + 3*s];
+
+    /* d1: [-1/60, 3/20, -3/4, 0, 3/4, -3/20, 1/60] / dx */
+    *out_d1 = (-(1.0/60.0)*fm3 + (3.0/20.0)*fm2 - (3.0/4.0)*fm1
+               + (3.0/4.0)*fp1 - (3.0/20.0)*fp2 + (1.0/60.0)*fp3) / dx;
+
+    /* d2: [1/90, -3/20, 3/2, -49/18, 3/2, -3/20, 1/90] / dx^2 */
+    double dx2 = dx * dx;
+    *out_d2 = ((1.0/90.0)*fm3 - (3.0/20.0)*fm2 + (3.0/2.0)*fm1
+              - (49.0/18.0)*f0
+              + (3.0/2.0)*fp1 - (3.0/20.0)*fp2 + (1.0/90.0)*fp3) / dx2;
+}
+
+/*
  * 6th-order mixed second derivative: d^2 f / (d x_a d x_b)
  * 7×7 tensor product of 6th-order d1 weights.
  * 6 distinct weight magnitudes from products of {1/60, 3/20, 3/4}.
@@ -251,6 +275,29 @@ static inline double fd_d2(const double *f, int idx, int s, double dx)
              - (5.0 /  2.0) * f[idx]
              + (4.0 /  3.0) * f[idx +   s]
              - (1.0 / 12.0) * f[idx + 2*s] ) / dx2;
+}
+
+/*
+ * 4th-order fused first + second derivative (diagonal d2 only).
+ * Loads 5 stencil points once, computes both d1 and d2.
+ * Ref: Fornberg table, 4th-order centered d1 + d2
+ */
+static inline void fd_d1_d2(const double *f, int idx, int s, double dx,
+                            double *out_d1, double *out_d2)
+{
+    double fm2 = f[idx - 2*s], fm1 = f[idx - s];
+    double f0  = f[idx];
+    double fp1 = f[idx + s],   fp2 = f[idx + 2*s];
+
+    /* d1: [1/12, -2/3, 0, 2/3, -1/12] / dx */
+    *out_d1 = ((1.0/12.0)*fm2 - (2.0/3.0)*fm1
+               + (2.0/3.0)*fp1 - (1.0/12.0)*fp2) / dx;
+
+    /* d2: [-1/12, 4/3, -5/2, 4/3, -1/12] / dx^2 */
+    double dx2 = dx * dx;
+    *out_d2 = (-(1.0/12.0)*fm2 + (4.0/3.0)*fm1
+              - (5.0/2.0)*f0
+              + (4.0/3.0)*fp1 - (1.0/12.0)*fp2) / dx2;
 }
 
 /*

@@ -93,13 +93,17 @@ output slices work on AMR meshes.
 - **6th-order operators:** FD stencils, KO dissipation, AMR prolongation (7-point)
   and restriction (6-point) all upgraded from 4th to 6th order. 4th-order Sommerfeld
   BCs. Quartic temporal interpolation for subcycling.
-- **Tier 1 optimizations (committed):** LTO for CPU builds, fast-path `pow(lapse,1)`,
+- **Tier 1 optimizations (all complete):** LTO for CPU builds, fast-path `pow(lapse,1)`,
   `restrict` qualifiers on RHS pointers, skip EM fields in dissipation/Sommerfeld,
   OMP-parallelized packed ghost exchange, flattened RK4 update loops (single OMP
   region over all fields), hoisted GPU grid_t construction, pre-computed
-  restriction/prolongation weight product tables (232 entries, bit-exact verified).
-- **Remaining Tier 1:** Conditional EM allocation (`grid_alloc_ex`), fused d1/d2
-  stencil in `finite_diff.h` + `ccz4_rhs.c`.
+  restriction/prolongation weight product tables (232 entries, bit-exact verified),
+  fused d1/d2 stencil (`fd_d1_d2()` loads 7 points once for both derivatives),
+  conditional EM allocation (`grid_alloc_ex` with `n_fields` threaded through all
+  subsystems — 25 fields when EM disabled, 19% memory savings).
+- **Position-dependent eta:** `eta(x) = eta_0 / W(x)` where `W = sqrt(chi)` for
+  stable unequal-mass binary evolution. Gated behind `position_dependent_eta` flag
+  (default 1). Ref: arXiv:1003.0859 (Muller & Brugmann).
 - **N-body initial data:** FAS multigrid constraint solver (FMG + Newton-Gauss-Seidel, 8-color GPU-compatible), O(N³) solve to discretization accuracy, arbitrary puncture count. BY 1-field + HiSpID 4-field coupled solvers.
 - **Einstein-Maxwell:** 6 new evolved fields (E^i, B^i), conformal Maxwell evolution with constraint damping, EM stress-energy coupling to CCZ4 (gated by `--em` flag), charged puncture initial data via `--puncture M,x,y,z,Px,Py,Pz,Sx,Sy,Sz,Q`.
 - **Spin:** Bowen-York spinning punctures + HiSpID high-spin initial data (quasi-isotropic Kerr conformal metric, coupled 4-field relaxation).

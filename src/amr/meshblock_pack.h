@@ -51,7 +51,7 @@ typedef struct {
 
     int      n_blocks;     /* number of blocks in this pack                */
     size_t   npts;         /* grid points per block = Ntotal^3             */
-    int      n_fields;     /* NUM_FIELDS (25)                              */
+    int      n_fields;     /* active fields per block (<= NUM_FIELDS)      */
 
     int     *block_ids;    /* which block IDs are packed [n_blocks]         */
     int      level;        /* level of blocks in this pack (-1 = mixed)    */
@@ -111,10 +111,11 @@ typedef struct {
  * block_ids: array of mesh-level block IDs to include [n_blocks].
  * level: refinement level (-1 = mixed levels, normal for AMR).
  * rk_method: determines whether to allocate accum buffer.
+ * n_fields: active field count (<= NUM_FIELDS).
  */
 meshblock_pack_t *meshblock_pack_create(int n_blocks, size_t npts,
                                          const int *block_ids, int level,
-                                         rk_method_t rk_method);
+                                         rk_method_t rk_method, int n_fields);
 
 /* Free pack and all its buffers (data, rhs, scratch, accum, metadata) */
 void meshblock_pack_free(meshblock_pack_t *pack);

@@ -92,7 +92,7 @@ static double *pack_alloc_double(size_t count)
  */
 meshblock_pack_t *meshblock_pack_create(int n_blocks, size_t npts,
                                          const int *block_ids, int level,
-                                         rk_method_t rk_method)
+                                         rk_method_t rk_method, int n_fields)
 {
     meshblock_pack_t *pack = calloc(1, sizeof(meshblock_pack_t));
     if (!pack) {
@@ -102,12 +102,12 @@ meshblock_pack_t *meshblock_pack_create(int n_blocks, size_t npts,
 
     pack->n_blocks = n_blocks;
     pack->npts     = npts;
-    pack->n_fields = NUM_FIELDS;
+    pack->n_fields = n_fields;
     pack->level    = level;
 
     /* Core field buffers: n_fields * n_blocks * npts doubles each.
      * Page-aligned for zero-copy GPU mapping. */
-    size_t total_doubles = (size_t)NUM_FIELDS * n_blocks * npts;
+    size_t total_doubles = (size_t)pack->n_fields * n_blocks * npts;
     size_t total_bytes   = total_doubles * sizeof(double);
 
     pack->data    = pack_alloc_block(total_bytes);
@@ -209,7 +209,7 @@ void meshblock_pack_load(meshblock_pack_t *pack, block_t **blocks)
         block_t *blk = blocks[pack->block_ids[b]];
         size_t npts = pack->npts;
 
-        for (int f = 0; f < NUM_FIELDS; f++) {
+        for (int f = 0; f < pack->n_fields; f++) {
             size_t dst_off = (size_t)f * pack->n_blocks * npts
                            + (size_t)b * npts;
             memcpy(pack->data    + dst_off, blk->grid->fields[f],
@@ -236,7 +236,7 @@ void meshblock_pack_store(const meshblock_pack_t *pack, block_t **blocks)
         block_t *blk = blocks[pack->block_ids[b]];
         size_t npts = pack->npts;
 
-        for (int f = 0; f < NUM_FIELDS; f++) {
+        for (int f = 0; f < pack->n_fields; f++) {
             size_t src_off = (size_t)f * pack->n_blocks * npts
                            + (size_t)b * npts;
             memcpy(blk->grid->fields[f],  pack->data    + src_off,
@@ -339,7 +339,7 @@ void meshblock_pack_load_meta(meshblock_pack_t *pack, block_t **blocks)
         /* Contiguous buffer for all refined blocks' coarse_bufs.
          * Layout: coarse_data[r * n_fields * coarse_npts + f * coarse_npts + idx]
          * where r = refined_map[b] is the coarse_data slot for block b. */
-        size_t coarse_total = (size_t)n_refined * NUM_FIELDS * pack->coarse_npts;
+        size_t coarse_total = (size_t)n_refined * pack->n_fields * pack->coarse_npts;
         pack->coarse_data = pack_alloc_block(coarse_total * sizeof(double));
 
         /* Neighbor table for coarse_bufs (filled by build_neighbors) */
@@ -464,8 +464,8 @@ void meshblock_pack_load_coarse(meshblock_pack_t *pack, block_t **blocks)
         block_t *blk = blocks[pack->block_ids[b]];
         if (!blk->coarse_buf) continue;
 
-        for (int f = 0; f < NUM_FIELDS; f++) {
-            size_t dst_off = (size_t)r * NUM_FIELDS * cnpts
+        for (int f = 0; f < pack->n_fields; f++) {
+            size_t dst_off = (size_t)r * pack->n_fields * cnpts
                            + (size_t)f * cnpts;
             memcpy(pack->coarse_data + dst_off,
                    blk->coarse_buf->fields[f],
@@ -491,8 +491,8 @@ void meshblock_pack_store_coarse(const meshblock_pack_t *pack, block_t **blocks)
         block_t *blk = blocks[pack->block_ids[b]];
         if (!blk->coarse_buf) continue;
 
-        for (int f = 0; f < NUM_FIELDS; f++) {
-            size_t src_off = (size_t)r * NUM_FIELDS * cnpts
+        for (int f = 0; f < pack->n_fields; f++) {
+            size_t src_off = (size_t)r * pack->n_fields * cnpts
                            + (size_t)f * cnpts;
             memcpy(blk->coarse_buf->fields[f],
                    pack->coarse_data + src_off,

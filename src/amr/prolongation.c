@@ -130,7 +130,7 @@ void prolongate_field(const grid_t *coarse_g, int cf,
 
 void prolongate_all(const grid_t *coarse_g, grid_t *fine_g)
 {
-    for (int f = 0; f < NUM_FIELDS; f++) {
+    for (int f = 0; f < coarse_g->n_fields; f++) {
         prolongate_field(coarse_g, f, fine_g, f);
     }
 }

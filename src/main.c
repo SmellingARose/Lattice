@@ -266,7 +266,8 @@ int main(int argc, char **argv)
 
     if (p.amr.enabled) {
         /* === AMR path === */
-        mesh_t *m = mesh_create(p.amr.N_root, p.amr.N_block, p.L, p.rk_method);
+        mesh_t *m = mesh_create_ex(p.amr.N_root, p.amr.N_block, p.L, p.rk_method,
+                                    p.em_enabled ? NUM_FIELDS : NUM_CCZ4_FIELDS);
         p.dx = m->dx_base;
         p.dt = p.CFL * p.dx;
         int N_eff = p.amr.N_root * p.amr.N_block;
@@ -309,7 +310,7 @@ int main(int argc, char **argv)
                 int Nt_b = b->grid->Ntotal;
                 int Nt_g = tmp->Ntotal;
 
-                for (int f = 0; f < NUM_FIELDS; f++) {
+                for (int f = 0; f < tmp->n_fields; f++) {
                     double *dst = b->grid->fields[f];
                     const double *src = tmp->fields[f];
                     /* Copy interior + ghost zones (clamp to temp grid bounds) */

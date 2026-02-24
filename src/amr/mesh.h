@@ -32,14 +32,16 @@ typedef struct mesh_s {
     double      dx_base;      /* coarsest dx = L / (N_root * N_block)      */
     int         N_root;       /* root blocks per side                      */
     rk_method_t rk_method;    /* time integrator for block allocation      */
+    int         n_fields;     /* active fields per block (<= NUM_FIELDS)   */
 } mesh_t;
 
 /*
- * Create a uniform mesh: N_root^3 blocks at level 0.
- *   N_root:  root blocks per side (e.g. 1 for single block, 4 for 64 blocks)
- *   N_block: interior cells per block side (e.g. 32)
- *   L:       physical domain size
- *   method:  RK method (determines memory allocation per block)
+ * Create a uniform mesh with explicit field count.
+ *   N_root:   root blocks per side (e.g. 1 for single block, 4 for 64 blocks)
+ *   N_block:  interior cells per block side (e.g. 32)
+ *   L:        physical domain size
+ *   method:   RK method (determines memory allocation per block)
+ *   n_fields: active field count (<= NUM_FIELDS)
  *
  * Blocks are created in Morton (Z-order) and assigned sequential IDs.
  * All 26 neighbors + nblevel tables are computed.
@@ -47,7 +49,15 @@ typedef struct mesh_s {
  *
  * Effective resolution: N_eff = N_root * N_block per side.
  */
-mesh_t *mesh_create(int N_root, int N_block, double L, rk_method_t method);
+mesh_t *mesh_create_ex(int N_root, int N_block, double L, rk_method_t method,
+                       int n_fields);
+
+/* Backward-compatible wrapper: creates mesh with all NUM_FIELDS fields. */
+static inline mesh_t *mesh_create(int N_root, int N_block, double L,
+                                  rk_method_t method)
+{
+    return mesh_create_ex(N_root, N_block, L, method, NUM_FIELDS);
+}
 
 /* Free mesh and all its blocks */
 void mesh_free(mesh_t *m);

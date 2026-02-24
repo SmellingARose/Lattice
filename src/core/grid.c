@@ -26,7 +26,7 @@ static double *alloc_block(size_t total_bytes)
     return (double *)ptr;
 }
 
-grid_t *grid_alloc(int N, double L, rk_method_t method)
+grid_t *grid_alloc_ex(int N, double L, rk_method_t method, int n_fields)
 {
     grid_t *g = calloc(1, sizeof(grid_t));
     if (!g) {
@@ -42,10 +42,11 @@ grid_t *grid_alloc(int N, double L, rk_method_t method)
     g->L      = L;
     g->dx     = L / N_padded;
     g->npoints = (size_t)g->Ntotal * g->Ntotal * g->Ntotal;
+    g->n_fields = n_fields;
 
-    /* Allocate contiguous blocks: NUM_FIELDS * npoints each.
+    /* Allocate contiguous blocks: n_fields * npoints each.
      * CK45 needs only 3 blocks (fields, rhs, scratch=dU); classic needs 4. */
-    size_t block_bytes = (size_t)NUM_FIELDS * g->npoints * sizeof(double);
+    size_t block_bytes = (size_t)n_fields * g->npoints * sizeof(double);
     g->fields_block  = alloc_block(block_bytes);
     g->rhs_block     = alloc_block(block_bytes);
     g->scratch_block = alloc_block(block_bytes);
@@ -56,12 +57,19 @@ grid_t *grid_alloc(int N, double L, rk_method_t method)
         g->accum_block = NULL;
     }
 
-    /* Point per-field pointers into the contiguous blocks */
-    for (int f = 0; f < NUM_FIELDS; f++) {
+    /* Point per-field pointers into the contiguous blocks.
+     * Pointers for f >= n_fields are set to NULL. */
+    for (int f = 0; f < n_fields; f++) {
         g->fields[f]  = g->fields_block  + f * g->npoints;
         g->rhs[f]     = g->rhs_block     + f * g->npoints;
         g->scratch[f] = g->scratch_block + f * g->npoints;
         g->accum[f]   = g->accum_block ? g->accum_block + f * g->npoints : NULL;
+    }
+    for (int f = n_fields; f < NUM_FIELDS; f++) {
+        g->fields[f]  = NULL;
+        g->rhs[f]     = NULL;
+        g->scratch[f] = NULL;
+        g->accum[f]   = NULL;
     }
 
     return g;

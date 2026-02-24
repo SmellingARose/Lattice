@@ -121,12 +121,14 @@ typedef struct block_s {
  *   dx:       grid spacing at this level
  *   origin:   physical coordinates of block's low corner [3]
  *   method:   RK method (determines memory allocation)
+ *   n_fields: active field count (<= NUM_FIELDS)
  *
- * Internally calls grid_alloc(N_block, N_block*dx, method).
+ * Internally calls grid_alloc_ex(N_block, N_block*dx, method, n_fields).
  * All tree links initialized to -1, is_leaf = 1.
  */
 block_t *block_alloc(int id, int level, int N_block, double dx,
-                     const double origin[3], rk_method_t method);
+                     const double origin[3], rk_method_t method,
+                     int n_fields);
 
 /* Free a block and its grid data */
 void block_free(block_t *b);

@@ -39,7 +39,7 @@ static void prolongate_into_child(const block_t *parent, block_t *child,
     const int ghost = pg->ghost;
 
     /* Create temporary fine grid covering parent's entire domain */
-    grid_t *fine_tmp = grid_alloc(2 * N, pg->L, RK_CK45);
+    grid_t *fine_tmp = grid_alloc_ex(2 * N, pg->L, RK_CK45, pg->n_fields);
 
     /* Prolongate all fields from parent into fine_tmp */
     prolongate_all(pg, fine_tmp);
@@ -50,7 +50,7 @@ static void prolongate_into_child(const block_t *parent, block_t *child,
     grid_t *cg = child->grid;
     int fg = fine_tmp->ghost;
 
-    for (int f = 0; f < NUM_FIELDS; f++) {
+    for (int f = 0; f < pg->n_fields; f++) {
         /* Copy interior */
         for (int k = 0; k < N; k++) {
             for (int j = 0; j < N; j++) {
@@ -167,7 +167,7 @@ int mesh_refine_block(mesh_t *m, int block_id)
                 };
 
                 block_t *child = block_alloc(0, level + 1, N, child_dx,
-                                             origin, m->rk_method);
+                                             origin, m->rk_method, parent->grid->n_fields);
                 child->loc.lx1 = lx1;
                 child->loc.lx2 = lx2;
                 child->loc.lx3 = lx3;
@@ -222,7 +222,7 @@ static void restrict_child_into_parent(const block_t *child, block_t *parent,
     int p_off_j = cy * half_N;
     int p_off_k = cz * half_N;
 
-    for (int f = 0; f < NUM_FIELDS; f++) {
+    for (int f = 0; f < cg->n_fields; f++) {
         const double *src = cg->fields[f];
 
         for (int pk = 0; pk < half_N; pk++) {
@@ -495,7 +495,7 @@ int mesh_regrid(mesh_t *m, const amr_params_t *ap)
                 if (!b->on_boundary[face]) continue;
 
                 /* Fill boundary ghost cells by copying nearest interior plane */
-                for (int f = 0; f < NUM_FIELDS; f++) {
+                for (int f = 0; f < g->n_fields; f++) {
                     for (int k = 0; k < g->Ntotal; k++) {
                         for (int j = 0; j < g->Ntotal; j++) {
                             for (int i = 0; i < g->Ntotal; i++) {

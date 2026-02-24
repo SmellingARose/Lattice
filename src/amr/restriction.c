@@ -88,7 +88,7 @@ void restrict_field(const grid_t *fine_g, int ff,
 
 void restrict_all(const grid_t *fine_g, grid_t *coarse_g)
 {
-    for (int f = 0; f < NUM_FIELDS; f++) {
+    for (int f = 0; f < fine_g->n_fields; f++) {
         restrict_field(fine_g, f, coarse_g, f);
     }
 }
@@ -103,7 +103,7 @@ void restrict_to_coarse_buf(struct block_s *b)
     const int ghost_c = cg->ghost;
     const int N_c = cg->N;
 
-    for (int f = 0; f < NUM_FIELDS; f++) {
+    for (int f = 0; f < fg->n_fields; f++) {
         const double *src = fg->fields[f];
 
         for (int ck = ghost_c; ck < ghost_c + N_c; ck++) {

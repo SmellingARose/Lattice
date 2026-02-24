@@ -254,7 +254,8 @@ static void test_meshblock_pack(void)
 
     /* Create pack and load data */
     int ids[] = {0};
-    meshblock_pack_t *pack = meshblock_pack_create(1, g->npoints, ids, 0);
+    meshblock_pack_t *pack = meshblock_pack_create(1, g->npoints, ids, 0,
+                                                    RK_CLASSIC, NUM_FIELDS);
 
     meshblock_pack_load(pack, m->blocks);
 
@@ -305,7 +306,8 @@ static void test_multiblock_pack(void)
     for (int i = 0; i < 8; i++) ids[i] = i;
 
     size_t npts = m->blocks[0]->grid->npoints;
-    meshblock_pack_t *pack = meshblock_pack_create(8, npts, ids, 0);
+    meshblock_pack_t *pack = meshblock_pack_create(8, npts, ids, 0,
+                                                    RK_CLASSIC, NUM_FIELDS);
     meshblock_pack_load(pack, m->blocks);
 
     /* Verify pack layout: block 3's chi should be at correct offset */

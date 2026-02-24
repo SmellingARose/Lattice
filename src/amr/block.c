@@ -22,7 +22,7 @@
  * Unlike grid_alloc(), this does not pad N and does not allocate
  * RK scratch arrays since coarse_buf is never time-evolved.
  */
-static grid_t *coarse_buf_alloc(int N, double dx)
+static grid_t *coarse_buf_alloc(int N, double dx, int n_fields)
 {
     grid_t *g = calloc(1, sizeof(grid_t));
     if (!g) {
@@ -36,9 +36,10 @@ static grid_t *coarse_buf_alloc(int N, double dx)
     g->L      = N * dx;
     g->dx     = dx;
     g->npoints = (size_t)g->Ntotal * g->Ntotal * g->Ntotal;
+    g->n_fields = n_fields;
 
     /* Allocate only fields block (page-aligned for potential GPU use) */
-    size_t block_bytes = (size_t)NUM_FIELDS * g->npoints * sizeof(double);
+    size_t block_bytes = (size_t)n_fields * g->npoints * sizeof(double);
     void *ptr = NULL;
     if (posix_memalign(&ptr, PAGE_ALIGN, block_bytes) != 0) {
         fprintf(stderr, "coarse_buf_alloc: posix_memalign failed\n");
@@ -47,8 +48,10 @@ static grid_t *coarse_buf_alloc(int N, double dx)
     memset(ptr, 0, block_bytes);
     g->fields_block = (double *)ptr;
 
-    for (int f = 0; f < NUM_FIELDS; f++)
+    for (int f = 0; f < n_fields; f++)
         g->fields[f] = g->fields_block + f * g->npoints;
+    for (int f = n_fields; f < NUM_FIELDS; f++)
+        g->fields[f] = NULL;
 
     /* No RK arrays needed for coarse_buf */
     g->rhs_block = NULL;
@@ -83,7 +86,8 @@ const int nbr_offset[NUM_NEIGHBORS][3] = {
 };
 
 block_t *block_alloc(int id, int level, int N_block, double dx,
-                     const double origin[3], rk_method_t method)
+                     const double origin[3], rk_method_t method,
+                     int n_fields)
 {
     block_t *b = calloc(1, sizeof(block_t));
     if (!b) {
@@ -94,7 +98,7 @@ block_t *block_alloc(int id, int level, int N_block, double dx,
     /* Allocate grid: L_block = N_block * dx gives correct dx after padding.
      * N_block should be a multiple of 16 so grid_alloc doesn't change it. */
     double L_block = N_block * dx;
-    b->grid = grid_alloc(N_block, L_block, method);
+    b->grid = grid_alloc_ex(N_block, L_block, method, n_fields);
 
     /* Verify grid_alloc didn't pad N (it shouldn't if N_block is multiple of 16) */
     if (b->grid->N != N_block) {
@@ -110,7 +114,7 @@ block_t *block_alloc(int id, int level, int N_block, double dx,
     if (level > 0 && N_block >= 2) {
         int N_c = N_block / 2;
         double dx_c = 2.0 * dx;
-        b->coarse_buf = coarse_buf_alloc(N_c, dx_c);
+        b->coarse_buf = coarse_buf_alloc(N_c, dx_c, n_fields);
     } else {
         b->coarse_buf = NULL;
     }
@@ -174,7 +178,8 @@ void block_alloc_fields_old(block_t *b)
     if (!b || !b->grid || b->fields_old_block) return;
 
     size_t npts = b->grid->npoints;
-    size_t block_bytes = (size_t)NUM_FIELDS * npts * sizeof(double);
+    int nf = b->grid->n_fields;
+    size_t block_bytes = (size_t)nf * npts * sizeof(double);
 
     /* Allocate 4 contiguous blocks for quartic temporal interpolation:
      *   fields_old (U_n), fields_older (U_{n-1}),
@@ -192,11 +197,11 @@ void block_alloc_fields_old(block_t *b)
         }
         memset(ptr, 0, block_bytes);
         *backing[a] = (double *)ptr;
-        for (int f = 0; f < NUM_FIELDS; f++)
+        for (int f = 0; f < nf; f++)
             ptrs[a][f] = *backing[a] + f * npts;
     }
 
-    for (int f = 0; f < NUM_FIELDS; f++) {
+    for (int f = 0; f < nf; f++) {
         b->fields_old[f]   = ptrs[0][f];
         b->fields_older[f] = ptrs[1][f];
         b->rhs_old[f]      = ptrs[2][f];
@@ -240,11 +245,13 @@ void block_save_old(block_t *b)
      * fields_older ← fields_old, rhs_older ← rhs_old.
      * Ref: Chombo AMRLevel m_old_data save pattern. */
 
+    int nf = b->grid->n_fields;
+
     /* Swap fields_older ↔ fields_old (block + per-field pointers) */
     double *tmp_block = b->fields_older_block;
     b->fields_older_block = b->fields_old_block;
     b->fields_old_block = tmp_block;
-    for (int f = 0; f < NUM_FIELDS; f++) {
+    for (int f = 0; f < nf; f++) {
         double *tmp = b->fields_older[f];
         b->fields_older[f] = b->fields_old[f];
         b->fields_old[f] = tmp;
@@ -254,14 +261,14 @@ void block_save_old(block_t *b)
     tmp_block = b->rhs_older_block;
     b->rhs_older_block = b->rhs_old_block;
     b->rhs_old_block = tmp_block;
-    for (int f = 0; f < NUM_FIELDS; f++) {
+    for (int f = 0; f < nf; f++) {
         double *tmp = b->rhs_older[f];
         b->rhs_older[f] = b->rhs_old[f];
         b->rhs_old[f] = tmp;
     }
 
     /* Save current fields → fields_old (memcpy into the swapped buffer) */
-    for (int f = 0; f < NUM_FIELDS; f++)
+    for (int f = 0; f < nf; f++)
         memcpy(b->fields_old[f], b->grid->fields[f], npts * sizeof(double));
 
     /* Save current time as "old" */
@@ -286,7 +293,8 @@ void block_reset_interp(block_t *b)
 void block_save_rhs_old(block_t *b, const double *const *rhs_src, size_t npoints)
 {
     if (!b || !b->rhs_old_block) return;
-    for (int f = 0; f < NUM_FIELDS; f++)
+    int nf = b->grid->n_fields;
+    for (int f = 0; f < nf; f++)
         memcpy(b->rhs_old[f], rhs_src[f], npoints * sizeof(double));
 }
 
@@ -294,16 +302,17 @@ void block_time_interp(const block_t *b, double frac,
                         double *out[], size_t npoints)
 {
     if (!b || !b->fields_old_block || !b->grid) return;
+    int nf = b->grid->n_fields;
 
     if (b->interp_order == 0) {
         /* No history: copy fields_old (pre-step state) */
-        for (int f = 0; f < NUM_FIELDS; f++)
+        for (int f = 0; f < nf; f++)
             memcpy(out[f], b->fields_old[f], npoints * sizeof(double));
 
     } else if (b->interp_order <= 1 || !b->fields_older_block) {
         /* 1st-order: linear interpolation p(s) = (1-s)*U_old + s*U_new */
         double one_minus_frac = 1.0 - frac;
-        for (int f = 0; f < NUM_FIELDS; f++) {
+        for (int f = 0; f < nf; f++) {
             const double *old_f = b->fields_old[f];
             const double *new_f = b->grid->fields[f];
             double *dst = out[f];
@@ -337,7 +346,7 @@ void block_time_interp(const block_t *b, double frac,
         double w_Fn_dt   = w_Fn * dt;
         double w_Fnm1_dt = w_Fnm1 * dt;
 
-        for (int f = 0; f < NUM_FIELDS; f++) {
+        for (int f = 0; f < nf; f++) {
             const double *u_n   = b->fields_old[f];
             const double *u_n1  = b->grid->fields[f];
             const double *u_nm1 = b->fields_older[f];

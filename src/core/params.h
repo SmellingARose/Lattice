@@ -31,6 +31,7 @@ typedef struct {
     double lapse_power;        /* p in Bona-Masso, default 1                      */
     double shift_Gamma_coeff;  /* F in dt(beta^i) = F * B^i, default 0.75         */
     double eta;                /* damping in Gamma-driver: dt(B^i) -= eta*B^i     */
+    int    position_dependent_eta; /* eta(x) = eta/W(x), W=sqrt(chi). Ref: arXiv:1003.0859 */
     double lapse_advec_coeff;  /* advection coefficient for lapse, default 0       */
     double shift_advec_coeff;  /* advection coefficient for shift, default 0       */
 } gauge_params_t;
@@ -129,6 +130,7 @@ static inline sim_params_t default_params(void)
     p.gauge.lapse_power       = 1.0;
     p.gauge.shift_Gamma_coeff = 0.75;
     p.gauge.eta               = 1.0;
+    p.gauge.position_dependent_eta = 1;
     p.gauge.lapse_advec_coeff = 0.0;
     p.gauge.shift_advec_coeff = 0.0;
 
