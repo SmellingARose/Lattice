@@ -284,9 +284,9 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 
 <table class="file-table">
 <tr><th>File</th><th>Purpose</th></tr>
-<tr><td><code>grid.h / grid.c</code></td><td><code>grid_t</code> struct, page-aligned allocation (4096-byte), <code>IDX(g,i,j,k)</code> indexing macro, <code>COORD(g,i)</code> for physical coordinates. N padded to next multiple of 16.</td></tr>
+<tr><td><code>grid.h / grid.c</code></td><td><code>grid_t</code> struct with <code>int n_fields</code> for conditional field allocation. <code>grid_alloc_ex(N, L, method, n_fields)</code> allocates only active fields; <code>grid_alloc()</code> is a static inline wrapper defaulting to <code>NUM_FIELDS</code>. Page-aligned (4096-byte), <code>IDX(g,i,j,k)</code> indexing macro, <code>COORD(g,i)</code> for physical coordinates. N padded to next multiple of 16.</td></tr>
 <tr><td><code>fields.h</code></td><td>Field enum (<code>FIELD_CHI</code> through <code>FIELD_BM3</code>), symmetric tensor index table, loop macros (<code>FOR1</code>...<code>FOR4</code>), Kronecker delta.</td></tr>
-<tr><td><code>params.h</code></td><td><code>sim_params_t</code> with CCZ4 params (kappa1/2/3), gauge params (eta, lapse_coeff), AMR params, noise reduction params. <code>default_params()</code> inline.</td></tr>
+<tr><td><code>params.h</code></td><td><code>sim_params_t</code> with CCZ4 params (kappa1/2/3), gauge params (eta, lapse_coeff, <code>position_dependent_eta</code>), AMR params, noise reduction params. <code>default_params()</code> inline.</td></tr>
 <tr><td><code>timer.h</code></td><td>Header-only <code>TIMER_START</code>/<code>TIMER_STOP</code> macros via <code>clock_gettime(CLOCK_MONOTONIC)</code>.</td></tr>
 </table>
 
@@ -297,7 +297,7 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 
 <table class="file-table">
 <tr><th>File</th><th>Purpose</th></tr>
-<tr><td><code>ccz4_rhs.c</code></td><td>Full CCZ4 RHS including EM source terms. GPU-annotated. Ref: arXiv:1106.2254, GRChombo <code>CCZ4RHS.impl.hpp</code>.</td></tr>
+<tr><td><code>ccz4_rhs.c</code></td><td>Full CCZ4 RHS including EM source terms. Fused <code>fd_d1_d2()</code> stencil for 11 dual-derivative fields. Position-dependent eta: <code>eta(x) = eta_0 / sqrt(chi)</code>. GPU-annotated. Ref: arXiv:1106.2254, GRChombo <code>CCZ4RHS.impl.hpp</code>.</td></tr>
 <tr><td><code>maxwell_rhs.h/c</code></td><td>Conformal Maxwell evolution (E^i, B^i) with constraint damping. Ref: arXiv:0907.1151.</td></tr>
 <tr><td><code>dissipation.c</code></td><td>6th-order Kreiss-Oliger dissipation. Supports CAKO (curvature-adjusted: sigma_eff = sqrt(chi) * sigma) and per-field sigma (0.99 gauge, 0.3 physical).</td></tr>
 </table>
@@ -305,11 +305,11 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 <!-- ========================================== -->
 <h2 id="mod-numerics">Module: numerics/</h2>
 
-<p>Finite difference stencils and time integration. All derivatives go through <code>fd_d1()</code>, <code>fd_d2()</code>, <code>fd_d2_mixed()</code>, <code>fd_adv()</code>, and <code>fd_ko()</code> &mdash; direction-independent via a stride parameter. No hand-coded stencils anywhere (Critical Invariant #3). Two RK4 variants: classic (default, 4 stages, 4 memory blocks) and CK45 (5 stages, 3 blocks, 25% less memory).</p>
+<p>Finite difference stencils and time integration. All derivatives go through <code>fd_d1()</code>, <code>fd_d2()</code>, <code>fd_d1_d2()</code> (fused), <code>fd_d2_mixed()</code>, <code>fd_adv()</code>, and <code>fd_ko()</code> &mdash; direction-independent via a stride parameter. No hand-coded stencils anywhere (Critical Invariant #3). Two RK4 variants: classic (default, 4 stages, 4 memory blocks) and CK45 (5 stages, 3 blocks, 25% less memory).</p>
 
 <table class="file-table">
 <tr><th>File</th><th>Purpose</th></tr>
-<tr><td><code>finite_diff.h</code></td><td>Header-only 6th-order FD operators: centered 1st/2nd, mixed 2nd, upwind advection, KO dissipation. GPU-annotated. Compile-time <code>FD_ORDER</code> selects 4th or 6th order.</td></tr>
+<tr><td><code>finite_diff.h</code></td><td>Header-only 6th-order FD operators: centered 1st/2nd, fused 1st+2nd (<code>fd_d1_d2()</code>), mixed 2nd, upwind advection, KO dissipation. GPU-annotated. Compile-time <code>FD_ORDER</code> selects 4th or 6th order.</td></tr>
 <tr><td><code>rk4.c</code></td><td>Single-grid stepper (<code>rk4_step</code>) and AMR mesh stepper (<code>rk4_step_mesh</code>). Packed batch: all leaf blocks in one kernel per operation. Flattened update loops (single OMP region over all fields). Also <code>enforce_algebraic()</code>.</td></tr>
 <tr><td><code>interpolate.h</code></td><td>4th-order off-grid Lagrange interpolation (used by AH finder for field access at non-grid points).</td></tr>
 </table>
@@ -366,14 +366,14 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 
 <table class="file-table">
 <tr><th>File</th><th>Purpose</th></tr>
-<tr><td><code>block.h/c</code></td><td><code>block_t</code>: grid_t + coarse_buf + logical location + 26 neighbors + tree links.</td></tr>
-<tr><td><code>mesh.h/c</code></td><td><code>mesh_t</code>: block collection, Morton sort, multi-level neighbor finding.</td></tr>
+<tr><td><code>block.h/c</code></td><td><code>block_t</code>: grid_t + coarse_buf + logical location + 26 neighbors + tree links. <code>block_alloc()</code> takes <code>n_fields</code> for conditional allocation.</td></tr>
+<tr><td><code>mesh.h/c</code></td><td><code>mesh_t</code> with <code>int n_fields</code>: block collection, Morton sort, multi-level neighbor finding. <code>mesh_create_ex()</code> takes <code>n_fields</code>; <code>mesh_create()</code> is a backward-compatible wrapper.</td></tr>
 <tr><td><code>ghost_exchange.h/c</code></td><td>5-phase coarse-buffer multilevel ghost exchange (AthenaK pattern).</td></tr>
 <tr><td><code>prolongation.h/c</code></td><td>6th-order cell-centered Lagrange interpolation (coarse to fine). 7-point 1D stencil, 3D tensor product. Pre-computed <code>prolong_wkj[4][7][7]</code> weight products for 4 octant combos.</td></tr>
 <tr><td><code>restriction.h/c</code></td><td>6th-order Lagrange cell-average restriction (fine to coarse). 6-point symmetric stencil: w = {-17/11520, 97/3840, 2743/5760, ...}. Pre-computed <code>restrict_wkj[6][6]</code> weight products.</td></tr>
 <tr><td><code>criterion.h/c</code></td><td>Chi-gradient refinement criterion with hysteresis: (dx/chi^2)|grad(chi)|.</td></tr>
 <tr><td><code>refine.h/c</code></td><td>Oct-tree split (1 to 8), merge (8 to 1), 2:1 constraint cascade, full regrid cycle.</td></tr>
-<tr><td><code>meshblock_pack.h/c</code></td><td>GPU batch packing: contiguous buffers, per-block metadata, PACK_IDX macro.</td></tr>
+<tr><td><code>meshblock_pack.h/c</code></td><td>GPU batch packing: contiguous buffers, per-block metadata, PACK_IDX macro. <code>meshblock_pack_create()</code> takes <code>n_fields</code> from mesh for conditional allocation.</td></tr>
 <tr><td><code>morton.h</code></td><td>Header-only Morton Z-order encoding/decoding for space-filling curve block ordering.</td></tr>
 </table>
 

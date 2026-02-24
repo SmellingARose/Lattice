@@ -50,16 +50,16 @@
 <table>
 <tr><th>Improvement</th><th>What it means</th><th>Benefit</th><th>Effort</th><th>Status</th></tr>
 <tr><td class="good">Fix correctness bugs</td><td>0th-order restriction, CK45 k1 save, fast_inv_cbrt in refine</td><td>Correct AMR convergence</td><td>~35 LOC</td><td class="good">Done</td></tr>
-<tr><td>Position-dependent eta</td><td>Gamma-driver damping scales with local BH mass</td><td>Enables unequal-mass and N-body</td><td>1 line</td><td class="warn">Todo</td></tr>
+<tr><td class="good">Position-dependent eta</td><td>Gamma-driver damping scales with local BH mass</td><td>Enables unequal-mass and N-body</td><td>1 line</td><td class="good">Done</td></tr>
 <tr><td>CCZ3 formulation</td><td>Remove momentum constraint damping term</td><td>Stable to 10<sup>5</sup> M (100x longer)</td><td>1 line + flag</td><td class="warn">Todo</td></tr>
 <tr><td>Checkpoint/restart</td><td>Binary dump of all fields to disk</td><td>Survive crashes on multi-day runs</td><td>~300 LOC</td><td class="warn">Todo</td></tr>
 <tr><td>Waveform extraction</td><td>Psi4 on spheres &rarr; (l,m) modes &rarr; strain</td><td>Science output (GW waveforms)</td><td>~300 LOC</td><td class="warn">Todo</td></tr>
 <tr><td class="good">LTO + <code>__restrict__</code></td><td>Cross-TU inlining + pointer aliasing hints</td><td>8&ndash;23% CPU speedup</td><td>~5 LOC</td><td class="good">Done</td></tr>
-<tr><td>Fused d1/d2 stencil</td><td>Load 7 stencil points once for both derivatives</td><td>15&ndash;20% CPU, 5&ndash;10% GPU</td><td>~50 LOC</td><td class="warn">Todo</td></tr>
+<tr><td class="good">Fused d1/d2 stencil</td><td>Load 7 stencil points once for both derivatives</td><td>15&ndash;20% CPU, 5&ndash;10% GPU</td><td>~50 LOC</td><td class="good">Done</td></tr>
 <tr><td class="good">OpenMP ghost exchange</td><td>Parallelize packed ghost exchange + Sommerfeld on CPU</td><td>10&ndash;15% CPU</td><td>~5 LOC</td><td class="good">Done</td></tr>
 <tr><td>Persistent per-level packs</td><td>One pack per AMR level, survives across subcycle steps</td><td>15&ndash;30% CPU, eliminates 95% GPU PCIe</td><td>~200 LOC</td><td class="warn">Todo</td></tr>
 <tr><td>Compile-time EM dispatch</td><td>Separate build targets for CCZ4-only vs CCZ4+EM</td><td>4&ndash;5% (subsumes all EM overhead)</td><td>~20 LOC</td><td class="warn">Todo</td></tr>
-<tr><td>Conditional EM allocation</td><td>Skip 6 EM fields when <code>--em</code> off</td><td>19% memory savings</td><td>~20 LOC</td><td class="warn">Todo</td></tr>
+<tr><td class="good">Conditional EM allocation</td><td>Skip 6 EM fields when <code>--em</code> off</td><td>19% memory savings</td><td>~20 LOC</td><td class="good">Done</td></tr>
 <tr><td>Manual CSE in RHS</td><td>Cache repeated Christoffel/metric contractions</td><td>10&ndash;20% FLOP reduction</td><td>~50 LOC</td><td class="warn">Todo</td></tr>
 <tr><td>Dense output for subcycling</td><td>RK4 stage vectors for temporal interpolation</td><td>4th-order at AMR boundaries</td><td>~200 LOC</td><td class="warn">Todo</td></tr>
 <tr><td>enforce_algebraic on GPU</td><td>Move det/trace enforcement to device kernel</td><td>~130 ms/step saved on GPU</td><td>~60 LOC</td><td class="warn">Todo</td></tr>
@@ -90,13 +90,13 @@
 <li><span class="good">&#10003;</span> enforce_algebraic_block uses fast_inv_cbrt &mdash; <code>refine.c</code> fixed, removed <code>if (det > 0)</code> guard</li>
 </ol>
 
-<p class="tier-label" style="color: #3fb950;">Tier 1: Quick Wins <span style="font-weight: normal; color: #8b949e;">(days, 25&ndash;45% combined CPU improvement)</span></p>
+<p class="tier-label" style="color: #3fb950;">Tier 1: Quick Wins <span style="font-weight: normal; color: #8b949e;">(all complete)</span></p>
 <ol class="tier-items" start="4">
 <li><span class="good">&#10003;</span> LTO in Makefile (commit 32290ab)</li>
 <li><span class="good">&#10003;</span> <code>__restrict__</code> on RHS pointers (commit 32290ab)</li>
-<li>Fused d1/d2 stencil (~50 lines)</li>
+<li><span class="good">&#10003;</span> Fused d1/d2 stencil &mdash; <code>fd_d1_d2()</code> in <code>finite_diff.h</code>, merged sections 2+3 in <code>ccz4_rhs.c</code></li>
 <li><span class="good">&#10003;</span> OpenMP-parallelize ghost exchange + Sommerfeld (commit 32290ab)</li>
-<li>Conditional EM allocation (~20 lines)</li>
+<li><span class="good">&#10003;</span> Conditional EM allocation &mdash; <code>n_fields</code> threaded through grid/block/mesh/pack (25 fields when EM off, 19% memory savings)</li>
 <li><span class="good">&#10003;</span> Skip EM in dissipation/Sommerfeld (commit 32290ab)</li>
 <li><span class="good">&#10003;</span> Hoist GPU grid_t construction (commit 32290ab)</li>
 <li><span class="good">&#10003;</span> Flatten per-grid RK4 update &mdash; single OMP region (commit 32290ab)</li>
@@ -176,16 +176,19 @@
 
 <!-- ================================================================ -->
 <hr>
-<h2>1. Position-Dependent Eta</h2>
+<h2>1. Position-Dependent Eta <span class="good" style="font-size: 0.7em;">&#10003; Done</span></h2>
 
 <p>Most critical change for N-body. A global <span class="math">eta</span> that works for M=5 is wrong for M=0.5. Use <code>eta(x) = eta_0 / sqrt(chi)</code> (GRChombo 25-BH convention, arXiv:2505.01495). Alternative: <code>eta_0 / alpha</code>, similar but gauge-dependent.</p>
 
 <div class="card">
-<div class="card-header"><span class="card-title">Implementation</span> <span class="tag tag-rec">1 line change</span></div>
-<pre><span class="cm">// ccz4_rhs.c</span>
-<span class="kw">double</span> W = <span class="fn">sqrt</span>(<span class="fn">fmax</span>(chi, <span class="num">1e-10</span>));
-<span class="kw">double</span> eta_local = p->gauge.eta / W;
-rhs_B[ii] = ... + rhs_Gamma[ii] - eta_local * B[ii];</pre>
+<div class="card-header"><span class="card-title">Implementation</span> <span class="tag" style="background: #238636;">Done</span></div>
+<pre><span class="cm">// ccz4_rhs.c — gated behind position_dependent_eta flag (default 1)</span>
+<span class="kw">double</span> eta_eff = p->gauge.eta;
+<span class="kw">if</span> (p->gauge.position_dependent_eta) {
+    <span class="kw">double</span> W = <span class="fn">sqrt</span>(<span class="fn">fmax</span>(chi, <span class="num">1e-6</span>));
+    eta_eff /= <span class="fn">fmax</span>(W, <span class="num">1e-6</span>);
+}
+rhs_B[ii] = ... + rhs_Gamma[ii] - eta_eff * B[ii];</pre>
 </div>
 
 <!-- ================================================================ -->
@@ -296,9 +299,9 @@ The extraction sphere must not cross AMR refinement boundaries. Constrain regrid
 <p>Both packed ghost exchange and Sommerfeld BCs now use <code>#pragma omp parallel for schedule(dynamic)</code>. Commit 32290ab.</p>
 </div>
 
-<div class="card">
-<div class="card-header"><span class="card-title">Conditional EM allocation</span> <span class="tag tag-rec">19% memory</span></div>
-<p>The 6 EM fields are always allocated even when <code>--em</code> is off. Saves ~970 MB at N=256, ~4.5 GB for 200-block AMR. ~20 lines.</p>
+<div class="card" style="border-color: #238830;">
+<div class="card-header"><span class="card-title">Conditional EM allocation</span> <span class="tag tag-rec">DONE</span></div>
+<p><code>n_fields</code> threaded through <code>grid_t</code>, <code>block_t</code>, <code>mesh_t</code>, <code>meshblock_pack_t</code> and all ~50 field loops. <code>grid_alloc_ex()</code> / <code>mesh_create_ex()</code> / <code>meshblock_pack_create()</code> accept <code>n_fields</code>; old APIs are backward-compatible wrappers. 25 fields when EM off (19% memory savings). 17 source files, 1 test file.</p>
 </div>
 
 <div class="card">
@@ -308,9 +311,9 @@ The extraction sphere must not cross AMR refinement boundaries. Constrain regrid
 
 <h3>CPU</h3>
 
-<div class="card">
-<div class="card-header"><span class="card-title">Fused d1/d2 stencil</span> <span class="tag tag-rec">15&ndash;20% CPU, 5&ndash;10% GPU</span></div>
-<p>11 fields need both d1 and d2 per direction. Currently loads the same 7 stencil points twice. A fused <code>fd_d1_d2()</code> halves the load count: 33&times;3 = 99 redundant load sequences eliminated. ~50 lines.</p>
+<div class="card" style="border-color: #238830;">
+<div class="card-header"><span class="card-title">Fused d1/d2 stencil</span> <span class="tag tag-rec">DONE</span></div>
+<p><code>fd_d1_d2()</code> in <code>finite_diff.h</code> loads 7 stencil points once for both 1st and 2nd derivatives. Sections 2+3 in <code>ccz4_rhs.c</code> merged for 11 dual-derivative fields (chi, lapse, h_ij, shift^i). Both 6th-order (7-point) and 4th-order (5-point) versions. Convergence unchanged: 6.56/6.25.</p>
 </div>
 
 <div class="card">
