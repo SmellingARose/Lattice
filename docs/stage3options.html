@@ -48,26 +48,26 @@
 <!-- ================================================================ -->
 <h2>At a Glance</h2>
 <table>
-<tr><th>Improvement</th><th>What it means</th><th>Benefit</th><th>Effort</th><th>Status</th></tr>
-<tr><td class="good">Fix correctness bugs</td><td>0th-order restriction, CK45 k1 save, fast_inv_cbrt in refine</td><td>Correct AMR convergence</td><td>~35 LOC</td><td class="good">Done</td></tr>
-<tr><td class="good">Position-dependent eta</td><td>Gamma-driver damping scales with local BH mass</td><td>Enables unequal-mass and N-body</td><td>1 line</td><td class="good">Done</td></tr>
-<tr><td>CCZ3 formulation</td><td>Remove momentum constraint damping term</td><td>Stable to 10<sup>5</sup> M (100x longer)</td><td>1 line + flag</td><td class="warn">Todo</td></tr>
-<tr><td>Checkpoint/restart</td><td>Binary dump of all fields to disk</td><td>Survive crashes on multi-day runs</td><td>~300 LOC</td><td class="warn">Todo</td></tr>
-<tr><td>Waveform extraction</td><td>Psi4 on spheres &rarr; (l,m) modes &rarr; strain</td><td>Science output (GW waveforms)</td><td>~300 LOC</td><td class="warn">Todo</td></tr>
-<tr><td class="good">LTO + <code>__restrict__</code></td><td>Cross-TU inlining + pointer aliasing hints</td><td>8&ndash;23% CPU speedup</td><td>~5 LOC</td><td class="good">Done</td></tr>
-<tr><td class="good">Fused d1/d2 stencil</td><td>Load 7 stencil points once for both derivatives</td><td>15&ndash;20% CPU, 5&ndash;10% GPU</td><td>~50 LOC</td><td class="good">Done</td></tr>
-<tr><td class="good">OpenMP ghost exchange</td><td>Parallelize packed ghost exchange + Sommerfeld on CPU</td><td>10&ndash;15% CPU</td><td>~5 LOC</td><td class="good">Done</td></tr>
-<tr><td>Persistent per-level packs</td><td>One pack per AMR level, survives across subcycle steps</td><td>15&ndash;30% CPU, eliminates 95% GPU PCIe</td><td>~200 LOC</td><td class="warn">Todo</td></tr>
-<tr><td>Compile-time EM dispatch</td><td>Separate build targets for CCZ4-only vs CCZ4+EM</td><td>4&ndash;5% (subsumes all EM overhead)</td><td>~20 LOC</td><td class="warn">Todo</td></tr>
-<tr><td class="good">Conditional EM allocation</td><td>Skip 6 EM fields when <code>--em</code> off</td><td>19% memory savings</td><td>~20 LOC</td><td class="good">Done</td></tr>
-<tr><td>Manual CSE in RHS</td><td>Cache repeated Christoffel/metric contractions</td><td>10&ndash;20% FLOP reduction</td><td>~50 LOC</td><td class="warn">Todo</td></tr>
-<tr><td>Dense output for subcycling</td><td>RK4 stage vectors for temporal interpolation</td><td>4th-order at AMR boundaries</td><td>~200 LOC</td><td class="warn">Todo</td></tr>
-<tr><td>enforce_algebraic on GPU</td><td>Move det/trace enforcement to device kernel</td><td>~130 ms/step saved on GPU</td><td>~60 LOC</td><td class="warn">Todo</td></tr>
-<tr><td>Richardson refinement criteria</td><td>Truncation error estimate from AMR hierarchy</td><td>10&ndash;30% fewer blocks</td><td>~150 LOC</td><td class="warn">Todo</td></tr>
-<tr><td>3D output (XDMF)</td><td>Raw binary + XML for ParaView/VisIt</td><td>Visualization</td><td>~200 LOC</td><td class="warn">Todo</td></tr>
-<tr><td>N=10+ validation</td><td>Raise MAX_PUNCTURES, test solver at N=3+</td><td>Multi-body science</td><td>~50 LOC</td><td class="warn">Todo</td></tr>
-<tr><td>GPU optimizations</td><td>Device-side ghost, kernel splitting, occupancy tuning</td><td>2&ndash;5x GPU speedup</td><td>Medium&ndash;High</td><td class="warn">Todo</td></tr>
-<tr><td>Multi-GPU / MPI</td><td>Partition Morton-sorted blocks across ranks</td><td>Linear scaling to 1000s of GPUs</td><td>High</td><td class="warn">Future</td></tr>
+<tr><th>Improvement</th><th>What it means</th><th>Benefit</th><th>Effort</th><th>Nature</th><th>Status</th></tr>
+<tr><td class="good">Fix correctness bugs</td><td>0th-order restriction, CK45 k1 save, fast_inv_cbrt in refine</td><td>Correct AMR convergence</td><td>~35 LOC</td><td>&mdash;</td><td class="good">Done</td></tr>
+<tr><td class="good">Position-dependent eta</td><td>Gamma-driver damping scales with local BH mass</td><td>Enables unequal-mass and N-body</td><td>1 line</td><td>&mdash;</td><td class="good">Done</td></tr>
+<tr><td>CCZ3 formulation</td><td>Remove momentum constraint damping term</td><td>Stable to 10<sup>5</sup> M (100x longer)</td><td>~80 LOC</td><td class="note">Intellectual</td><td class="warn">Todo</td></tr>
+<tr><td>Checkpoint/restart</td><td>Binary dump of all fields to disk</td><td>Survive crashes on multi-day runs</td><td>~350 LOC</td><td>Mechanical</td><td class="warn">Todo</td></tr>
+<tr><td>Waveform extraction</td><td>Psi4 on spheres &rarr; (l,m) modes &rarr; strain</td><td>Science output (GW waveforms)</td><td>~400 LOC</td><td class="note">Intellectual</td><td class="warn">Todo</td></tr>
+<tr><td class="good">LTO + <code>__restrict__</code></td><td>Cross-TU inlining + pointer aliasing hints</td><td>8&ndash;23% CPU speedup</td><td>~5 LOC</td><td>&mdash;</td><td class="good">Done</td></tr>
+<tr><td class="good">Fused d1/d2 stencil</td><td>Load 7 stencil points once for both derivatives</td><td>15&ndash;20% CPU, 5&ndash;10% GPU</td><td>~50 LOC</td><td>&mdash;</td><td class="good">Done</td></tr>
+<tr><td class="good">OpenMP ghost exchange</td><td>Parallelize packed ghost exchange + Sommerfeld on CPU</td><td>10&ndash;15% CPU</td><td>~5 LOC</td><td>&mdash;</td><td class="good">Done</td></tr>
+<tr><td>Persistent per-level packs</td><td>One pack per AMR level, survives across subcycle steps</td><td>15&ndash;30% CPU, eliminates 95% GPU PCIe</td><td>~250 LOC</td><td class="note">Intellectual</td><td class="warn">Todo</td></tr>
+<tr><td>Compile-time EM dispatch</td><td>Separate build targets for CCZ4-only vs CCZ4+EM</td><td>4&ndash;5% (subsumes all EM overhead)</td><td>~30 LOC</td><td>Mechanical</td><td class="warn">Todo</td></tr>
+<tr><td class="good">Conditional EM allocation</td><td>Skip 6 EM fields when <code>--em</code> off</td><td>19% memory savings</td><td>~20 LOC</td><td>&mdash;</td><td class="good">Done</td></tr>
+<tr><td>Manual CSE in RHS</td><td>Cache repeated Christoffel/metric contractions</td><td>10&ndash;20% FLOP reduction</td><td>~60 LOC</td><td class="note">Intellectual</td><td class="warn">Todo</td></tr>
+<tr><td>Dense output for subcycling</td><td>RK4 stage vectors for temporal interpolation</td><td>4th-order at AMR boundaries</td><td>~250 LOC</td><td class="note">Intellectual</td><td class="warn">Todo</td></tr>
+<tr><td>enforce_algebraic on GPU</td><td>Move det/trace enforcement to device kernel</td><td>~130 ms/step saved on GPU</td><td>~70 LOC</td><td>Mechanical</td><td class="warn">Todo</td></tr>
+<tr><td>Richardson refinement criteria</td><td>Truncation error estimate from AMR hierarchy</td><td>10&ndash;30% fewer blocks</td><td>~170 LOC</td><td class="note">Intellectual</td><td class="warn">Todo</td></tr>
+<tr><td>3D output (XDMF)</td><td>Raw binary + XML for ParaView/VisIt</td><td>Visualization</td><td>~200 LOC</td><td>Mechanical</td><td class="warn">Todo</td></tr>
+<tr><td>N=10+ validation</td><td>Raise MAX_PUNCTURES, test solver at N=3+</td><td>Multi-body science</td><td>~50 LOC</td><td>Mechanical</td><td class="warn">Todo</td></tr>
+<tr><td>GPU optimizations</td><td>Device-side ghost, kernel splitting, occupancy tuning</td><td>2&ndash;5x GPU speedup</td><td>~1,100 LOC</td><td class="note">Intellectual</td><td class="warn">Todo</td></tr>
+<tr><td>Multi-GPU / MPI</td><td>Partition Morton-sorted blocks across ranks</td><td>Linear scaling to 1000s of GPUs</td><td>High</td><td class="note">Intellectual</td><td class="warn">Future</td></tr>
 <tr style="border-top: 2px solid #30363d"><td class="good">Fast-path pow + skip EM in dissipation</td><td>Eliminate slow pow(lapse,1) and skip 6 EM fields in KO/Sommerfeld</td><td>~2% CPU + reduced overhead</td><td>&mdash;</td><td class="good">Done</td></tr>
 <tr><td class="good">Flattened RK4 update + hoisted GPU grid_t</td><td>Single OMP region over all fields, pass grid as params</td><td>5&ndash;10% single-grid, better GPU occupancy</td><td>&mdash;</td><td class="good">Done</td></tr>
 <tr><td class="good">Pre-computed AMR weight tables</td><td>232-entry restriction/prolongation product tables (bit-exact verified)</td><td>Eliminates 4.6B multiplies</td><td>&mdash;</td><td class="good">Done</td></tr>
@@ -79,6 +79,26 @@
 <tr><td class="good">4th-order Sommerfeld BCs</td><td>5 Fornberg stencil variants, no 2nd-order fallback</td><td>Reduced boundary reflections</td><td>&mdash;</td><td class="good">Done</td></tr>
 <tr><td class="good">CAKO / SSL / per-field sigma</td><td>Chi-adjusted KO + slow-start lapse</td><td>2 orders less constraint violation near punctures</td><td>&mdash;</td><td class="good">Done</td></tr>
 </table>
+
+<!-- ================================================================ -->
+<h2>Remaining Work Summary</h2>
+
+<p>Tiers 0&ndash;1 are complete (14 items). Remaining through Tier 3: <strong>~4,900 lines</strong> across <strong>34 items</strong>.</p>
+
+<table>
+<tr><th>Metric</th><th>Count</th><th>Details</th></tr>
+<tr><td>Easy</td><td>13 items</td><td>~540 LOC &mdash; loop restructuring, pragma additions, array lookups, known patterns</td></tr>
+<tr><td>Medium</td><td>10 items</td><td>~780 LOC &mdash; hash tables, formulation flags, checkpoint I/O, ghost iteration</td></tr>
+<tr><td>Hard</td><td>7 items</td><td>~1,770 LOC &mdash; waveform extraction, persistent packs, dense output, IMEX, Richardson</td></tr>
+<tr><td>Very Hard</td><td>4 items</td><td>~1,520 LOC &mdash; device-side ghost exchange, kernel splitting, hyperbolic relaxation</td></tr>
+<tr style="border-top: 2px solid #30363d"><td><strong>Mechanical</strong></td><td><strong>18 items (53%)</strong></td><td>~2,600 LOC &mdash; straightforward pattern application, no new algorithms</td></tr>
+<tr><td><strong>Intellectual</strong></td><td><strong>16 items (47%)</strong></td><td>~2,300 LOC &mdash; new algorithms, paper reading, GPU synchronization, careful math</td></tr>
+</table>
+
+<div class="evidence">
+<strong>Mechanical</strong> = applying existing codebase patterns, loop restructuring, well-documented file formats, standard C plumbing.<br>
+<strong>Intellectual</strong> = requires reading papers, understanding new algorithms, GPU memory model expertise, or careful mathematical derivation where correctness (convergence order, numerical stability) depends on getting the details right.
+</div>
 
 <!-- ================================================================ -->
 <h2>Priority Roadmap</h2>
@@ -106,27 +126,27 @@
 
 <p class="tier-label" style="color: #d29922;">Tier 2: Medium Effort <span style="font-weight: normal; color: #8b949e;">(weeks, 20&ndash;40% additional)</span></p>
 <ol class="tier-items" start="14">
-<li>Persistent per-level packs for subcycling (~200 lines)</li>
-<li>Manual CSE in ccz4_rhs.c (~50 lines)</li>
-<li>Symmetric tensor raise (~20 lines)</li>
-<li>Dense output for subcycling (~200 lines)</li>
-<li>Direct ghost-region iteration &mdash; prolongation + Sommerfeld (~160 lines)</li>
-<li>enforce_algebraic on GPU (~60 lines)</li>
-<li>Pre-allocate ghost exchange scratch buffers (~15 lines)</li>
-<li>Hash table for neighbor lookup (~40 lines)</li>
-<li>Adaptive kappa1 / formulation hierarchy (~20 lines)</li>
-<li>Eliminate refinement memory spike (~50 lines)</li>
-<li>Richardson extrapolation refinement criteria (~150 lines)</li>
+<li>Persistent per-level packs for subcycling (~250 lines) &mdash; <span class="note">Hard, Intellectual</span></li>
+<li>Manual CSE in ccz4_rhs.c (~60 lines) &mdash; <span class="note">Medium, Intellectual</span></li>
+<li>Symmetric tensor raise (~25 lines) &mdash; <span class="good">Easy, Mechanical</span></li>
+<li>Dense output for subcycling (~250 lines) &mdash; <span class="note">Hard, Intellectual</span></li>
+<li>Direct ghost-region iteration &mdash; prolongation + Sommerfeld (~180 lines) &mdash; <span>Medium, Mechanical</span></li>
+<li>enforce_algebraic on GPU (~70 lines) &mdash; <span>Medium, Mechanical</span></li>
+<li>Pre-allocate ghost exchange scratch buffers (~20 lines) &mdash; <span class="good">Easy, Mechanical</span></li>
+<li>Hash table for neighbor lookup (~60 lines) &mdash; <span>Medium, Mechanical</span></li>
+<li>Adaptive kappa1 / formulation hierarchy (~25 lines) &mdash; <span class="note">Medium, Intellectual</span></li>
+<li>Eliminate refinement memory spike (~60 lines) &mdash; <span class="note">Medium, Intellectual</span></li>
+<li>Richardson extrapolation refinement criteria (~170 lines) &mdash; <span class="note">Hard, Intellectual</span></li>
 </ol>
 
 <p class="tier-label" style="color: #f47067;">Tier 3: Major Work <span style="font-weight: normal; color: #8b949e;">(weeks&ndash;months, 2&ndash;5x GPU)</span></p>
 <ol class="tier-items" start="25">
-<li>Device-side ghost exchange (~300 lines)</li>
-<li>Kernel splitting for occupancy (~400 lines)</li>
-<li>Interior/boundary RHS split for async overlap (~150 lines)</li>
-<li>GPU kernel occupancy tuning via num_teams/thread_limit (~25 lines, needs profiling)</li>
-<li>IMEX for constraint damping (~300 lines)</li>
-<li>Hyperbolic relaxation for initial data (~500 lines)</li>
+<li>Device-side ghost exchange (~400 lines) &mdash; <span class="warn">Very Hard, Intellectual</span></li>
+<li>Kernel splitting for occupancy (~450 lines) &mdash; <span class="warn">Very Hard, Intellectual</span></li>
+<li>Interior/boundary RHS split for async overlap (~180 lines) &mdash; <span class="note">Hard, Intellectual</span></li>
+<li>GPU kernel occupancy tuning via num_teams/thread_limit (~30 lines, needs profiling) &mdash; <span class="good">Easy, Mechanical</span></li>
+<li>IMEX for constraint damping (~350 lines) &mdash; <span class="note">Hard, Intellectual</span></li>
+<li>Hyperbolic relaxation for initial data (~550 lines) &mdash; <span class="warn">Very Hard, Intellectual</span></li>
 </ol>
 
 <p class="tier-label" style="color: #8b949e;">Tier 4: Future</p>
