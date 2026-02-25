@@ -223,11 +223,13 @@ void backend_compute_rhs_packed(meshblock_pack_t *pack, const sim_params_t *p)
                     grid_t g_local = g_template;
                     g_local.dx = dx_arr[b];
 
+#ifdef LATTICE_EM_ENABLED
                     if (p->em_enabled)
                         ccz4_maxwell_rhs_point(rhs_ptrs,
                                                (const double *const *)src_ptrs,
                                                &g_local, p, i, j, k);
                     else
+#endif
                         ccz4_rhs_point(rhs_ptrs,
                                        (const double *const *)src_ptrs,
                                        &g_local, p, i, j, k);

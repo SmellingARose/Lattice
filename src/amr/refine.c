@@ -473,6 +473,9 @@ int mesh_regrid(mesh_t *m, const amr_params_t *ap)
         mesh_compact(m);
         mesh_rebuild_neighbors(m);
 
+        /* Invalidate cached packs — block count/IDs changed */
+        m->packs_dirty = 1;
+
         /* Step 6: Fill ghost zones of newly created blocks.
          * Prolongation only fills interior cells; ghost zones are zero.
          * Ghost exchange fills from same-level neighbors. Then extrapolate

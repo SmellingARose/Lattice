@@ -13,6 +13,7 @@
 
 BACKEND ?= cpu
 FD_ORDER ?= 6
+EM ?= off
 
 # Platform detection: macOS vs Linux
 UNAME := $(shell uname -s)
@@ -66,9 +67,18 @@ endif
 ALL_SRC = $(CORE_SRC) $(EVOLUTION_SRC) $(NUMERICS_SRC) $(INITIAL_SRC) \
           $(DIAG_SRC) $(BOUNDARY_SRC) $(IO_SRC) $(AMR_SRC) $(BACKEND_SRC)
 
+# EM compile-time dispatch: EM=on adds -DLATTICE_EM_ENABLED.
+# When off (default), COMPILED_NUM_FIELDS=25 lets the compiler eliminate EM
+# field iterations from hot loops. When on, COMPILED_NUM_FIELDS=31.
+ifeq ($(EM),on)
+    EM_FLAGS = -DLATTICE_EM_ENABLED
+else
+    EM_FLAGS =
+endif
+
 # Compiler flags
 INCLUDES = -I src
-CFLAGS_BASE = -std=c17 -Wall -Wextra -Werror -D_GNU_SOURCE -Wno-unused-but-set-variable -DFD_ORDER=$(FD_ORDER) $(INCLUDES) $(BACKEND_FLAGS)
+CFLAGS_BASE = -std=c17 -Wall -Wextra -Werror -D_GNU_SOURCE -Wno-unused-but-set-variable -DFD_ORDER=$(FD_ORDER) $(EM_FLAGS) $(INCLUDES) $(BACKEND_FLAGS)
 CFLAGS_OPT  = $(CFLAGS_BASE) -O3 -ffast-math -march=native $(LTO_FLAGS)
 CFLAGS_DBG  = $(CFLAGS_BASE) -O0 -g -fsanitize=address,undefined -DDEBUG
 
@@ -212,7 +222,7 @@ test-hispid: $(BUILD)/test_hispid
 
 $(BUILD)/test_maxwell: tests/test_maxwell.c $(ALL_SRC)
 	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS_OPT) -o $@ tests/test_maxwell.c $(ALL_SRC) $(LDFLAGS)
+	$(CC) $(CFLAGS_OPT) -DLATTICE_EM_ENABLED -o $@ tests/test_maxwell.c $(ALL_SRC) $(LDFLAGS)
 
 test-maxwell: $(BUILD)/test_maxwell
 	@echo "=== Running Maxwell test ==="

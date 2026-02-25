@@ -70,6 +70,7 @@ static void print_usage(void)
     fprintf(stderr, "  --amr                  Enable adaptive mesh refinement\n");
     fprintf(stderr, "  --N_root <int>         Root blocks per side (default 4)\n");
     fprintf(stderr, "  --N_block <int>        Cells per block side (default 32)\n");
+    fprintf(stderr, "  --block-size <int>     Alias for --N_block\n");
     fprintf(stderr, "  --max_level <int>      Max refinement depth (default 6)\n");
     fprintf(stderr, "  --chi_refine <float>   Refinement threshold (default 0.1)\n");
     fprintf(stderr, "  --chi_coarsen <float>  Coarsening threshold (default 0.01)\n");
@@ -162,8 +163,13 @@ int main(int argc, char **argv)
             p.amr.enabled = 1;
         } else if (strcmp(argv[a], "--N_root") == 0 && a + 1 < argc) {
             p.amr.N_root = atoi(argv[++a]);
-        } else if (strcmp(argv[a], "--N_block") == 0 && a + 1 < argc) {
+        } else if ((strcmp(argv[a], "--N_block") == 0 ||
+                    strcmp(argv[a], "--block-size") == 0) && a + 1 < argc) {
             p.amr.N_block = atoi(argv[++a]);
+            if (p.amr.N_block < 8 || p.amr.N_block % 2 != 0) {
+                fprintf(stderr, "Error: --block-size must be even and >= 8\n");
+                return 1;
+            }
         } else if (strcmp(argv[a], "--max_level") == 0 && a + 1 < argc) {
             p.amr.max_level = atoi(argv[++a]);
         } else if (strcmp(argv[a], "--chi_refine") == 0 && a + 1 < argc) {

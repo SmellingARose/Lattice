@@ -522,8 +522,9 @@ static void ck45_step_mesh_perblock(mesh_t *m, const sim_params_t *p,
  * All leaf blocks packed into a single meshblock_pack_t. One kernel
  * launch per operation (RHS, Sommerfeld, update) covers all blocks.
  *
- * Ghost exchange: Commit 1 uses CPU fallback (unpack → exchange → repack).
- * Commit 2 replaces this with device-side ghost exchange kernels.
+ * Persistent packs: packs are cached in mesh_t across time steps.
+ * Only the data buffer is synced in/out each step (via sync_to/from_blocks),
+ * saving malloc/free and metadata rebuild overhead.
  *
  * Ref: AthenaK task_list/ pattern (meshblock_pack batched kernels)
  * ======================================================================== */
@@ -605,43 +606,32 @@ static meshblock_pack_t *mesh_build_leaf_pack(mesh_t *m,
  */
 static void ck45_step_mesh_packed(mesh_t *m, const sim_params_t *p, double dt)
 {
-    /* Build pack from all leaf blocks */
-    meshblock_pack_t *pack = mesh_build_leaf_pack(m, RK_CK45);
+    /* Get or rebuild cached leaf pack */
+    if (!m->leaf_pack || m->packs_dirty) {
+        if (m->leaf_pack) meshblock_pack_free(m->leaf_pack);
+        m->leaf_pack = mesh_build_leaf_pack(m, RK_CK45);
+        m->packs_dirty = 0;
+    } else {
+        meshblock_pack_sync_from_blocks(m->leaf_pack, m->blocks);
+    }
+    meshblock_pack_t *pack = m->leaf_pack;
 
-    /* Map to GPU (no-op on CPU) */
     backend_map_pack(pack, p);
 
-    /* Zero dU register (stored in scratch buffer) */
     backend_zero_packed(pack, PACK_BUF_SCRATCH);
 
-    /* 5 CK45 stages */
     for (int s = 0; s < 5; s++) {
-        /* Ghost exchange: all 5 phases on pack buffers (Commit 2) */
         backend_ghost_exchange_packed(pack);
-
-        /* Batched RHS + Sommerfeld BCs: one kernel each for all blocks */
         backend_compute_rhs_packed(pack, p);
         backend_sommerfeld_packed(pack, p);
-
-        /* Fused CK45 update: dU = A*dU + dt*F; U += B*dU */
         backend_update_ck45_packed(pack, CK_A[s], CK_B[s], dt);
     }
 
-    /* Enforce algebraic constraints on pack data (runs on device for GPU).
-     * det(gambar)=1, tr(Abar)=0. Done once per step, not per stage. */
     backend_enforce_algebraic_packed(pack);
-
-    /* Unmap from GPU (syncs data back to host; no-op on CPU) */
     backend_unmap_pack(pack);
 
-    /* Store final state from pack back to individual blocks */
-    meshblock_pack_store(pack, m->blocks);
-
-    /* Restrict leaf data into non-leaf parents for next step's
-     * cross-level ghost exchange. */
+    meshblock_pack_sync_to_blocks(pack, m->blocks);
     mesh_restrict_to_parents(m);
-
-    meshblock_pack_free(pack);
 }
 
 /*
@@ -661,66 +651,60 @@ static void ck45_step_mesh_packed(mesh_t *m, const sim_params_t *p, double dt)
 static void classic_rk4_step_mesh_packed(mesh_t *m, const sim_params_t *p,
                                           double dt)
 {
-    /* Build pack with accum buffer for classic RK4 */
-    meshblock_pack_t *pack = mesh_build_leaf_pack(m, RK_CLASSIC);
+    /* Get or rebuild cached leaf pack */
+    if (!m->leaf_pack || m->packs_dirty) {
+        if (m->leaf_pack) meshblock_pack_free(m->leaf_pack);
+        m->leaf_pack = mesh_build_leaf_pack(m, RK_CLASSIC);
+        m->packs_dirty = 0;
+    } else {
+        meshblock_pack_sync_from_blocks(m->leaf_pack, m->blocks);
+    }
+    meshblock_pack_t *pack = m->leaf_pack;
 
-    /* Map to GPU (no-op on CPU) */
     backend_map_pack(pack, p);
 
-    /* Save initial state: scratch = data (backup U^0) */
     backend_copy_packed(pack, PACK_BUF_SCRATCH, PACK_BUF_DATA);
-    /* Zero accumulator */
     backend_zero_packed(pack, PACK_BUF_ACCUM);
 
-    /* Stage 1: F1 = RHS(U^0) */
+    /* Stage 1 */
     backend_ghost_exchange_packed(pack);
     backend_compute_rhs_packed(pack, p);
     backend_sommerfeld_packed(pack, p);
-    backend_accum_add_packed(pack, 1.0/6.0, dt);   /* accum += dt/6 * F1 */
-    backend_axpy_packed(pack, 0.5, dt);             /* data = scratch + dt/2*rhs */
+    backend_accum_add_packed(pack, 1.0/6.0, dt);
+    backend_axpy_packed(pack, 0.5, dt);
 
-    /* Stage 2: F2 = RHS(U^0 + dt/2 * F1) */
+    /* Stage 2 */
     backend_ghost_exchange_packed(pack);
     backend_compute_rhs_packed(pack, p);
     backend_sommerfeld_packed(pack, p);
-    backend_accum_add_packed(pack, 1.0/3.0, dt);   /* accum += dt/3 * F2 */
-    backend_axpy_packed(pack, 0.5, dt);             /* data = scratch + dt/2*rhs */
+    backend_accum_add_packed(pack, 1.0/3.0, dt);
+    backend_axpy_packed(pack, 0.5, dt);
 
-    /* Stage 3: F3 = RHS(U^0 + dt/2 * F2) */
+    /* Stage 3 */
     backend_ghost_exchange_packed(pack);
     backend_compute_rhs_packed(pack, p);
     backend_sommerfeld_packed(pack, p);
-    backend_accum_add_packed(pack, 1.0/3.0, dt);   /* accum += dt/3 * F3 */
-    backend_axpy_packed(pack, 1.0, dt);             /* data = scratch + dt*rhs */
+    backend_accum_add_packed(pack, 1.0/3.0, dt);
+    backend_axpy_packed(pack, 1.0, dt);
 
-    /* Stage 4: F4 = RHS(U^0 + dt * F3) */
+    /* Stage 4 */
     backend_ghost_exchange_packed(pack);
     backend_compute_rhs_packed(pack, p);
     backend_sommerfeld_packed(pack, p);
-    backend_accum_add_packed(pack, 1.0/6.0, dt);   /* accum += dt/6 * F4 */
-    backend_copy_packed(pack, PACK_BUF_DATA, PACK_BUF_SCRATCH); /* data = U^0 */
-    backend_apply_accum_packed(pack);               /* data += accum */
+    backend_accum_add_packed(pack, 1.0/6.0, dt);
+    backend_copy_packed(pack, PACK_BUF_DATA, PACK_BUF_SCRATCH);
+    backend_apply_accum_packed(pack);
 
-    /* Enforce algebraic constraints on pack data (runs on device for GPU).
-     * det(gambar)=1, tr(Abar)=0. Done once per step, not per stage. */
     backend_enforce_algebraic_packed(pack);
-
-    /* Unmap from GPU (no-op on CPU) */
     backend_unmap_pack(pack);
 
-    /* Store final state back to blocks */
-    meshblock_pack_store(pack, m->blocks);
-    meshblock_pack_free(pack);
+    meshblock_pack_sync_to_blocks(pack, m->blocks);
 
-    /* Fix inter-block ghost zones.  The packed accum/axpy operate on all
-     * points, but RHS is only computed for interior + Sommerfeld-boundary
-     * cells.  Non-boundary ghost RHS stays zero, so the final
-     * data = scratch + accum leaves those ghosts at U^n instead of U^{n+1}.
-     * A same-level exchange restores correct ghost values from neighbors'
-     * (correctly evolved) interiors. */
+    /* Fix inter-block ghost zones. Non-boundary ghost RHS stays zero, so
+     * the final data = scratch + accum leaves ghosts at U^n. A same-level
+     * exchange restores correct ghost values from neighbor interiors. */
     ghost_exchange(m);
 
-    /* Post-step: parent restriction (enforce_algebraic done on pack above) */
     mesh_restrict_to_parents(m);
 }
 
@@ -850,34 +834,45 @@ static void step_level(mesh_t *m, const sim_params_t *p,
                         int level, double dt_level, double frac)
 {
     /* Cross-level ghost fill (time-interpolated from coarser level).
-     * Done on the mesh BEFORE building the per-level pack.
+     * Done on the mesh BEFORE using the per-level pack.
      * ghost_fill_from_coarser restricts all blocks first, then exchanges,
      * so same-level neighbor coarse_bufs are always valid. */
     if (level > 0)
         ghost_fill_from_coarser(m, level, frac);
 
-    /* Build per-level pack (only leaves at this level) */
-    meshblock_pack_t *pack = mesh_build_level_pack(m, level, p->rk_method);
-    if (!pack) return;  /* no blocks at this level */
+    /* Get or rebuild cached level pack */
+    if (level < MAX_AMR_LEVELS &&
+        m->level_packs[level] && !m->packs_dirty) {
+        /* Sync block fields (including filled ghost zones) into pack data */
+        meshblock_pack_sync_from_blocks(m->level_packs[level], m->blocks);
+        if (m->level_packs[level]->n_refined > 0)
+            meshblock_pack_load_coarse(m->level_packs[level], m->blocks);
+    } else {
+        /* Build fresh level pack */
+        if (level < MAX_AMR_LEVELS && m->level_packs[level])
+            meshblock_pack_free(m->level_packs[level]);
+        meshblock_pack_t *new_pack = mesh_build_level_pack(m, level, p->rk_method);
+        if (!new_pack) return;  /* no blocks at this level */
+        if (level < MAX_AMR_LEVELS)
+            m->level_packs[level] = new_pack;
+    }
+
+    meshblock_pack_t *pack = (level < MAX_AMR_LEVELS) ?
+        m->level_packs[level] : NULL;
+    if (!pack) return;
 
     backend_map_pack(pack, p);
 
-    /* CK45 or classic RK4 — same kernel sequence as global packed stepper,
-     * but pack contains only one level's blocks */
     if (p->rk_method == RK_CK45) {
         backend_zero_packed(pack, PACK_BUF_SCRATCH);
         for (int s = 0; s < 5; s++) {
             backend_ghost_exchange_packed(pack);
             backend_compute_rhs_packed(pack, p);
             backend_sommerfeld_packed(pack, p);
-            /* Save k1 (Stage 0 RHS) for quartic temporal interpolation.
-             * Must happen before Stage 1 overwrites the pack's RHS buffer.
-             * Only saves for blocks with rhs_old allocated (level < max_level). */
             if (s == 0) save_k1_from_pack(pack, m->blocks);
             backend_update_ck45_packed(pack, CK_A[s], CK_B[s], dt_level);
         }
     } else {
-        /* Classic RK4: 4 stages */
         backend_copy_packed(pack, PACK_BUF_SCRATCH, PACK_BUF_DATA);
         backend_zero_packed(pack, PACK_BUF_ACCUM);
 
@@ -885,9 +880,6 @@ static void step_level(mesh_t *m, const sim_params_t *p,
         backend_ghost_exchange_packed(pack);
         backend_compute_rhs_packed(pack, p);
         backend_sommerfeld_packed(pack, p);
-        /* Save k1 (beginning-of-step RHS) for quartic temporal interpolation.
-         * Must happen before Stage 2 overwrites the pack's RHS buffer.
-         * Only saves for blocks with rhs_old allocated (level < max_level). */
         save_k1_from_pack(pack, m->blocks);
         backend_accum_add_packed(pack, 1.0/6.0, dt_level);
         backend_axpy_packed(pack, 0.5, dt_level);
@@ -915,12 +907,11 @@ static void step_level(mesh_t *m, const sim_params_t *p,
         backend_apply_accum_packed(pack);
     }
 
-    /* Enforce algebraic constraints on pack (runs on device for GPU) */
     backend_enforce_algebraic_packed(pack);
-
     backend_unmap_pack(pack);
-    meshblock_pack_store(pack, m->blocks);
-    meshblock_pack_free(pack);
+
+    /* Sync only data buffer back to blocks (not rhs/scratch/accum) */
+    meshblock_pack_sync_to_blocks(pack, m->blocks);
 }
 
 /*
@@ -1026,8 +1017,12 @@ void rk4_step_mesh(mesh_t *m, const sim_params_t *p,
     } else {
         /* AMR with Berger-Oliger subcycling.
          * dt is the coarsest-level time step (CFL * dx_coarse).
-         * Each finer level takes 2x more sub-steps at half the dt. */
+         * Each finer level takes 2x more sub-steps at half the dt.
+         * Level packs are built on first use or after regrid (packs_dirty).
+         * Clear the dirty flag after the recursive subcycling so all
+         * level packs are cached for subsequent global steps. */
         subcycle_level(m, p, 0, dt, p->time, 0);
+        if (m->packs_dirty) m->packs_dirty = 0;
     }
 }
 

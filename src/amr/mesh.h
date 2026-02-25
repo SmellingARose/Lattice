@@ -19,7 +19,10 @@
 #define LATTICE_MESH_H
 
 #include "block.h"
+#include "meshblock_pack.h"
 #include "../core/params.h"
+
+#define MAX_AMR_LEVELS 16
 
 typedef struct mesh_s {
     block_t   **blocks;       /* array of all blocks (indexed by ID)       */
@@ -38,6 +41,15 @@ typedef struct mesh_s {
      * Size = n_fields * block_npoints. Eliminates malloc/free per exchange. */
     double     *ghost_scratch;
     size_t      ghost_scratch_size;
+
+    /* Persistent packs: cached across time steps to eliminate per-step
+     * malloc/free/metadata overhead. Only the data buffer is synced in/out.
+     * leaf_pack: uniform mesh (max_level == 0). One pack for all leaves.
+     * level_packs[L]: AMR subcycling. One pack per level L.
+     * packs_dirty: set to 1 on regrid/init to force pack rebuild. */
+    meshblock_pack_t *leaf_pack;
+    meshblock_pack_t *level_packs[MAX_AMR_LEVELS];
+    int         packs_dirty;
 } mesh_t;
 
 /*

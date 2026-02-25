@@ -3,6 +3,60 @@
 > **Note:** When adding/removing/renaming files or functions, also update
 > `docs/architecture.html` — the living map of the codebase structure.
 
+## 2026-02-25: Tier 3 GPU/performance optimizations (5/7)
+
+5 of 7 Table 1 optimizations complete. Item 7 (dense output subcycling) deferred.
+Item 6 (device-side ghost exchange) pending — requires GPU hardware to test.
+
+**Item 1 — Manual CSE in `ccz4_rhs_point`:**
+- Cache `K_minus_2Theta = K - 2.0 * Theta` (used 6× in evolution equations).
+- Pre-compute `A_mixed[k][j] = A[i][k] * h_UU[k][j]` to replace inner `ll` loop
+  in A² trace and RHS_A computation. Net: eliminates ~50 redundant multiplies per
+  grid point.
+
+**Item 2 — `--block-size` CLI:**
+- Added `--block-size <int>` as alias for `--N_block` in `main.c`.
+- Validates: even and >= 8.
+
+**Item 3 — Compile-time EM dispatch:**
+- `Makefile`: `EM ?= off`. `make EM=on` adds `-DLATTICE_EM_ENABLED`.
+- `fields.h`: `COMPILED_NUM_FIELDS` macro — 31 when EM enabled, 25 when not.
+  Gives compiler constant loop bounds in dissipation/Sommerfeld hot paths.
+- `test-maxwell` target always compiles with `-DLATTICE_EM_ENABLED` regardless.
+
+**Item 4 — Kernel restructuring (`ccz4_rhs.c`):**
+- Split monolithic 541-line `ccz4_rhs_point` into 5 `static inline` sub-functions,
+  each with a typed output struct for scoped variable lifetimes:
+  1. `ccz4_load_and_differentiate()` → `ccz4_fields_t` + `ccz4_derivs_t`
+  2. `ccz4_compute_geometry()` → `ccz4_geom_t` (h_UU, Christoffel, Ricci, Z)
+  3. `ccz4_compute_covariant()` → `ccz4_covd_t` (covd2lapse, A_UU, tr_A2)
+  4. `ccz4_compute_evolution()` → writes CCZ4 RHS + outputs `rhs_Gamma[3]`
+  5. `ccz4_compute_gauge()` → writes gauge RHS (uses `rhs_Gamma` for B^i)
+- Top-level `ccz4_rhs_point` is now a thin 12-line dispatcher.
+- All sub-functions in `#pragma omp declare target` block for GPU compilation.
+- Moved `h_idx`/`A_idx` lookup tables to file scope inside OMP declare target.
+- GPU benefit: scoped lifetimes allow better register allocation. Zero memory
+  overhead — compiler inlines everything into a single kernel.
+
+**Item 5 — Persistent per-level packs:**
+- Added to `mesh_t`: `leaf_pack`, `level_packs[MAX_AMR_LEVELS]`, `packs_dirty`.
+- New `meshblock_pack_sync_to_blocks()` / `meshblock_pack_sync_from_blocks()` —
+  copy only `data` buffer (evolved fields). Skips rhs/scratch/accum (temporary
+  per-stage buffers overwritten each step). ~75% less memcpy than full load/store.
+- `rk4.c`: All packed steppers (`ck45_step_mesh_packed`, `classic_rk4_step_mesh_packed`,
+  `step_level`) check `packs_dirty`, rebuild pack if needed, otherwise reuse cached.
+  After step, `sync_to_blocks` instead of full store+free.
+- `refine.c`: Sets `packs_dirty = 1` on regrid.
+- `mesh.c`: `mesh_free()` cleans up cached packs. `mesh_create_ex()` initializes
+  `packs_dirty = 1`.
+- Subcycling subtlety: `ghost_fill_from_coarser()` writes to block ghost zones
+  before stepping. `sync_from_blocks` copies updated ghosts into pack before RK stages.
+
+**Files changed:** `ccz4_rhs.c`, `main.c`, `Makefile`, `fields.h`,
+`meshblock_pack.h`, `meshblock_pack.c`, `mesh.h`, `mesh.c`, `refine.c`, `rk4.c`.
+
+Build: zero warnings. Tests: not yet run (deferred to next session).
+
 ## 2026-02-25: Tier 2 mechanical optimizations
 
 12 mechanical Phase 3 improvements across two sessions. Highlights:

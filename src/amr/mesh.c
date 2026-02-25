@@ -67,6 +67,7 @@ mesh_t *mesh_create_ex(int N_root, int N_block, double L, rk_method_t method,
     m->n_fields  = n_fields;
     m->dx_base   = L / ((double)N_root * N_block);
     m->max_level = 0;
+    m->packs_dirty = 1;  /* force pack creation on first use */
 
     int total = N_root * N_root * N_root;
     m->num_blocks = total;
@@ -225,6 +226,19 @@ mesh_t *mesh_create_ex(int N_root, int N_block, double L, rk_method_t method,
 void mesh_free(mesh_t *m)
 {
     if (!m) return;
+
+    /* Free cached persistent packs */
+    if (m->leaf_pack) {
+        meshblock_pack_free(m->leaf_pack);
+        m->leaf_pack = NULL;
+    }
+    for (int L = 0; L < MAX_AMR_LEVELS; L++) {
+        if (m->level_packs[L]) {
+            meshblock_pack_free(m->level_packs[L]);
+            m->level_packs[L] = NULL;
+        }
+    }
+
     for (int i = 0; i < m->num_blocks; i++) {
         if (m->blocks[i])
             block_free(m->blocks[i]);

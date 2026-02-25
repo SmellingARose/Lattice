@@ -62,6 +62,16 @@ enum {
  * Used to skip EM fields in dissipation/Sommerfeld when EM is disabled. */
 #define NUM_CCZ4_FIELDS 25
 
+/* Compile-time field count for hot-loop bounds.
+ * With EM=on (-DLATTICE_EM_ENABLED): 31 fields, compiler unrolls for all.
+ * With EM=off (default): 25 fields, compiler eliminates EM iterations.
+ * The enum stays at 31 (append-only invariant). */
+#ifdef LATTICE_EM_ENABLED
+#define COMPILED_NUM_FIELDS NUM_FIELDS
+#else
+#define COMPILED_NUM_FIELDS NUM_CCZ4_FIELDS
+#endif
+
 /* First field index for symmetric tensor components */
 #define FIELD_H_START FIELD_H11
 #define FIELD_A_START FIELD_A11

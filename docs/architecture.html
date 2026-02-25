@@ -172,7 +172,7 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 
 <div class="banner">
   <strong>Living document.</strong> This is the single architecture reference for the Lattice codebase. Updated whenever structure changes &mdash; see CLAUDE.md.<br>
-  <strong>Last updated:</strong> 2026-02-25 &nbsp;|&nbsp; <strong>Status:</strong> Phase 2 complete, Phase 3 in progress (Tier 1+2 optimizations done, N-body validated).
+  <strong>Last updated:</strong> 2026-02-25 &nbsp;|&nbsp; <strong>Status:</strong> Phase 2 complete, Phase 3 in progress (Tier 1+2+3 optimizations, N-body validated, persistent packs).
 </div>
 
 <!-- ========================================== -->
@@ -287,7 +287,7 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 <table class="file-table">
 <tr><th>File</th><th>Purpose</th></tr>
 <tr><td><code>grid.h / grid.c</code></td><td><code>grid_t</code> struct with <code>int n_fields</code> for conditional field allocation. <code>grid_alloc_ex(N, L, method, n_fields)</code> allocates only active fields; <code>grid_alloc()</code> is a static inline wrapper defaulting to <code>NUM_FIELDS</code>. Page-aligned (4096-byte), <code>IDX(g,i,j,k)</code> indexing macro, <code>COORD(g,i)</code> for physical coordinates. N padded to next multiple of 16.</td></tr>
-<tr><td><code>fields.h</code></td><td>Field enum (<code>FIELD_CHI</code> through <code>FIELD_BM3</code>), symmetric tensor index table, loop macros (<code>FOR1</code>...<code>FOR4</code>), Kronecker delta.</td></tr>
+<tr><td><code>fields.h</code></td><td>Field enum (<code>FIELD_CHI</code> through <code>FIELD_BM3</code>), symmetric tensor index table, loop macros (<code>FOR1</code>...<code>FOR4</code>), Kronecker delta. <code>COMPILED_NUM_FIELDS</code> macro (25 or 31 based on <code>-DLATTICE_EM_ENABLED</code>) for constant loop bounds.</td></tr>
 <tr><td><code>params.h</code></td><td><code>sim_params_t</code> with CCZ4 params (kappa1/2/3), gauge params (eta, lapse_coeff, <code>position_dependent_eta</code>), AMR params, noise reduction params. <code>default_params()</code> inline.</td></tr>
 <tr><td><code>timer.h</code></td><td>Header-only <code>TIMER_START</code>/<code>TIMER_STOP</code> macros via <code>clock_gettime(CLOCK_MONOTONIC)</code>.</td></tr>
 </table>
@@ -295,11 +295,11 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 <!-- ========================================== -->
 <h2 id="mod-evolution">Module: evolution/</h2>
 
-<p>The physics core. <code>ccz4_rhs_point()</code> computes all 25 CCZ4 right-hand-side terms at a single grid point: finite difference stencils for derivatives, inverse metric, Christoffel symbols, Ricci tensor with Z terms, evolution equations, and moving puncture gauge. It is ~430 lines and the single most complex function in the codebase (~4 KB stack per call). <code>maxwell_rhs_point()</code> adds the 6 EM evolution equations when <code>--em</code> is enabled.</p>
+<p>The physics core. <code>ccz4_rhs_point()</code> is a thin dispatcher that calls 5 <code>static inline</code> sub-functions: <code>ccz4_load_and_differentiate</code>, <code>ccz4_compute_geometry</code>, <code>ccz4_compute_covariant</code>, <code>ccz4_compute_evolution</code>, and <code>ccz4_compute_gauge</code>. Each sub-function outputs a typed struct (<code>ccz4_fields_t</code>, <code>ccz4_derivs_t</code>, <code>ccz4_geom_t</code>, <code>ccz4_covd_t</code>) that scopes variable lifetimes for better GPU register allocation. The compiler inlines everything into a single kernel (~4 KB stack per call). <code>maxwell_rhs_point()</code> adds the 6 EM evolution equations when <code>--em</code> is enabled.</p>
 
 <table class="file-table">
 <tr><th>File</th><th>Purpose</th></tr>
-<tr><td><code>ccz4_rhs.c</code></td><td>Full CCZ4 RHS including EM source terms. Fused <code>fd_d1_d2()</code> stencil for 11 dual-derivative fields. Position-dependent eta: <code>eta(x) = eta_0 / sqrt(chi)</code>. GPU-annotated. Ref: arXiv:1106.2254, GRChombo <code>CCZ4RHS.impl.hpp</code>.</td></tr>
+<tr><td><code>ccz4_rhs.c</code></td><td>Full CCZ4 RHS including EM source terms. Restructured into 5 <code>static inline</code> sub-functions with typed output structs for scoped lifetimes. CSE: pre-computed <code>K_minus_2Theta</code>, <code>A_mixed</code>. Fused <code>fd_d1_d2()</code> stencil for 11 dual-derivative fields. Position-dependent eta: <code>eta(x) = eta_0 / sqrt(chi)</code>. GPU-annotated. Ref: arXiv:1106.2254, GRChombo <code>CCZ4RHS.impl.hpp</code>.</td></tr>
 <tr><td><code>maxwell_rhs.h/c</code></td><td>Conformal Maxwell evolution (E^i, B^i) with constraint damping. Ref: arXiv:0907.1151.</td></tr>
 <tr><td><code>dissipation.c</code></td><td>6th-order Kreiss-Oliger dissipation. Supports CAKO (curvature-adjusted: sigma_eff = sqrt(chi) * sigma) and per-field sigma (0.99 gauge, 0.3 physical).</td></tr>
 </table>
@@ -312,7 +312,7 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 <table class="file-table">
 <tr><th>File</th><th>Purpose</th></tr>
 <tr><td><code>finite_diff.h</code></td><td>Header-only 6th-order FD operators: centered 1st/2nd, fused 1st+2nd (<code>fd_d1_d2()</code>), mixed 2nd, upwind advection, KO dissipation. GPU-annotated. Compile-time <code>FD_ORDER</code> selects 4th or 6th order.</td></tr>
-<tr><td><code>rk4.c</code></td><td>Single-grid stepper (<code>rk4_step</code>) and AMR mesh stepper (<code>rk4_step_mesh</code>). Packed batch: all leaf blocks in one kernel per operation. Flattened update loops (single OMP region over all fields). Subcycling uses integer <code>sub_step</code> for drift-free temporal interpolation. Also <code>enforce_algebraic()</code>.</td></tr>
+<tr><td><code>rk4.c</code></td><td>Single-grid stepper (<code>rk4_step</code>) and AMR mesh stepper (<code>rk4_step_mesh</code>). Packed batch: all leaf blocks in one kernel per operation. Persistent per-level packs (<code>mesh_t.leaf_pack</code>, <code>level_packs[]</code>) cached across steps; <code>packs_dirty</code> flag triggers rebuild on regrid. Data-only sync (<code>sync_to/from_blocks</code>) replaces full load/store cycle. Flattened update loops (single OMP region over all fields). Subcycling uses integer <code>sub_step</code> for drift-free temporal interpolation. Also <code>enforce_algebraic()</code>.</td></tr>
 <tr><td><code>interpolate.h</code></td><td>4th-order off-grid Lagrange interpolation (used by AH finder for field access at non-grid points).</td></tr>
 </table>
 
@@ -370,13 +370,13 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 <table class="file-table">
 <tr><th>File</th><th>Purpose</th></tr>
 <tr><td><code>block.h/c</code></td><td><code>block_t</code>: grid_t + coarse_buf + logical location + 26 neighbors + tree links. <code>block_alloc()</code> takes <code>n_fields</code> for conditional allocation.</td></tr>
-<tr><td><code>mesh.h/c</code></td><td><code>mesh_t</code> with <code>int n_fields</code>: block collection, Morton sort, neighbor finding via hash table (O(1) lookup). Pre-allocated <code>ghost_scratch</code> buffer for temporal interpolation. <code>mesh_create_ex()</code> takes <code>n_fields</code>; <code>mesh_create()</code> is a backward-compatible wrapper.</td></tr>
+<tr><td><code>mesh.h/c</code></td><td><code>mesh_t</code> with <code>int n_fields</code>: block collection, Morton sort, neighbor finding via hash table (O(1) lookup). Pre-allocated <code>ghost_scratch</code> buffer for temporal interpolation. Persistent pack cache: <code>leaf_pack</code>, <code>level_packs[MAX_AMR_LEVELS]</code>, <code>packs_dirty</code> flag. <code>mesh_create_ex()</code> takes <code>n_fields</code>; <code>mesh_create()</code> is a backward-compatible wrapper.</td></tr>
 <tr><td><code>ghost_exchange.h/c</code></td><td>5-phase coarse-buffer multilevel ghost exchange (AthenaK pattern).</td></tr>
 <tr><td><code>prolongation.h/c</code></td><td>6th-order cell-centered Lagrange interpolation (coarse to fine). 7-point 1D stencil, 3D tensor product. Pre-computed <code>prolong_wkj[4][7][7]</code> weight products for 4 octant combos.</td></tr>
 <tr><td><code>restriction.h/c</code></td><td>6th-order Lagrange cell-average restriction (fine to coarse). 6-point symmetric stencil: w = {-17/11520, 97/3840, 2743/5760, ...}. Pre-computed <code>restrict_wkj[6][6]</code> weight products.</td></tr>
 <tr><td><code>criterion.h/c</code></td><td>Chi-gradient refinement criterion with hysteresis: (dx/chi^2)|grad(chi)|.</td></tr>
-<tr><td><code>refine.h/c</code></td><td>Oct-tree split (1 to 8), merge (8 to 1), 2:1 constraint cascade, full regrid cycle.</td></tr>
-<tr><td><code>meshblock_pack.h/c</code></td><td>GPU batch packing: contiguous buffers, per-block metadata, PACK_IDX macro. <code>meshblock_pack_create()</code> takes <code>n_fields</code> from mesh for conditional allocation.</td></tr>
+<tr><td><code>refine.h/c</code></td><td>Oct-tree split (1 to 8), merge (8 to 1), 2:1 constraint cascade, full regrid cycle. Sets <code>packs_dirty</code> on mesh structure changes.</td></tr>
+<tr><td><code>meshblock_pack.h/c</code></td><td>GPU batch packing: contiguous buffers, per-block metadata, PACK_IDX macro. <code>meshblock_pack_create()</code> takes <code>n_fields</code> from mesh for conditional allocation. <code>sync_to_blocks()</code>/<code>sync_from_blocks()</code> for data-only transfer (skips rhs/scratch/accum).</td></tr>
 <tr><td><code>morton.h</code></td><td>Header-only Morton Z-order encoding/decoding for space-filling curve block ordering.</td></tr>
 </table>
 
@@ -434,7 +434,7 @@ Grid indexing:  IDX(g, i, j, k) = k * Ntotal^2 + j * Ntotal + i
 <div class="detail-body">
 <p>For AMR, all leaf blocks are packed into a single <code>meshblock_pack_t</code> with contiguous GPU buffers. Each backend operation (RHS, Sommerfeld, CK45 update) is one kernel launch over the entire pack. On GPU, the iteration space is <code>collapse(4)</code> over (block, k, j, i). Each GPU thread builds a stack-local pointer array (~400 B) and grid_t (~872 B), then calls <code>ccz4_rhs_point</code> (~4 KB). Total ~5.3 KB per thread, under the 16 KB GPU stack limit.</p>
 
-<p>Ghost exchange on GPU syncs pack data to host, runs the 5-phase multilevel exchange on CPU, and syncs back. True device-side ghost exchange is a future optimization.</p>
+<p>Packs are cached persistently in <code>mesh_t</code> (<code>leaf_pack</code> for uniform, <code>level_packs[]</code> for AMR subcycling). Only rebuilt on regrid (<code>packs_dirty</code> flag). Data-only sync (<code>sync_to/from_blocks</code>) replaces the per-step malloc/load/store/free cycle, eliminating ~1 GB of allocation overhead per step for large meshes. Ghost exchange on GPU syncs pack data to host, runs the 5-phase multilevel exchange on CPU, and syncs back. True device-side ghost exchange is a future optimization.</p>
 </div>
 </details>
 
@@ -685,7 +685,7 @@ Level 0: everywhere (dx ~ M/2)     — outer domain + boundary</code></pre>
 <details>
 <summary>Why pure C instead of C++?</summary>
 <div class="detail-body">
-<p>OpenMP target offloading in GCC 15 works most reliably with C. Templates, virtual functions, and C++ standard library containers all complicate GPU compilation. C also forces a flat, transparent architecture: every function call is visible, every memory access is explicit. For a physics code where the inner kernel is a single 430-line function, C++ abstraction layers add complexity without benefit.</p>
+<p>OpenMP target offloading in GCC 15 works most reliably with C. Templates, virtual functions, and C++ standard library containers all complicate GPU compilation. C also forces a flat, transparent architecture: every function call is visible, every memory access is explicit. For a physics code where the inner kernel is a set of inlined sub-functions totalling ~540 lines, C++ abstraction layers add complexity without benefit.</p>
 </div>
 </details>
 
@@ -747,6 +747,7 @@ Level 0: everywhere (dx ~ M/2)     — outer domain + boundary</code></pre>
 <pre><code>make                    # CPU build (-O3 -ffast-math -march=native -flto)
 make BACKEND=gpu        # GPU build (OpenMP target offloading, requires GCC 15+, no LTO)
 make debug              # debug build (-O0 -g -fsanitize=address,undefined)
+make EM=on              # build with Einstein-Maxwell fields compiled in
 make clean              # rm -rf build/</code></pre>
 
 <p>Compiler: <code>clang</code> on macOS (CPU only), <code>gcc-15</code> on Linux (CPU + GPU). No external dependencies beyond standard C and libomp.</p>
@@ -778,6 +779,7 @@ export GOMP_NVPTX_NATIVE_GPU_THREAD_STACK_SIZE=16384
 <tr><td><code>--rk classic|ck45</code></td><td>classic</td><td>Time integrator selection</td></tr>
 <tr><td><code>--em</code></td><td>off</td><td>Enable Einstein-Maxwell (6 extra evolved fields)</td></tr>
 <tr><td><code>--ah</code></td><td>off</td><td>Enable apparent horizon finder</td></tr>
+<tr><td><code>--block-size</code></td><td>32</td><td>Cells per block side (alias for <code>--N_block</code>). Must be even and &ge; 8.</td></tr>
 <tr><td><code>--N-root</code></td><td>&mdash;</td><td>Root blocks per dimension (enables AMR mode)</td></tr>
 <tr><td><code>--max-level</code></td><td>0</td><td>Maximum AMR refinement level during evolution</td></tr>
 <tr><td><code>--amr-levels</code></td><td><code>max-level</code></td><td>Initial data solver refinement depth. Defaults to <code>--max-level</code> so initial data and evolution use the same AMR depth. Each level halves dx near punctures. Requires <code>--rk classic</code>.</td></tr>

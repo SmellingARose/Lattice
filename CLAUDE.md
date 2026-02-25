@@ -109,6 +109,27 @@ work on AMR meshes.
   integer sub_step in subcycling (fixes floating-point frac drift), Ricci/raise_all
   symmetry exploitation (6 vs 9 components), Sommerfeld asymptotic array lookup,
   Levi-Civita curl unrolling, hoisted advection sign.
+- **Tier 3 optimizations (in progress, 5/7 complete):**
+  - *Manual CSE in `ccz4_rhs_point`:* Pre-compute `K - 2*Theta` (used 6×),
+    `A_mixed[k][j] = A[i][k] * h_UU[k][j]` (eliminates inner `ll` loop in A²
+    trace and RHS_A). Pure arithmetic — same math, fewer FLOPs.
+  - *`--block-size` CLI:* Alias for `--N_block`, validates even and >= 8.
+  - *Compile-time EM dispatch:* `make EM=on` adds `-DLATTICE_EM_ENABLED`.
+    `COMPILED_NUM_FIELDS` macro (25 or 31) gives compiler constant loop bounds
+    in dissipation/Sommerfeld hot paths. Default `EM=off` eliminates EM overhead.
+  - *Kernel restructuring:* Split 541-line `ccz4_rhs_point` into 5 `static inline`
+    sub-functions (`ccz4_load_and_differentiate`, `ccz4_compute_geometry`,
+    `ccz4_compute_covariant`, `ccz4_compute_evolution`, `ccz4_compute_gauge`).
+    Scoped lifetimes via typed structs (`ccz4_fields_t`, `ccz4_derivs_t`,
+    `ccz4_geom_t`, `ccz4_covd_t`). GPU benefit: better register allocation.
+    Zero memory overhead — compiler inlines into single kernel.
+  - *Persistent per-level packs:* `mesh_t` caches `leaf_pack` and
+    `level_packs[MAX_AMR_LEVELS]` across time steps. New `sync_to_blocks` /
+    `sync_from_blocks` copy only the data buffer (not rhs/scratch/accum).
+    `packs_dirty` flag triggers rebuild on regrid. Eliminates per-step
+    malloc/free/memcpy cycle (~1 GB allocation per step for large meshes).
+  - *Remaining:* Device-side ghost exchange (GPU kernels for all 5 phases,
+    eliminates PCIe DMA during time step). Dense output subcycling deferred.
 - **Position-dependent eta:** `eta(x) = eta_0 / W(x)` where `W = sqrt(chi)` for
   stable unequal-mass binary evolution. Gated behind `position_dependent_eta` flag
   (default 1). Ref: arXiv:1003.0859 (Muller & Brugmann).

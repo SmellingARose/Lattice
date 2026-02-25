@@ -500,3 +500,47 @@ void meshblock_pack_store_coarse(const meshblock_pack_t *pack, block_t **blocks)
         }
     }
 }
+
+/* ========================================================================
+ * Lightweight sync: data buffer only (persistent pack path)
+ * ======================================================================== */
+
+/*
+ * Sync only pack->data back into block fields.
+ * Skips rhs, scratch, accum — those are temporary per-step buffers.
+ * Saves 75% of memcpy vs full meshblock_pack_store.
+ */
+void meshblock_pack_sync_to_blocks(const meshblock_pack_t *pack, block_t **blocks)
+{
+    for (int b = 0; b < pack->n_blocks; b++) {
+        block_t *blk = blocks[pack->block_ids[b]];
+        size_t npts = pack->npts;
+
+        for (int f = 0; f < pack->n_fields; f++) {
+            size_t src_off = (size_t)f * pack->n_blocks * npts
+                           + (size_t)b * npts;
+            memcpy(blk->grid->fields[f], pack->data + src_off,
+                   npts * sizeof(double));
+        }
+    }
+}
+
+/*
+ * Sync block field data into pack->data.
+ * Skips rhs, scratch, accum — those get overwritten each step.
+ * Saves 75% of memcpy vs full meshblock_pack_load.
+ */
+void meshblock_pack_sync_from_blocks(meshblock_pack_t *pack, block_t **blocks)
+{
+    for (int b = 0; b < pack->n_blocks; b++) {
+        block_t *blk = blocks[pack->block_ids[b]];
+        size_t npts = pack->npts;
+
+        for (int f = 0; f < pack->n_fields; f++) {
+            size_t dst_off = (size_t)f * pack->n_blocks * npts
+                           + (size_t)b * npts;
+            memcpy(pack->data + dst_off, blk->grid->fields[f],
+                   npts * sizeof(double));
+        }
+    }
+}

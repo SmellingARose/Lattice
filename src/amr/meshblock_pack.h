@@ -167,4 +167,20 @@ void meshblock_pack_load_coarse(meshblock_pack_t *pack, block_t **blocks);
  */
 void meshblock_pack_store_coarse(const meshblock_pack_t *pack, block_t **blocks);
 
+/*
+ * Sync only the data (evolved fields) buffer from pack back to blocks.
+ * Much cheaper than meshblock_pack_store: skips rhs, scratch, accum
+ * (which are temporary per-step buffers overwritten each step).
+ * Used by persistent pack path to update block fields after an RK step.
+ */
+void meshblock_pack_sync_to_blocks(const meshblock_pack_t *pack, block_t **blocks);
+
+/*
+ * Sync only block field data into pack's data buffer.
+ * Much cheaper than meshblock_pack_load: skips rhs, scratch, accum.
+ * Used by persistent pack path when external operations (e.g.,
+ * ghost_fill_from_coarser) have modified block ghost zones.
+ */
+void meshblock_pack_sync_from_blocks(meshblock_pack_t *pack, block_t **blocks);
+
 #endif /* LATTICE_MESHBLOCK_PACK_H */
