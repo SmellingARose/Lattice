@@ -99,70 +99,103 @@ double boundary_d1(const double *f, int idx, int stride,
 #pragma omp end declare target
 #endif
 
+/*
+ * Apply Sommerfeld to a single ghost-zone point.
+ * Extracted to avoid duplicating the formula in each face loop.
+ */
+static inline void sommerfeld_point(double **rhs, const double *const *src,
+                                     const grid_t *g, int i, int j, int k,
+                                     double x, double y, double z)
+{
+    int idx = IDX(g, i, j, k);
+    int Nt = g->Ntotal;
+
+    double r = sqrt(x*x + y*y + z*z);
+    if (r < 1.0e-10) r = 1.0e-10;
+
+    int lo_off[3] = { i, j, k };
+    int hi_off[3] = { Nt - 1 - i, Nt - 1 - j, Nt - 1 - k };
+    int strides[3] = { STRIDE_X, STRIDE_Y(g), STRIDE_Z(g) };
+    double loc[3] = { x, y, z };
+
+    for (int field = 0; field < g->n_fields; field++) {
+        double sommerfeld = 0.0;
+        for (int dir = 0; dir < 3; dir++) {
+            double d1 = boundary_d1(src[field], idx, strides[dir],
+                                    lo_off[dir], hi_off[dir], g->dx);
+            sommerfeld += -d1 * loc[dir] / r;
+        }
+        double f_asym = asymptotic_value(field);
+        sommerfeld += (f_asym - src[field][idx]) / r;
+        rhs[field][idx] = sommerfeld;
+    }
+}
+
+/*
+ * Single-grid Sommerfeld: iterate only over ghost-zone face slabs.
+ * 6 faces cover all ghost points. Corners/edges may be visited multiple
+ * times but the Sommerfeld formula is idempotent (same result each time).
+ *
+ * Replaces the original Nt^3 loop with interior-skip, eliminating
+ * ~51% wasted branch evaluations (N^3 interior skips).
+ */
 void apply_sommerfeld(double **rhs, const double *const *src, const grid_t *g)
 {
     int lo = g->ghost;
     int hi = g->ghost + g->N;
     int Nt = g->Ntotal;
 
-    for (int k = 0; k < Nt; k++) {
+    /* X-faces: i in [0, lo) and [hi, Nt), all j, all k */
+    for (int k = 0; k < Nt; k++)
         for (int j = 0; j < Nt; j++) {
-            for (int i = 0; i < Nt; i++) {
-                /* Skip interior points */
-                if (i >= lo && i < hi &&
-                    j >= lo && j < hi &&
-                    k >= lo && k < hi)
-                    continue;
-
-                int idx = IDX(g, i, j, k);
-
-                double x = COORD(g, i);
-                double y = COORD(g, j);
-                double z = COORD(g, k);
-                double r = sqrt(x*x + y*y + z*z);
-                if (r < 1.0e-10) r = 1.0e-10;
-
-                /* Distance from each boundary edge */
-                int lo_off[3] = { i, j, k };
-                int hi_off[3] = { Nt - 1 - i, Nt - 1 - j, Nt - 1 - k };
-
-                int strides[3] = { STRIDE_X, STRIDE_Y(g), STRIDE_Z(g) };
-                double loc[3] = { x, y, z };
-
-                for (int field = 0; field < g->n_fields; field++) {
-                    double sommerfeld = 0.0;
-
-                    /* Sum: -d_i f * x^i / r */
-                    for (int dir = 0; dir < 3; dir++) {
-                        double d1 = boundary_d1(src[field], idx,
-                                                strides[dir],
-                                                lo_off[dir], hi_off[dir],
-                                                g->dx);
-                        sommerfeld += -d1 * loc[dir] / r;
-                    }
-
-                    /* Add decay: (f_asymptotic - f) / r */
-                    double f_asym = asymptotic_value(field);
-                    sommerfeld += (f_asym - src[field][idx]) / r;
-
-                    rhs[field][idx] = sommerfeld;
-                }
-            }
+            for (int i = 0; i < lo; i++)
+                sommerfeld_point(rhs, src, g, i, j, k,
+                                 COORD(g, i), COORD(g, j), COORD(g, k));
+            for (int i = hi; i < Nt; i++)
+                sommerfeld_point(rhs, src, g, i, j, k,
+                                 COORD(g, i), COORD(g, j), COORD(g, k));
         }
+
+    /* Y-faces: j in [0, lo) and [hi, Nt), interior x only (x-faces done above) */
+    for (int k = 0; k < Nt; k++) {
+        for (int j = 0; j < lo; j++)
+            for (int i = lo; i < hi; i++)
+                sommerfeld_point(rhs, src, g, i, j, k,
+                                 COORD(g, i), COORD(g, j), COORD(g, k));
+        for (int j = hi; j < Nt; j++)
+            for (int i = lo; i < hi; i++)
+                sommerfeld_point(rhs, src, g, i, j, k,
+                                 COORD(g, i), COORD(g, j), COORD(g, k));
     }
+
+    /* Z-faces: k in [0, lo) and [hi, Nt), interior x and y only */
+    for (int k = 0; k < lo; k++)
+        for (int j = lo; j < hi; j++)
+            for (int i = lo; i < hi; i++)
+                sommerfeld_point(rhs, src, g, i, j, k,
+                                 COORD(g, i), COORD(g, j), COORD(g, k));
+    for (int k = hi; k < Nt; k++)
+        for (int j = lo; j < hi; j++)
+            for (int i = lo; i < hi; i++)
+                sommerfeld_point(rhs, src, g, i, j, k,
+                                 COORD(g, i), COORD(g, j), COORD(g, k));
 }
 
 /*
- * Block-aware Sommerfeld: only applies to ghost points adjacent to
- * domain boundaries (on_boundary[face] == 1). Ghost zones filled by
- * inter-block exchange are left untouched.
+ * Block-aware Sommerfeld: iterate only over ghost-zone face slabs
+ * adjacent to domain boundaries (on_boundary[face] == 1).
+ *
+ * For each boundary face, iterate only the ghost slab for that face.
+ * Non-boundary faces are skipped entirely (ghost exchange filled them).
+ * Points at face intersections (edges/corners) may be visited multiple
+ * times but the Sommerfeld formula is idempotent.
  *
  * Physical coordinates use BLOCK_COORD (block origin + local index)
  * to give correct global coordinates for multi-block meshes.
  *
- * For each ghost point, we check which directions place it outside the
- * interior and whether on_boundary is set for that direction. If no
- * direction qualifies, the point was filled by ghost exchange.
+ * Replaces the original Nt^3 loop with interior-skip + near_boundary
+ * check. For a typical block with 1-3 boundary faces, this eliminates
+ * 80-97% of wasted iterations.
  */
 void apply_sommerfeld_block(double **rhs, const double *const *src,
                             const block_t *b)
@@ -172,62 +205,75 @@ void apply_sommerfeld_block(double **rhs, const double *const *src,
     int hi = g->ghost + g->N;
     int Nt = g->Ntotal;
 
-    for (int k = 0; k < Nt; k++) {
-        for (int j = 0; j < Nt; j++) {
-            for (int i = 0; i < Nt; i++) {
-                /* Skip interior points */
-                if (i >= lo && i < hi &&
-                    j >= lo && j < hi &&
-                    k >= lo && k < hi)
-                    continue;
+    /* No boundary faces → nothing to do */
+    if (!b->on_boundary[0] && !b->on_boundary[1] &&
+        !b->on_boundary[2] && !b->on_boundary[3] &&
+        !b->on_boundary[4] && !b->on_boundary[5])
+        return;
 
-                /* Check if this ghost point borders a domain boundary.
-                 * A point is near boundary face F if:
-                 *   - It's in the ghost zone for direction F
-                 *   - on_boundary[F] == 1 */
-                int near_boundary = 0;
-                if (i < lo  && b->on_boundary[0]) near_boundary = 1;
-                if (i >= hi && b->on_boundary[1]) near_boundary = 1;
-                if (j < lo  && b->on_boundary[2]) near_boundary = 1;
-                if (j >= hi && b->on_boundary[3]) near_boundary = 1;
-                if (k < lo  && b->on_boundary[4]) near_boundary = 1;
-                if (k >= hi && b->on_boundary[5]) near_boundary = 1;
+    /* X- face: i in [0, lo), all j, all k */
+    if (b->on_boundary[0]) {
+        for (int k = 0; k < Nt; k++)
+            for (int j = 0; j < Nt; j++)
+                for (int i = 0; i < lo; i++)
+                    sommerfeld_point(rhs, src, g, i, j, k,
+                                     BLOCK_COORD(b, 0, i),
+                                     BLOCK_COORD(b, 1, j),
+                                     BLOCK_COORD(b, 2, k));
+    }
 
-                if (!near_boundary) continue;
+    /* X+ face: i in [hi, Nt), all j, all k */
+    if (b->on_boundary[1]) {
+        for (int k = 0; k < Nt; k++)
+            for (int j = 0; j < Nt; j++)
+                for (int i = hi; i < Nt; i++)
+                    sommerfeld_point(rhs, src, g, i, j, k,
+                                     BLOCK_COORD(b, 0, i),
+                                     BLOCK_COORD(b, 1, j),
+                                     BLOCK_COORD(b, 2, k));
+    }
 
-                int idx = IDX(g, i, j, k);
+    /* Y- face: j in [0, lo), all i, all k */
+    if (b->on_boundary[2]) {
+        for (int k = 0; k < Nt; k++)
+            for (int j = 0; j < lo; j++)
+                for (int i = 0; i < Nt; i++)
+                    sommerfeld_point(rhs, src, g, i, j, k,
+                                     BLOCK_COORD(b, 0, i),
+                                     BLOCK_COORD(b, 1, j),
+                                     BLOCK_COORD(b, 2, k));
+    }
 
-                /* Physical coordinates via block origin */
-                double x = BLOCK_COORD(b, 0, i);
-                double y = BLOCK_COORD(b, 1, j);
-                double z = BLOCK_COORD(b, 2, k);
-                double r = sqrt(x*x + y*y + z*z);
-                if (r < 1.0e-10) r = 1.0e-10;
+    /* Y+ face: j in [hi, Nt), all i, all k */
+    if (b->on_boundary[3]) {
+        for (int k = 0; k < Nt; k++)
+            for (int j = hi; j < Nt; j++)
+                for (int i = 0; i < Nt; i++)
+                    sommerfeld_point(rhs, src, g, i, j, k,
+                                     BLOCK_COORD(b, 0, i),
+                                     BLOCK_COORD(b, 1, j),
+                                     BLOCK_COORD(b, 2, k));
+    }
 
-                /* Distance from each boundary edge (used for stencil choice) */
-                int lo_off[3] = { i, j, k };
-                int hi_off[3] = { Nt - 1 - i, Nt - 1 - j, Nt - 1 - k };
+    /* Z- face: k in [0, lo), all i, all j */
+    if (b->on_boundary[4]) {
+        for (int k = 0; k < lo; k++)
+            for (int j = 0; j < Nt; j++)
+                for (int i = 0; i < Nt; i++)
+                    sommerfeld_point(rhs, src, g, i, j, k,
+                                     BLOCK_COORD(b, 0, i),
+                                     BLOCK_COORD(b, 1, j),
+                                     BLOCK_COORD(b, 2, k));
+    }
 
-                int strides[3] = { STRIDE_X, STRIDE_Y(g), STRIDE_Z(g) };
-                double loc[3] = { x, y, z };
-
-                for (int field = 0; field < g->n_fields; field++) {
-                    double sommerfeld = 0.0;
-
-                    for (int dir = 0; dir < 3; dir++) {
-                        double d1 = boundary_d1(src[field], idx,
-                                                strides[dir],
-                                                lo_off[dir], hi_off[dir],
-                                                g->dx);
-                        sommerfeld += -d1 * loc[dir] / r;
-                    }
-
-                    double f_asym = asymptotic_value(field);
-                    sommerfeld += (f_asym - src[field][idx]) / r;
-
-                    rhs[field][idx] = sommerfeld;
-                }
-            }
-        }
+    /* Z+ face: k in [hi, Nt), all i, all j */
+    if (b->on_boundary[5]) {
+        for (int k = hi; k < Nt; k++)
+            for (int j = 0; j < Nt; j++)
+                for (int i = 0; i < Nt; i++)
+                    sommerfeld_point(rhs, src, g, i, j, k,
+                                     BLOCK_COORD(b, 0, i),
+                                     BLOCK_COORD(b, 1, j),
+                                     BLOCK_COORD(b, 2, k));
     }
 }

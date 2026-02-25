@@ -167,4 +167,16 @@ void backend_apply_accum_packed(meshblock_pack_t *pack);
  */
 void backend_ghost_exchange_packed(meshblock_pack_t *pack);
 
+/*
+ * Enforce algebraic constraints on packed data: det(h)=1, tr(A)=0,
+ * chi > 0, lapse > 0. Operates on ALL points (interior + ghost).
+ *
+ * CPU: OpenMP parallel for over all blocks and points.
+ * GPU: single kernel launch, collapse(4) over (block, k, j, i).
+ *
+ * Called after the final RK4 field update, before ghost exchange.
+ * Ref: enforce_algebraic() in rk4.c (per-grid version)
+ */
+void backend_enforce_algebraic_packed(meshblock_pack_t *pack);
+
 #endif /* LATTICE_BACKEND_H */

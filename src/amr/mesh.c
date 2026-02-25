@@ -19,6 +19,7 @@
 #include "morton.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 
 /*
@@ -201,6 +202,20 @@ mesh_t *mesh_create_ex(int N_root, int N_block, double L, rk_method_t method,
 
     free(coord_to_id);
 
+    /* Pre-allocate scratch buffer for ghost_fill_from_coarser temporal
+     * interpolation. Size = n_fields * block_npoints (one block's worth).
+     * Eliminates per-call malloc/free (~50+ per ghost exchange). */
+    {
+        int Nt_block = N_block + 2 * GHOST_WIDTH;
+        size_t block_npts = (size_t)Nt_block * Nt_block * Nt_block;
+        m->ghost_scratch_size = (size_t)n_fields * block_npts;
+        m->ghost_scratch = malloc(m->ghost_scratch_size * sizeof(double));
+        if (!m->ghost_scratch) {
+            fprintf(stderr, "mesh_create: ghost_scratch malloc failed\n");
+            exit(1);
+        }
+    }
+
     printf("[AMR] Mesh created: %d blocks, Morton-sorted, neighbors set\n",
            total);
 
@@ -215,6 +230,7 @@ void mesh_free(mesh_t *m)
             block_free(m->blocks[i]);
     }
     free(m->blocks);
+    free(m->ghost_scratch);
     free(m);
 }
 
@@ -366,6 +382,76 @@ static int blocks_per_side(const mesh_t *m, int level)
     return m->N_root * (1 << level);
 }
 
+/*
+ * Hash table for O(1) block lookup by (level, lx1, lx2, lx3).
+ * Open addressing with linear probing. Key includes level to
+ * distinguish blocks at different refinement levels with the
+ * same logical coordinates.
+ *
+ * Built locally in mesh_rebuild_neighbors, freed after use.
+ * Reduces neighbor-finding from O(N^2) to O(N) for N blocks.
+ */
+typedef struct {
+    uint64_t *keys;     /* hash keys (0 = empty slot) */
+    int      *values;   /* block IDs */
+    int       capacity; /* table size (power of 2) */
+    int       mask;     /* capacity - 1 for fast modulo */
+} block_hash_t;
+
+/* Encode (level, lx1, lx2, lx3) into a non-zero 64-bit key */
+static inline uint64_t block_hash_key(int level, int lx1, int lx2, int lx3)
+{
+    /* Pack: level in bits 48-63, coords in lower 48 bits (16 each).
+     * Add 1 to ensure key is never zero (zero = empty slot). */
+    return ((uint64_t)(level + 1) << 48)
+         | ((uint64_t)(lx1 & 0xFFFF) << 32)
+         | ((uint64_t)(lx2 & 0xFFFF) << 16)
+         | (uint64_t)(lx3 & 0xFFFF);
+}
+
+static void block_hash_init(block_hash_t *ht, int n_entries)
+{
+    /* Size: next power of 2 >= 2 * n_entries (load factor <= 0.5) */
+    int cap = 16;
+    while (cap < 2 * n_entries) cap *= 2;
+    ht->capacity = cap;
+    ht->mask = cap - 1;
+    ht->keys = calloc(cap, sizeof(uint64_t));
+    ht->values = calloc(cap, sizeof(int));
+}
+
+static void block_hash_free(block_hash_t *ht)
+{
+    free(ht->keys);
+    free(ht->values);
+}
+
+static void block_hash_insert(block_hash_t *ht, int level,
+                                int lx1, int lx2, int lx3, int block_id)
+{
+    uint64_t key = block_hash_key(level, lx1, lx2, lx3);
+    int slot = (int)(key & ht->mask);
+    while (ht->keys[slot] != 0) {
+        if (ht->keys[slot] == key) { ht->values[slot] = block_id; return; }
+        slot = (slot + 1) & ht->mask;
+    }
+    ht->keys[slot] = key;
+    ht->values[slot] = block_id;
+}
+
+/* Returns block ID or -1 if not found */
+static int block_hash_find(const block_hash_t *ht, int level,
+                             int lx1, int lx2, int lx3)
+{
+    uint64_t key = block_hash_key(level, lx1, lx2, lx3);
+    int slot = (int)(key & ht->mask);
+    while (ht->keys[slot] != 0) {
+        if (ht->keys[slot] == key) return ht->values[slot];
+        slot = (slot + 1) & ht->mask;
+    }
+    return -1;
+}
+
 void mesh_rebuild_neighbors(mesh_t *m)
 {
     /* First pass: update max_level */
@@ -375,6 +461,17 @@ void mesh_rebuild_neighbors(mesh_t *m)
         if (!b) continue;
         if (b->loc.level > m->max_level)
             m->max_level = b->loc.level;
+    }
+
+    /* Build hash table for O(1) block lookup by (level, lx1, lx2, lx3).
+     * Replaces the O(N) linear scan in mesh_find_block(). */
+    block_hash_t ht;
+    block_hash_init(&ht, m->num_blocks);
+    for (int i = 0; i < m->num_blocks; i++) {
+        block_t *b = m->blocks[i];
+        if (!b) continue;
+        block_hash_insert(&ht, b->loc.level,
+                          b->loc.lx1, b->loc.lx2, b->loc.lx3, b->id);
     }
 
     /* Second pass: rebuild neighbors for every block */
@@ -399,7 +496,7 @@ void mesh_rebuild_neighbors(mesh_t *m)
         b->on_boundary[4] = (b->loc.lx3 == 0)       ? 1 : 0;
         b->on_boundary[5] = (b->loc.lx3 == bps - 1) ? 1 : 0;
 
-        /* 26 neighbors.
+        /* 26 neighbors via hash table lookup (O(1) per direction).
          * For each direction, first try same-level. If not found (refined
          * away or boundary), walk up to coarser levels by mapping the
          * NEIGHBOR'S fine-level coordinates to coarser levels via floor
@@ -422,9 +519,9 @@ void mesh_rebuild_neighbors(mesh_t *m)
             if (nx >= 0 && nx < bps &&
                 ny >= 0 && ny < bps &&
                 nz >= 0 && nz < bps) {
-                block_t *nbr = mesh_find_block(m, level, nx, ny, nz);
-                if (nbr) {
-                    b->neighbor_ids[n] = nbr->id;
+                int nbr_id = block_hash_find(&ht, level, nx, ny, nz);
+                if (nbr_id >= 0) {
+                    b->neighbor_ids[n] = nbr_id;
                     b->nblevel[oz + 1][oy + 1][ox + 1] = level;
                     continue;
                 }
@@ -453,9 +550,10 @@ void mesh_rebuild_neighbors(mesh_t *m)
                         cnz < 0 || cnz >= cbps)
                         continue;
 
-                    block_t *nbr = mesh_find_block(m, cur_level, cnx, cny, cnz);
-                    if (nbr) {
-                        b->neighbor_ids[n] = nbr->id;
+                    int nbr_id = block_hash_find(&ht, cur_level,
+                                                  cnx, cny, cnz);
+                    if (nbr_id >= 0) {
+                        b->neighbor_ids[n] = nbr_id;
                         b->nblevel[oz + 1][oy + 1][ox + 1] = cur_level;
                         found = 1;
                     }
@@ -464,5 +562,7 @@ void mesh_rebuild_neighbors(mesh_t *m)
             /* If not found at any level, remains -1 (physical boundary) */
         }
     }
+
+    block_hash_free(&ht);
 }
 

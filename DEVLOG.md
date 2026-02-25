@@ -3,6 +3,47 @@
 > **Note:** When adding/removing/renaming files or functions, also update
 > `docs/architecture.html` — the living map of the codebase structure.
 
+## 2026-02-25: Tier 2 mechanical optimizations
+
+12 mechanical Phase 3 improvements across two sessions. Highlights:
+
+**Structural (measurable impact):**
+- **Hash table neighbor lookup** (`mesh.c`): Open-addressing hash in
+  `mesh_rebuild_neighbors()` replaces O(N) linear scan with O(1). Key =
+  `(level+1)<<48 | lx1<<32 | lx2<<16 | lx3`. Capacity 4*N_blocks, ~25% load.
+- **`backend_enforce_algebraic_packed()`** (`backend_cpu.c`, `backend_gpu.c`):
+  Batched det(h)=1 / tr(A)=0 on device. Wired into packed RK4 before unmap,
+  eliminating GPU↔host round-trip. CPU: flattened (block,k,j) OMP. GPU: collapse(4).
+- **Face-only Sommerfeld** (`sommerfeld.c`): Rewrote all 3 functions to iterate
+  ghost-zone face slabs instead of full Nt³ with interior skip. Extracted
+  `sommerfeld_point()` / `packed_sommerfeld_point()` helpers. ~5x fewer iterations
+  for single grid; 80-97% fewer for multi-block (interior blocks skip entirely).
+- **Subcycling frac drift fix** (`rk4.c`): Changed `subcycle_level()` to take
+  `int sub_step` parameter. Frac = `sub_step * 0.5` instead of `floor(t/dt)`
+  floating-point arithmetic. Correctness fix for long-duration runs.
+
+**Infrastructure:**
+- **Ghost scratch buffer** (`mesh.h`, `mesh.c`, `ghost_exchange.c`): Pre-allocated
+  `ghost_scratch` in `mesh_t`, sized `n_fields * block_npoints`. Eliminates
+  malloc/free per `ghost_fill_from_coarser()` call.
+- **MAX_PUNCTURES 16→32** (`params.h`).
+
+**Micro-optimizations (correct but marginal):**
+- Sommerfeld asymptotic value / falloff rate array lookup (no branch divergence).
+- `raise_all_2()` symmetry: 6 vs 9 components.
+- Hoisted advection `sign(beta^i)` before inner x-loop.
+- Ricci tensor symmetry: 6 vs 9 components.
+- Levi-Civita curl unrolled to 6 terms (Maxwell).
+
+**New test:** `test_nbody()` in `test_bowen_york.c` — 3-BH line + 5-BH pentagon
+smoke tests (Ham L2 < 1.0, chi > 0).
+
+**Files changed:** `rk4.c`, `mesh.h`, `mesh.c`, `ghost_exchange.c`, `sommerfeld.c`,
+`backend.h`, `backend_cpu.c`, `backend_gpu.c`, `params.h`, `ccz4_rhs.c`,
+`maxwell_rhs.c`, `tensor_utils.h`, `test_bowen_york.c`.
+
+All tests pass. Convergence order unchanged: 6.56 / 6.25.
+
 ## 2026-02-24: Fix packed kernel dissipation + stale tests
 
 **Bug (production):** Packed RHS kernels in `backend_cpu.c` and `backend_gpu.c`

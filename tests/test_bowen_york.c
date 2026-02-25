@@ -492,6 +492,102 @@ static void test_binary_orbit(void)
     grid_free(g);
 }
 
+/* ================================================================
+ * Test 10: N-body initial data (3 and 5 punctures)
+ *
+ * Validates that the multigrid solver converges for N > 2 punctures
+ * and produces physical initial data (chi > 0, constraints bounded).
+ * ================================================================ */
+static void test_nbody(void)
+{
+    printf("\n--- Test 10: N-body initial data (N=3, N=5) ---\n");
+
+    /* --- 3 BHs in a line with balanced momentum --- */
+    {
+        printf("  Subtest: 3 BHs in a line\n");
+        puncture_data_t bhs[3];
+        memset(bhs, 0, sizeof(bhs));
+
+        bhs[0].mass = 1.0; bhs[0].center[0] = -3.0;
+        bhs[0].momentum[1] = 0.05;
+        bhs[1].mass = 1.0; bhs[1].center[0] =  0.0;
+        bhs[2].mass = 1.0; bhs[2].center[0] =  3.0;
+        bhs[2].momentum[1] = -0.05;
+
+        int N = 24;
+        double L = 20.0;
+        grid_t *g = grid_alloc(N, L, RK_CLASSIC);
+
+        set_bowen_york(g, 3, bhs);
+
+        double ham = compute_constraint_l2(g);
+        printf("    Ham L2 = %.6e\n", ham);
+        CHECK(ham < 1.0, "3-BH Hamiltonian constraint bounded");
+
+        /* chi > 0 everywhere */
+        int gw = g->ghost;
+        int Nt = g->Ntotal;
+        double chi_min = 1e30;
+        for (int k = gw; k < Nt - gw; k++)
+            for (int j = gw; j < Nt - gw; j++)
+                for (int i = gw; i < Nt - gw; i++) {
+                    int idx = IDX(g, i, j, k);
+                    double chi = g->fields[FIELD_CHI][idx];
+                    if (chi < chi_min) chi_min = chi;
+                }
+
+        printf("    chi_min = %.6e\n", chi_min);
+        CHECK(chi_min > 0.0, "3-BH chi > 0 everywhere");
+
+        grid_free(g);
+    }
+
+    /* --- 5 BHs in a pentagon --- */
+    {
+        printf("  Subtest: 5 BHs in a pentagon\n");
+        puncture_data_t bhs[5];
+        memset(bhs, 0, sizeof(bhs));
+
+        double radius = 3.0;
+        for (int n = 0; n < 5; n++) {
+            double angle = 2.0 * M_PI * n / 5.0;
+            bhs[n].mass = 0.5;
+            bhs[n].center[0] = radius * cos(angle);
+            bhs[n].center[1] = radius * sin(angle);
+            /* Small tangential momentum for orbit */
+            bhs[n].momentum[0] = -0.02 * sin(angle);
+            bhs[n].momentum[1] =  0.02 * cos(angle);
+        }
+
+        int N = 24;
+        double L = 20.0;
+        grid_t *g = grid_alloc(N, L, RK_CLASSIC);
+
+        set_bowen_york(g, 5, bhs);
+
+        double ham = compute_constraint_l2(g);
+        printf("    Ham L2 = %.6e\n", ham);
+        CHECK(ham < 1.0, "5-BH Hamiltonian constraint bounded");
+
+        /* chi > 0 everywhere */
+        int gw = g->ghost;
+        int Nt = g->Ntotal;
+        double chi_min = 1e30;
+        for (int k = gw; k < Nt - gw; k++)
+            for (int j = gw; j < Nt - gw; j++)
+                for (int i = gw; i < Nt - gw; i++) {
+                    int idx = IDX(g, i, j, k);
+                    double chi = g->fields[FIELD_CHI][idx];
+                    if (chi < chi_min) chi_min = chi;
+                }
+
+        printf("    chi_min = %.6e\n", chi_min);
+        CHECK(chi_min > 0.0, "5-BH chi > 0 everywhere");
+
+        grid_free(g);
+    }
+}
+
 /* ================================================================ */
 int main(void)
 {
@@ -508,6 +604,7 @@ int main(void)
     test_small_momentum();
     test_convergence_order();
     test_binary_orbit();
+    test_nbody();
 
     printf("\n=== Results: %d passed, %d failed ===\n",
            tests_passed, tests_failed);

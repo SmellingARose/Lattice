@@ -172,7 +172,7 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 
 <div class="banner">
   <strong>Living document.</strong> This is the single architecture reference for the Lattice codebase. Updated whenever structure changes &mdash; see CLAUDE.md.<br>
-  <strong>Last updated:</strong> 2026-02-20 &nbsp;|&nbsp; <strong>Status:</strong> Phase 2 complete (31 evolved fields). Phase 3 (production) next.
+  <strong>Last updated:</strong> 2026-02-25 &nbsp;|&nbsp; <strong>Status:</strong> Phase 2 complete, Phase 3 in progress (Tier 1+2 optimizations done, N-body validated).
 </div>
 
 <!-- ========================================== -->
@@ -312,7 +312,7 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 <table class="file-table">
 <tr><th>File</th><th>Purpose</th></tr>
 <tr><td><code>finite_diff.h</code></td><td>Header-only 6th-order FD operators: centered 1st/2nd, fused 1st+2nd (<code>fd_d1_d2()</code>), mixed 2nd, upwind advection, KO dissipation. GPU-annotated. Compile-time <code>FD_ORDER</code> selects 4th or 6th order.</td></tr>
-<tr><td><code>rk4.c</code></td><td>Single-grid stepper (<code>rk4_step</code>) and AMR mesh stepper (<code>rk4_step_mesh</code>). Packed batch: all leaf blocks in one kernel per operation. Flattened update loops (single OMP region over all fields). Also <code>enforce_algebraic()</code>.</td></tr>
+<tr><td><code>rk4.c</code></td><td>Single-grid stepper (<code>rk4_step</code>) and AMR mesh stepper (<code>rk4_step_mesh</code>). Packed batch: all leaf blocks in one kernel per operation. Flattened update loops (single OMP region over all fields). Subcycling uses integer <code>sub_step</code> for drift-free temporal interpolation. Also <code>enforce_algebraic()</code>.</td></tr>
 <tr><td><code>interpolate.h</code></td><td>4th-order off-grid Lagrange interpolation (used by AH finder for field access at non-grid points).</td></tr>
 </table>
 
@@ -333,7 +333,7 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 
 <table class="file-table">
 <tr><th>File</th><th>Purpose</th></tr>
-<tr><td><code>puncture.c</code></td><td>Brill-Lindquist multi-puncture (up to 16 BHs at rest). Block-aware variant for AMR.</td></tr>
+<tr><td><code>puncture.c</code></td><td>Brill-Lindquist multi-puncture (up to 32 BHs at rest). Block-aware variant for AMR.</td></tr>
 <tr><td><code>bowen_york.h/c</code></td><td>Bowen-York extrinsic curvature A_ij for linear momentum + spin. CCZ4 field conversion pipeline. Mesh-level API (<code>set_bowen_york_mesh</code>) solves directly on evolution blocks.</td></tr>
 <tr><td><code>relaxation.h/c</code></td><td>FAS multigrid constraint solver. 1-field (BY) and 4-field coupled (HiSpID). Full Multigrid cycle + Newton-Gauss-Seidel smoothing, 8-color GPU-compatible. O(N^3) to discretization accuracy.</td></tr>
 <tr><td><code>relaxation_amr.h/c</code></td><td>AMR composite multigrid: FAS V-cycles on AMR block levels + uniform MG hierarchy below level 0. <code>refine_mesh_near_punctures()</code> shared utility. Mesh-level solvers borrow the evolution mesh (no copy).</td></tr>
@@ -359,7 +359,7 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 
 <table class="file-table">
 <tr><th>File</th><th>Purpose</th></tr>
-<tr><td><code>sommerfeld.c</code></td><td><code>apply_sommerfeld()</code> (single-grid) and <code>apply_sommerfeld_block()</code> (AMR). GPU-annotated helpers.</td></tr>
+<tr><td><code>sommerfeld.c</code></td><td><code>apply_sommerfeld()</code> (single-grid) and <code>apply_sommerfeld_block()</code> (AMR). Face-only ghost slab iteration (~5x fewer iterations than full-grid scan). Extracted <code>sommerfeld_point()</code> helper. GPU-annotated.</td></tr>
 </table>
 
 <!-- ========================================== -->
@@ -370,7 +370,7 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 <table class="file-table">
 <tr><th>File</th><th>Purpose</th></tr>
 <tr><td><code>block.h/c</code></td><td><code>block_t</code>: grid_t + coarse_buf + logical location + 26 neighbors + tree links. <code>block_alloc()</code> takes <code>n_fields</code> for conditional allocation.</td></tr>
-<tr><td><code>mesh.h/c</code></td><td><code>mesh_t</code> with <code>int n_fields</code>: block collection, Morton sort, multi-level neighbor finding. <code>mesh_create_ex()</code> takes <code>n_fields</code>; <code>mesh_create()</code> is a backward-compatible wrapper.</td></tr>
+<tr><td><code>mesh.h/c</code></td><td><code>mesh_t</code> with <code>int n_fields</code>: block collection, Morton sort, neighbor finding via hash table (O(1) lookup). Pre-allocated <code>ghost_scratch</code> buffer for temporal interpolation. <code>mesh_create_ex()</code> takes <code>n_fields</code>; <code>mesh_create()</code> is a backward-compatible wrapper.</td></tr>
 <tr><td><code>ghost_exchange.h/c</code></td><td>5-phase coarse-buffer multilevel ghost exchange (AthenaK pattern).</td></tr>
 <tr><td><code>prolongation.h/c</code></td><td>6th-order cell-centered Lagrange interpolation (coarse to fine). 7-point 1D stencil, 3D tensor product. Pre-computed <code>prolong_wkj[4][7][7]</code> weight products for 4 octant combos.</td></tr>
 <tr><td><code>restriction.h/c</code></td><td>6th-order Lagrange cell-average restriction (fine to coarse). 6-point symmetric stencil: w = {-17/11520, 97/3840, 2743/5760, ...}. Pre-computed <code>restrict_wkj[6][6]</code> weight products.</td></tr>
@@ -387,9 +387,9 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 
 <table class="file-table">
 <tr><th>File</th><th>Purpose</th></tr>
-<tr><td><code>backend.h</code></td><td>Abstract interface: RHS, Sommerfeld, CK45 update, ghost exchange, map/unmap, copy, zero.</td></tr>
-<tr><td><code>backend_cpu.c</code></td><td>OpenMP threads. Packed: flattened (block, k, j) iteration, inner i-loop for SIMD. Ghost exchange directly on pack buffers.</td></tr>
-<tr><td><code>backend_gpu.c</code></td><td>OpenMP target. Packed: collapse(4) over (block, k, j, i). ~5.3 KB stack per thread. Requires GCC 15+ with 16 KB thread stack.</td></tr>
+<tr><td><code>backend.h</code></td><td>Abstract interface: RHS, Sommerfeld, CK45 update, ghost exchange, enforce_algebraic, map/unmap, copy, zero.</td></tr>
+<tr><td><code>backend_cpu.c</code></td><td>OpenMP threads. Packed: flattened (block, k, j) iteration, inner i-loop for SIMD. Ghost exchange directly on pack buffers. <code>backend_enforce_algebraic_packed()</code> for batched det(h)=1, tr(A)=0.</td></tr>
+<tr><td><code>backend_gpu.c</code></td><td>OpenMP target. Packed: collapse(4) over (block, k, j, i). ~5.3 KB stack per thread. <code>backend_enforce_algebraic_packed()</code> runs on device (no host sync). Requires GCC 15+ with 16 KB thread stack.</td></tr>
 </table>
 
 <!-- ========================================== -->
@@ -713,7 +713,7 @@ Level 0: everywhere (dx ~ M/2)     — outer domain + boundary</code></pre>
 <details>
 <summary>Why classic RK4 as the default time integrator?</summary>
 <div class="detail-body">
-<p>Classic RK4 (4 stages, 4 memory blocks) is the default because it is faster: 4 RHS evaluations per step vs CK45's 5 (20% less compute). CK45 is available via <code>--rk ck45</code> for memory-constrained scenarios (3 blocks, 25% less memory). At N=128 with 31 fields, CK45 saves ~1.1 GB. At N=256, classic requires ~13.7 GB (tight on M4 16 GB) while CK45 fits in ~10.3 GB. <strong>Known issue:</strong> the classic RK4 packed mesh stepper (<code>classic_rk4_step_mesh_packed</code>) produces higher constraint violations than the CK45 packed path; needs investigation.</p>
+<p>Classic RK4 (4 stages, 4 memory blocks) is the default because it is faster: 4 RHS evaluations per step vs CK45's 5 (20% less compute). CK45 is available via <code>--rk ck45</code> for memory-constrained scenarios (3 blocks, 25% less memory). At N=128 with 31 fields, CK45 saves ~1.1 GB. At N=256, classic requires ~13.7 GB (tight on M4 16 GB) while CK45 fits in ~10.3 GB. <code>backend_enforce_algebraic_packed()</code> runs on device before unmap, avoiding a GPU&harr;host round-trip.</p>
 </div>
 </details>
 
@@ -774,7 +774,7 @@ export GOMP_NVPTX_NATIVE_GPU_THREAD_STACK_SIZE=16384
 <tr><td><code>--N</code></td><td>32</td><td>Grid points per dimension (single-grid) or per block (AMR)</td></tr>
 <tr><td><code>--L</code></td><td>10</td><td>Domain half-length in M</td></tr>
 <tr><td><code>--steps</code></td><td>100</td><td>Number of timesteps</td></tr>
-<tr><td><code>--puncture M,x,y,z[,Px,Py,Pz,Sx,Sy,Sz,Q]</code></td><td>&mdash;</td><td>Add a puncture (up to 16). Mass, position, optional momentum/spin/charge.</td></tr>
+<tr><td><code>--puncture M,x,y,z[,Px,Py,Pz,Sx,Sy,Sz,Q]</code></td><td>&mdash;</td><td>Add a puncture (up to 32). Mass, position, optional momentum/spin/charge.</td></tr>
 <tr><td><code>--rk classic|ck45</code></td><td>classic</td><td>Time integrator selection</td></tr>
 <tr><td><code>--em</code></td><td>off</td><td>Enable Einstein-Maxwell (6 extra evolved fields)</td></tr>
 <tr><td><code>--ah</code></td><td>off</td><td>Enable apparent horizon finder</td></tr>

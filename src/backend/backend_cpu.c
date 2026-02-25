@@ -16,6 +16,7 @@
 #include "../evolution/maxwell_rhs.h"
 #include "../boundary/sommerfeld.h"
 #include "../core/fields.h"
+#include "../geometry/tensor_utils.h"
 #include "../amr/block.h"
 #include "../amr/restriction.h"
 #include "../amr/prolongation.h"
@@ -207,9 +208,51 @@ void backend_compute_rhs_packed(meshblock_pack_t *pack, const sim_params_t *p)
  *
  * CPU: sequential over blocks, no inner OMP (boundary cells are sparse).
  */
+/*
+ * Apply Sommerfeld RHS at a single ghost point for packed data.
+ * Extracted to avoid duplicating the formula in each face loop.
+ */
+static inline void packed_sommerfeld_point(
+    double *const *rhs_ptrs, const double *const *src_ptrs,
+    const grid_t *g, int nf, int i, int j, int k,
+    double x, double y, double z)
+{
+    int idx = IDX(g, i, j, k);
+    int Nt = g->Ntotal;
+
+    double r = sqrt(x*x + y*y + z*z);
+    if (r < 1.0e-10) r = 1.0e-10;
+
+    int lo_off[3] = { i, j, k };
+    int hi_off[3] = { Nt - 1 - i, Nt - 1 - j, Nt - 1 - k };
+    int strides[3] = { STRIDE_X, STRIDE_Y(g), STRIDE_Z(g) };
+    double loc[3] = { x, y, z };
+
+    for (int field = 0; field < nf; field++) {
+        double sommerfeld = 0.0;
+        for (int dir = 0; dir < 3; dir++) {
+            double d1 = boundary_d1(src_ptrs[field], idx, strides[dir],
+                                    lo_off[dir], hi_off[dir], g->dx);
+            sommerfeld += -d1 * loc[dir] / r;
+        }
+        double f_asym = asymptotic_value(field);
+        sommerfeld += (f_asym - src_ptrs[field][idx]) / r;
+        rhs_ptrs[field][idx] = sommerfeld;
+    }
+}
+
+/*
+ * Packed Sommerfeld BCs: iterate only over boundary-face ghost slabs.
+ * For each block, only faces with on_boundary[face] == 1 are processed.
+ * Points at face intersections (edges/corners) may be visited multiple
+ * times but the Sommerfeld formula is idempotent.
+ *
+ * Replaces the original Nt^3 loop with interior-skip + near_boundary
+ * check, eliminating 80-97% of wasted iterations per block.
+ */
 void backend_sommerfeld_packed(meshblock_pack_t *pack, const sim_params_t *p)
 {
-    (void)p;  /* field count now comes from pack->n_fields */
+    (void)p;
     int lo = pack->ghost;
     int hi = pack->ghost + pack->N;
     int Nt = pack->Ntotal;
@@ -218,6 +261,12 @@ void backend_sommerfeld_packed(meshblock_pack_t *pack, const sim_params_t *p)
 
     #pragma omp parallel for schedule(dynamic)
     for (int b = 0; b < nb; b++) {
+        const int *ob = pack->on_boundary + b * 6;
+
+        /* Skip blocks with no boundary faces */
+        if (!ob[0] && !ob[1] && !ob[2] && !ob[3] && !ob[4] && !ob[5])
+            continue;
+
         /* Per-field pointer arrays into pack layout for this block */
         double *rhs_ptrs[NUM_FIELDS];
         const double *src_ptrs[NUM_FIELDS];
@@ -227,14 +276,11 @@ void backend_sommerfeld_packed(meshblock_pack_t *pack, const sim_params_t *p)
             rhs_ptrs[f] = pack->rhs  + base;
         }
 
-        /* Block-local metadata */
         double block_ox = pack->origins[b * 3 + 0];
         double block_oy = pack->origins[b * 3 + 1];
         double block_oz = pack->origins[b * 3 + 2];
         double dx = pack->dx_per_block[b];
-        const int *ob = pack->on_boundary + b * 6;
 
-        /* Stack-local grid_t for IDX, STRIDE macros */
         grid_t g_local;
         memset(&g_local, 0, sizeof(grid_t));
         g_local.N       = pack->N;
@@ -243,79 +289,70 @@ void backend_sommerfeld_packed(meshblock_pack_t *pack, const sim_params_t *p)
         g_local.dx      = dx;
         g_local.npoints = npts;
 
-        /* Iterate over all points, apply Sommerfeld to boundary ghosts */
-        for (int k = 0; k < Nt; k++) {
-            for (int j = 0; j < Nt; j++) {
-                for (int i = 0; i < Nt; i++) {
-                    /* Skip interior points — no BCs needed */
-                    if (i >= lo && i < hi &&
-                        j >= lo && j < hi &&
-                        k >= lo && k < hi)
-                        continue;
+        int nf = pack->n_fields;
 
-                    /* Check if this ghost point borders a domain boundary.
-                     * A point is near boundary face F if:
-                     *   - It's in the ghost zone for direction F
-                     *   - on_boundary[F] == 1 for this block
-                     * Ref: apply_sommerfeld_block in sommerfeld.c */
-                    int near_boundary = 0;
-                    if (i < lo  && ob[0]) near_boundary = 1;
-                    if (i >= hi && ob[1]) near_boundary = 1;
-                    if (j < lo  && ob[2]) near_boundary = 1;
-                    if (j >= hi && ob[3]) near_boundary = 1;
-                    if (k < lo  && ob[4]) near_boundary = 1;
-                    if (k >= hi && ob[5]) near_boundary = 1;
+        /* Macro: physical coord from block origin + local index */
+        #define BX(ii) (block_ox + ((ii) - GHOST_WIDTH + 0.5) * dx)
+        #define BY(jj) (block_oy + ((jj) - GHOST_WIDTH + 0.5) * dx)
+        #define BZ(kk) (block_oz + ((kk) - GHOST_WIDTH + 0.5) * dx)
 
-                    if (!near_boundary) continue;
+        /* X- face */
+        if (ob[0])
+            for (int k = 0; k < Nt; k++)
+                for (int j = 0; j < Nt; j++)
+                    for (int i = 0; i < lo; i++)
+                        packed_sommerfeld_point(rhs_ptrs,
+                            (const double *const *)src_ptrs, &g_local,
+                            nf, i, j, k, BX(i), BY(j), BZ(k));
 
-                    int idx = IDX(&g_local, i, j, k);
+        /* X+ face */
+        if (ob[1])
+            for (int k = 0; k < Nt; k++)
+                for (int j = 0; j < Nt; j++)
+                    for (int i = hi; i < Nt; i++)
+                        packed_sommerfeld_point(rhs_ptrs,
+                            (const double *const *)src_ptrs, &g_local,
+                            nf, i, j, k, BX(i), BY(j), BZ(k));
 
-                    /* Physical coordinates via block origin.
-                     * Matches BLOCK_COORD(blk, dir, i) from block.h:
-                     *   origin[dir] + (i - GHOST_WIDTH + 0.5) * dx */
-                    double x = block_ox + (i - GHOST_WIDTH + 0.5) * dx;
-                    double y = block_oy + (j - GHOST_WIDTH + 0.5) * dx;
-                    double z = block_oz + (k - GHOST_WIDTH + 0.5) * dx;
-                    double r = sqrt(x*x + y*y + z*z);
-                    if (r < 1.0e-10) r = 1.0e-10;
+        /* Y- face */
+        if (ob[2])
+            for (int k = 0; k < Nt; k++)
+                for (int j = 0; j < lo; j++)
+                    for (int i = 0; i < Nt; i++)
+                        packed_sommerfeld_point(rhs_ptrs,
+                            (const double *const *)src_ptrs, &g_local,
+                            nf, i, j, k, BX(i), BY(j), BZ(k));
 
-                    /* Distance from each boundary edge (for stencil choice) */
-                    int lo_off[3] = { i, j, k };
-                    int hi_off[3] = { Nt - 1 - i, Nt - 1 - j, Nt - 1 - k };
+        /* Y+ face */
+        if (ob[3])
+            for (int k = 0; k < Nt; k++)
+                for (int j = hi; j < Nt; j++)
+                    for (int i = 0; i < Nt; i++)
+                        packed_sommerfeld_point(rhs_ptrs,
+                            (const double *const *)src_ptrs, &g_local,
+                            nf, i, j, k, BX(i), BY(j), BZ(k));
 
-                    int strides[3] = {
-                        STRIDE_X,
-                        STRIDE_Y(&g_local),
-                        STRIDE_Z(&g_local)
-                    };
-                    double loc[3] = { x, y, z };
+        /* Z- face */
+        if (ob[4])
+            for (int k = 0; k < lo; k++)
+                for (int j = 0; j < Nt; j++)
+                    for (int i = 0; i < Nt; i++)
+                        packed_sommerfeld_point(rhs_ptrs,
+                            (const double *const *)src_ptrs, &g_local,
+                            nf, i, j, k, BX(i), BY(j), BZ(k));
 
-                    /* Apply Sommerfeld to each field:
-                     * rhs = -sum_dir(d_dir(f) * x_dir / r)
-                     *      + (f_asymptotic - f) / r
-                     * Skip EM fields when disabled (saves 6/31 iterations).
-                     * Ref: GRChombo BoundaryConditions.cpp:593-661 */
-                    int nf = pack->n_fields;
-                    for (int field = 0; field < nf; field++) {
-                        double sommerfeld = 0.0;
+        /* Z+ face */
+        if (ob[5])
+            for (int k = hi; k < Nt; k++)
+                for (int j = 0; j < Nt; j++)
+                    for (int i = 0; i < Nt; i++)
+                        packed_sommerfeld_point(rhs_ptrs,
+                            (const double *const *)src_ptrs, &g_local,
+                            nf, i, j, k, BX(i), BY(j), BZ(k));
 
-                        for (int dir = 0; dir < 3; dir++) {
-                            double d1 = boundary_d1(
-                                src_ptrs[field], idx,
-                                strides[dir],
-                                lo_off[dir], hi_off[dir],
-                                dx);
-                            sommerfeld += -d1 * loc[dir] / r;
-                        }
-
-                        double f_asym = asymptotic_value(field);
-                        sommerfeld += (f_asym - src_ptrs[field][idx]) / r;
-
-                        rhs_ptrs[field][idx] = sommerfeld;
-                    }
-                }
-            }
-        }
+        #undef BX
+        #undef BY
+        #undef BZ
     }
 }
 
@@ -953,4 +990,92 @@ void backend_ghost_exchange_packed(meshblock_pack_t *pack)
 
     /* Phase 4: Prolongate coarse_buf → fine ghosts */
     packed_prolongate_fine_ghosts(pack);
+}
+
+/*
+ * Enforce algebraic constraints on packed data: det(h)=1, tr(A)=0.
+ * Flattened (block, k, j) outer loop with single OMP parallel region.
+ * Same physics as enforce_algebraic() in rk4.c, applied to pack buffers.
+ *
+ * Ref: GRChombo CCZ4/TraceARemoval.hpp, CCZ4/PositiveChiAndAlpha.hpp
+ */
+void backend_enforce_algebraic_packed(meshblock_pack_t *pack)
+{
+    int Nt = pack->Ntotal;
+    int nb = pack->n_blocks;
+    size_t npts = pack->npts;
+    int n_kj = Nt * Nt;
+    int total_work = nb * n_kj;
+
+    #pragma omp parallel for schedule(static)
+    for (int bkj = 0; bkj < total_work; bkj++) {
+        int b = bkj / n_kj;
+        int rem = bkj % n_kj;
+        int k = rem / Nt;
+        int j = rem % Nt;
+
+        for (int i = 0; i < Nt; i++) {
+            int idx = k * Nt * Nt + j * Nt + i;
+
+            /* Per-field pointers for this block */
+            #define FIELD_PTR(fld) (pack->data + (size_t)(fld) * nb * npts \
+                                    + (size_t)b * npts)
+
+            /* Load h_ij */
+            double h_loc[3][3];
+            h_loc[0][0] = FIELD_PTR(FIELD_H11)[idx];
+            h_loc[0][1] = FIELD_PTR(FIELD_H12)[idx];
+            h_loc[0][2] = FIELD_PTR(FIELD_H13)[idx];
+            h_loc[1][0] = h_loc[0][1];
+            h_loc[1][1] = FIELD_PTR(FIELD_H22)[idx];
+            h_loc[1][2] = FIELD_PTR(FIELD_H23)[idx];
+            h_loc[2][0] = h_loc[0][2];
+            h_loc[2][1] = h_loc[1][2];
+            h_loc[2][2] = FIELD_PTR(FIELD_H33)[idx];
+
+            /* Enforce det(h) = 1 by rescaling */
+            double det = compute_det_sym(h_loc);
+            double scale = fast_inv_cbrt(det);
+            FOR2(a, bb) h_loc[a][bb] *= scale;
+
+            FIELD_PTR(FIELD_H11)[idx] = h_loc[0][0];
+            FIELD_PTR(FIELD_H12)[idx] = h_loc[0][1];
+            FIELD_PTR(FIELD_H13)[idx] = h_loc[0][2];
+            FIELD_PTR(FIELD_H22)[idx] = h_loc[1][1];
+            FIELD_PTR(FIELD_H23)[idx] = h_loc[1][2];
+            FIELD_PTR(FIELD_H33)[idx] = h_loc[2][2];
+
+            /* Enforce tr(A) = 0 */
+            double h_UU[3][3];
+            compute_inverse_sym(h_loc, h_UU);
+
+            double A_loc[3][3];
+            A_loc[0][0] = FIELD_PTR(FIELD_A11)[idx];
+            A_loc[0][1] = FIELD_PTR(FIELD_A12)[idx];
+            A_loc[0][2] = FIELD_PTR(FIELD_A13)[idx];
+            A_loc[1][0] = A_loc[0][1];
+            A_loc[1][1] = FIELD_PTR(FIELD_A22)[idx];
+            A_loc[1][2] = FIELD_PTR(FIELD_A23)[idx];
+            A_loc[2][0] = A_loc[0][2];
+            A_loc[2][1] = A_loc[1][2];
+            A_loc[2][2] = FIELD_PTR(FIELD_A33)[idx];
+
+            make_trace_free(A_loc, h_loc, h_UU);
+
+            FIELD_PTR(FIELD_A11)[idx] = A_loc[0][0];
+            FIELD_PTR(FIELD_A12)[idx] = A_loc[0][1];
+            FIELD_PTR(FIELD_A13)[idx] = A_loc[0][2];
+            FIELD_PTR(FIELD_A22)[idx] = A_loc[1][1];
+            FIELD_PTR(FIELD_A23)[idx] = A_loc[1][2];
+            FIELD_PTR(FIELD_A33)[idx] = A_loc[2][2];
+
+            /* Ensure chi > 0, lapse > 0 */
+            if (FIELD_PTR(FIELD_CHI)[idx] < 1.0e-12)
+                FIELD_PTR(FIELD_CHI)[idx] = 1.0e-12;
+            if (FIELD_PTR(FIELD_LAPSE)[idx] < 1.0e-12)
+                FIELD_PTR(FIELD_LAPSE)[idx] = 1.0e-12;
+
+            #undef FIELD_PTR
+        }
+    }
 }

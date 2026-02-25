@@ -77,7 +77,7 @@ Priority order:
 
 ### Phase 3: Production
 
-- N=10+ simultaneous black holes with arbitrary mass, spin, charge
+- N=10+ simultaneous black holes with arbitrary mass, spin, charge (MAX_PUNCTURES=32)
 - Position-dependent eta for unequal mass: eta(x) = eta_0 / W(x)
 - Spatially varying KO dissipation
 - Full waveform catalog capability
@@ -101,6 +101,14 @@ work on AMR meshes.
   fused d1/d2 stencil (`fd_d1_d2()` loads 7 points once for both derivatives),
   conditional EM allocation (`grid_alloc_ex` with `n_fields` threaded through all
   subsystems — 25 fields when EM disabled, 19% memory savings).
+- **Tier 2 optimizations (all complete):** Face-only Sommerfeld BC iteration
+  (~5x fewer iterations than full-grid scan), pre-allocated ghost exchange scratch
+  buffer (eliminates malloc/free in hot loop), hash table neighbor lookup in
+  `mesh_rebuild_neighbors` (O(1) vs O(N) per query), `backend_enforce_algebraic_packed`
+  (batched det(h)=1 / tr(A)=0 on device — eliminates GPU↔host round-trip),
+  integer sub_step in subcycling (fixes floating-point frac drift), Ricci/raise_all
+  symmetry exploitation (6 vs 9 components), Sommerfeld asymptotic array lookup,
+  Levi-Civita curl unrolling, hoisted advection sign.
 - **Position-dependent eta:** `eta(x) = eta_0 / W(x)` where `W = sqrt(chi)` for
   stable unequal-mass binary evolution. Gated behind `position_dependent_eta` flag
   (default 1). Ref: arXiv:1003.0859 (Muller & Brugmann).
@@ -121,10 +129,13 @@ work on AMR meshes.
   `1.0/cbrt(det)` with divergent `if (det > 0.0)` guard; now uses `fast_inv_cbrt(det)`
   unconditionally, matching `rk4.c`). Packed RHS kernel `g_local.n_fields` was 0
   (memset default), disabling KO dissipation in all AMR runs; fixed in both backends.
+  Subcycling frac drift: replaced floating-point `floor(t/dt)` computation with
+  integer `sub_step` parameter (latent bug in long-duration runs).
 - **Default integrator:** Changed from CK45 to classic RK4 (`RK_CLASSIC`). Classic is
   faster (4 stages vs 5) but uses 25% more memory. All test allocations updated.
-- **Tests:** Flat spacetime, convergence (order 6.5), Bowen-York (29/29), HiSpID (26/26),
-  AH finder (13/13), Maxwell (15/15), pack_evolve (8/8), amr_prolong (15/15).
+- **Tests:** Flat spacetime, convergence (order 6.5), Bowen-York (29/29 + N-body),
+  HiSpID (26/26), AH finder (13/13), Maxwell (15/15), pack_evolve (8/8),
+  amr_prolong (15/15). N-body smoke tests: 3-BH line, 5-BH pentagon.
   Total: 31 evolved fields (25 CCZ4 + 6 EM).
 
 Update as milestones are reached.

@@ -616,14 +616,10 @@ void ghost_fill_from_coarser(mesh_t *m, int fine_level, double frac)
                     grid_t *cg = nbr->grid;
                     size_t npts = cg->npoints;
 
-                    /* Allocate temporary for interpolated fields */
+                    /* Use pre-allocated mesh scratch for interpolated fields.
+                     * Size guaranteed >= n_fields * block_npoints. */
                     double *interp_ptrs[NUM_FIELDS];
-                    double *interp_block = malloc((size_t)cg->n_fields * npts
-                                                   * sizeof(double));
-                    if (!interp_block) {
-                        fprintf(stderr, "ghost_fill_from_coarser: malloc failed\n");
-                        exit(1);
-                    }
+                    double *interp_block = m->ghost_scratch;
                     for (int f = 0; f < cg->n_fields; f++)
                         interp_ptrs[f] = interp_block + f * npts;
 
@@ -642,8 +638,6 @@ void ghost_fill_from_coarser(mesh_t *m, int fine_level, double frac)
                     /* Restore original fields */
                     for (int f = 0; f < cg->n_fields; f++)
                         cg->fields[f] = saved_fields[f];
-
-                    free(interp_block);
                 } else {
                     /* No old state: use current coarse data as-is
                      * (first step or uniform mesh) */

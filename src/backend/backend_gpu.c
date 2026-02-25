@@ -22,6 +22,7 @@
 #include "../evolution/maxwell_rhs.h"
 #include "../boundary/sommerfeld.h"
 #include "../core/fields.h"
+#include "../geometry/tensor_utils.h"
 #include "../amr/block.h"
 #include "../amr/restriction.h"
 #include "../amr/prolongation.h"
@@ -904,5 +905,95 @@ void backend_ghost_exchange_packed(meshblock_pack_t *pack)
     if (pack->coarse_data && pack->n_refined > 0) {
         size_t ct = (size_t)pack->n_refined * pack->n_fields * pack->coarse_npts;
         #pragma omp target update to(pack->coarse_data[0:ct])
+    }
+}
+
+/*
+ * Enforce algebraic constraints on GPU: det(h)=1, tr(A)=0, chi>0, lapse>0.
+ * Single kernel launch, collapse(4) over (block, k, j, i).
+ * Stack per thread: ~288 bytes (h_loc, h_UU, A_loc, det, scale).
+ *
+ * All called functions (compute_det_sym, fast_inv_cbrt, compute_inverse_sym,
+ * make_trace_free) are declared with #pragma omp declare target in
+ * tensor_utils.h.
+ *
+ * Ref: GRChombo CCZ4/TraceARemoval.hpp, CCZ4/PositiveChiAndAlpha.hpp
+ */
+void backend_enforce_algebraic_packed(meshblock_pack_t *pack)
+{
+    int Nt = pack->Ntotal;
+    int nb = pack->n_blocks;
+    size_t npts = pack->npts;
+    double *data = pack->data;
+
+    #pragma omp target teams distribute parallel for collapse(4)
+    for (int b = 0; b < nb; b++) {
+        for (int k = 0; k < Nt; k++) {
+            for (int j = 0; j < Nt; j++) {
+                for (int i = 0; i < Nt; i++) {
+                    int idx = k * Nt * Nt + j * Nt + i;
+
+                    /* Per-field pointers for this block */
+                    #define FP(fld) (data + (size_t)(fld) * nb * npts \
+                                      + (size_t)b * npts)
+
+                    /* Load h_ij */
+                    double h_loc[3][3];
+                    h_loc[0][0] = FP(FIELD_H11)[idx];
+                    h_loc[0][1] = FP(FIELD_H12)[idx];
+                    h_loc[0][2] = FP(FIELD_H13)[idx];
+                    h_loc[1][0] = h_loc[0][1];
+                    h_loc[1][1] = FP(FIELD_H22)[idx];
+                    h_loc[1][2] = FP(FIELD_H23)[idx];
+                    h_loc[2][0] = h_loc[0][2];
+                    h_loc[2][1] = h_loc[1][2];
+                    h_loc[2][2] = FP(FIELD_H33)[idx];
+
+                    /* Enforce det(h) = 1 */
+                    double det = compute_det_sym(h_loc);
+                    double scale = fast_inv_cbrt(det);
+                    FOR2(a, bb) h_loc[a][bb] *= scale;
+
+                    FP(FIELD_H11)[idx] = h_loc[0][0];
+                    FP(FIELD_H12)[idx] = h_loc[0][1];
+                    FP(FIELD_H13)[idx] = h_loc[0][2];
+                    FP(FIELD_H22)[idx] = h_loc[1][1];
+                    FP(FIELD_H23)[idx] = h_loc[1][2];
+                    FP(FIELD_H33)[idx] = h_loc[2][2];
+
+                    /* Enforce tr(A) = 0 */
+                    double h_UU[3][3];
+                    compute_inverse_sym(h_loc, h_UU);
+
+                    double A_loc[3][3];
+                    A_loc[0][0] = FP(FIELD_A11)[idx];
+                    A_loc[0][1] = FP(FIELD_A12)[idx];
+                    A_loc[0][2] = FP(FIELD_A13)[idx];
+                    A_loc[1][0] = A_loc[0][1];
+                    A_loc[1][1] = FP(FIELD_A22)[idx];
+                    A_loc[1][2] = FP(FIELD_A23)[idx];
+                    A_loc[2][0] = A_loc[0][2];
+                    A_loc[2][1] = A_loc[1][2];
+                    A_loc[2][2] = FP(FIELD_A33)[idx];
+
+                    make_trace_free(A_loc, h_loc, h_UU);
+
+                    FP(FIELD_A11)[idx] = A_loc[0][0];
+                    FP(FIELD_A12)[idx] = A_loc[0][1];
+                    FP(FIELD_A13)[idx] = A_loc[0][2];
+                    FP(FIELD_A22)[idx] = A_loc[1][1];
+                    FP(FIELD_A23)[idx] = A_loc[1][2];
+                    FP(FIELD_A33)[idx] = A_loc[2][2];
+
+                    /* Ensure chi > 0, lapse > 0 */
+                    if (FP(FIELD_CHI)[idx] < 1.0e-12)
+                        FP(FIELD_CHI)[idx] = 1.0e-12;
+                    if (FP(FIELD_LAPSE)[idx] < 1.0e-12)
+                        FP(FIELD_LAPSE)[idx] = 1.0e-12;
+
+                    #undef FP
+                }
+            }
+        }
     }
 }

@@ -33,6 +33,11 @@ typedef struct mesh_s {
     int         N_root;       /* root blocks per side                      */
     rk_method_t rk_method;    /* time integrator for block allocation      */
     int         n_fields;     /* active fields per block (<= NUM_FIELDS)   */
+
+    /* Pre-allocated scratch for ghost_fill_from_coarser temporal interp.
+     * Size = n_fields * block_npoints. Eliminates malloc/free per exchange. */
+    double     *ghost_scratch;
+    size_t      ghost_scratch_size;
 } mesh_t;
 
 /*
