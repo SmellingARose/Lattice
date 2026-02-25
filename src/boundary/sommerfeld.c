@@ -23,14 +23,15 @@
 #endif
 double asymptotic_value(int field)
 {
-    switch (field) {
-        case FIELD_CHI:   return 1.0;
-        case FIELD_H11:   return 1.0;
-        case FIELD_H22:   return 1.0;
-        case FIELD_H33:   return 1.0;
-        case FIELD_LAPSE: return 1.0;
-        default:          return 0.0;
-    }
+    /* Array lookup: branchless, eliminates GPU warp divergence.
+     * Fields with flat-space value 1: chi, h_11, h_22, h_33, lapse.
+     * All others (K, A_ij, Theta, Gamma^i, shift, B^i, E^i, BM^i) → 0. */
+    static const double asym[NUM_FIELDS] = {
+        [FIELD_CHI]   = 1.0,
+        [FIELD_H11]   = 1.0, [FIELD_H22] = 1.0, [FIELD_H33] = 1.0,
+        [FIELD_LAPSE] = 1.0
+    };
+    return asym[field];
 }
 
 /*

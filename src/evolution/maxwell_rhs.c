@@ -237,9 +237,11 @@ void maxwell_rhs_point(double ** restrict rhs,
     FOR1(dir) {
         int s = strides[dir];
         double beta = shift[dir];
+        double (*fd)(const double *, int, int, double) =
+            (beta > 0.0) ? fd_adv_up : fd_adv_down;
         FOR1(a) {
-            advec_E[a] += fd_adv(src[FIELD_E1 + a], idx, s, beta, dx);
-            advec_B[a] += fd_adv(src[FIELD_BM1 + a], idx, s, beta, dx);
+            advec_E[a] += beta * fd(src[FIELD_E1 + a], idx, s, dx);
+            advec_B[a] += beta * fd(src[FIELD_BM1 + a], idx, s, dx);
         }
     }
 
@@ -263,14 +265,31 @@ void maxwell_rhs_point(double ** restrict rhs,
      * derivatives of the conformal field components.
      *
      * Ref: arXiv:0907.1151 Eq. (23)-(24), adapted for conformal variables */
+    /* Unrolled Levi-Civita curl: eps_{abd} nonzero for 6 of 27 (a,b,d) triplets.
+     * Eliminates 63 of 81 branch+lookup iterations per component.
+     * Nonzero: (0,1,2)=+1, (1,2,0)=+1, (2,0,1)=+1,
+     *          (0,2,1)=-1, (2,1,0)=-1, (1,0,2)=-1. */
     double curl_B[3] = {0}, curl_E[3] = {0};
     FOR1(i_idx) {
-        FOR4(a, b, c, d_idx) {
-            if (levi_civita[a][b][d_idx] == 0) continue;
-            curl_B[i_idx] += chi * h_UU[i_idx][a] * h_UU[b][c]
-                            * levi_civita[a][b][d_idx] * d1_B[d_idx][c];
-            curl_E[i_idx] += chi * h_UU[i_idx][a] * h_UU[b][c]
-                            * levi_civita[a][b][d_idx] * d1_E[d_idx][c];
+        FOR1(c) {
+            /* eps_{012}=+1: a=0,b=1,d=2 */
+            curl_B[i_idx] += chi * h_UU[i_idx][0] * h_UU[1][c] * d1_B[2][c];
+            curl_E[i_idx] += chi * h_UU[i_idx][0] * h_UU[1][c] * d1_E[2][c];
+            /* eps_{120}=+1: a=1,b=2,d=0 */
+            curl_B[i_idx] += chi * h_UU[i_idx][1] * h_UU[2][c] * d1_B[0][c];
+            curl_E[i_idx] += chi * h_UU[i_idx][1] * h_UU[2][c] * d1_E[0][c];
+            /* eps_{201}=+1: a=2,b=0,d=1 */
+            curl_B[i_idx] += chi * h_UU[i_idx][2] * h_UU[0][c] * d1_B[1][c];
+            curl_E[i_idx] += chi * h_UU[i_idx][2] * h_UU[0][c] * d1_E[1][c];
+            /* eps_{021}=-1: a=0,b=2,d=1 */
+            curl_B[i_idx] -= chi * h_UU[i_idx][0] * h_UU[2][c] * d1_B[1][c];
+            curl_E[i_idx] -= chi * h_UU[i_idx][0] * h_UU[2][c] * d1_E[1][c];
+            /* eps_{210}=-1: a=2,b=1,d=0 */
+            curl_B[i_idx] -= chi * h_UU[i_idx][2] * h_UU[1][c] * d1_B[0][c];
+            curl_E[i_idx] -= chi * h_UU[i_idx][2] * h_UU[1][c] * d1_E[0][c];
+            /* eps_{102}=-1: a=1,b=0,d=2 */
+            curl_B[i_idx] -= chi * h_UU[i_idx][1] * h_UU[0][c] * d1_B[2][c];
+            curl_E[i_idx] -= chi * h_UU[i_idx][1] * h_UU[0][c] * d1_E[2][c];
         }
     }
 

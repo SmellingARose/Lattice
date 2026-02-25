@@ -75,7 +75,7 @@ typedef struct {
  * Used by Bowen-York initial data (gr-qc/9703066).
  * 4 values = BL at rest, 7 = with momentum, 10 = with spin.
  */
-#define MAX_PUNCTURES 16
+#define MAX_PUNCTURES 32
 typedef struct {
     double mass;
     double center[3];

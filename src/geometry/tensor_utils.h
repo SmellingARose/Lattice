@@ -150,9 +150,15 @@ static inline void raise_all_2(const double A_dd[3][3],
                                 const double h_UU[3][3],
                                 double A_uu[3][3])
 {
-    FOR2(i, j) {
-        A_uu[i][j] = 0.0;
-        FOR2(k, l) A_uu[i][j] += h_UU[i][k] * h_UU[j][l] * A_dd[k][l];
+    /* Exploit symmetry: A_uu[i][j] == A_uu[j][i] since A_dd is symmetric.
+     * Compute upper triangle (i <= j), mirror lower. Saves 27 FMAs/call.
+     * Ref: same pattern as compute_inverse_sym() above. */
+    for (int i = 0; i < 3; i++) {
+        for (int j = i; j < 3; j++) {
+            A_uu[i][j] = 0.0;
+            FOR2(k, l) A_uu[i][j] += h_UU[i][k] * h_UU[j][l] * A_dd[k][l];
+            A_uu[j][i] = A_uu[i][j];
+        }
     }
 }
 

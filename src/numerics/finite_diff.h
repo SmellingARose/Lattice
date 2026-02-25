@@ -174,39 +174,41 @@ static inline double fd_d2_mixed(const double *f, int idx, int s1, int s2,
 }
 
 /*
- * 6th-order upwind advection derivative: beta^a d_a f
- * 7-point upwind stencil (vel > 0): {-2, -1, 0, +1, +2, +3, +4} × stride
- * Requires ghost >= 4 (reaches 4 points from interior boundary).
- * Ref: GRChombo SixthOrderDerivatives.hpp lines 300-337
+ * 6th-order upwind advection stencil (branchless variants).
+ * 7-point upwind stencil biased in flow direction.
+ * fd_adv_up: vel > 0 (forward-biased), fd_adv_down: vel <= 0 (backward-biased).
+ * fd_adv: branching wrapper (legacy, use hoisted variants in hot loops).
+ * Requires ghost >= 4. Ref: GRChombo SixthOrderDerivatives.hpp lines 300-337
  */
+static inline double fd_adv_up(const double *f, int idx, int s, double dx)
+{
+    return ( ( 1.0/30.0) * f[idx - 2*s]
+           + (-2.0/ 5.0) * f[idx -   s]
+           + (-7.0/12.0) * f[idx]
+           + ( 4.0/ 3.0) * f[idx +   s]
+           + (-1.0/ 2.0) * f[idx + 2*s]
+           + ( 2.0/15.0) * f[idx + 3*s]
+           + (-1.0/60.0) * f[idx + 4*s] ) / dx;
+}
+
+static inline double fd_adv_down(const double *f, int idx, int s, double dx)
+{
+    return ( ( 1.0/60.0) * f[idx - 4*s]
+           + (-2.0/15.0) * f[idx - 3*s]
+           + ( 1.0/ 2.0) * f[idx - 2*s]
+           + (-4.0/ 3.0) * f[idx -   s]
+           + ( 7.0/12.0) * f[idx]
+           + ( 2.0/ 5.0) * f[idx +   s]
+           + (-1.0/30.0) * f[idx + 2*s] ) / dx;
+}
+
 static inline double fd_adv(const double *f, int idx, int s, double vel,
                             double dx)
 {
-    double w0 =  1.0 / 30.0;    /* 3.333e-2  */
-    double w1 = -2.0 /  5.0;    /* -4.000e-1 */
-    double w2 = -7.0 / 12.0;    /* -5.833e-1 */
-    double w3 =  4.0 /  3.0;    /* 1.333e+0  */
-    double w4 = -1.0 /  2.0;    /* -5.000e-1 */
-    double w5 =  2.0 / 15.0;    /* 1.333e-1  */
-    double w6 = -1.0 / 60.0;    /* -1.667e-2 */
-
-    if (vel > 0.0) {
-        return vel * ( w0 * f[idx - 2*s]
-                     + w1 * f[idx -   s]
-                     + w2 * f[idx]
-                     + w3 * f[idx +   s]
-                     + w4 * f[idx + 2*s]
-                     + w5 * f[idx + 3*s]
-                     + w6 * f[idx + 4*s] ) / dx;
-    } else {
-        return vel * (-w6 * f[idx - 4*s]
-                     - w5 * f[idx - 3*s]
-                     - w4 * f[idx - 2*s]
-                     - w3 * f[idx -   s]
-                     - w2 * f[idx]
-                     - w1 * f[idx +   s]
-                     - w0 * f[idx + 2*s] ) / dx;
-    }
+    if (vel > 0.0)
+        return vel * fd_adv_up(f, idx, s, dx);
+    else
+        return vel * fd_adv_down(f, idx, s, dx);
 }
 
 /*
