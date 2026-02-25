@@ -3,6 +3,30 @@
 > **Note:** When adding/removing/renaming files or functions, also update
 > `docs/architecture.html` — the living map of the codebase structure.
 
+## 2026-02-24: Fix packed kernel dissipation + stale tests
+
+**Bug (production):** Packed RHS kernels in `backend_cpu.c` and `backend_gpu.c`
+constructed a stack-local `grid_t` via `memset(0)` but never set `n_fields`.
+Dissipation (`dissipation.c:56`) reads `g->n_fields` to loop over fields — with
+`n_fields=0`, all KO dissipation was silently skipped in the packed (AMR) path.
+Introduced in commit 0cbdb13 (n_fields threading). Fix: set
+`g_local.n_fields = pack->n_fields` in both CPU and GPU backends.
+
+**Test fixes:**
+- `test_pack_evolve`: compared all points including ghost zones, but packed and
+  per-block paths leave ghosts in different states by design (packed does a final
+  `ghost_exchange` after store-back). Changed to interior-only comparison.
+  Interior fields are bit-identical (diff = 0.0).
+- `test_amr_prolong` SSL test: "without SSL" run used `default_params()` which
+  has `use_ssl=1` by default (since commit 967b209). Both runs had SSL on.
+  Fix: explicitly set `use_ssl=0` for baseline.
+- `test_amr_prolong` gauge field count: counted fields `>= FIELD_LAPSE` as gauge,
+  expected 7. After EM fields were added (commit 0cbdb13), count became 13.
+  Fix: count exactly `FIELD_LAPSE..FIELD_B3`.
+
+All tests pass: flat (4.9e-14), convergence (6.56/6.25), AMR evolve (8/8),
+Maxwell (15/15), pack_evolve (8/8), amr_prolong (15/15).
+
 ## 2026-02-24: Solve on evolution mesh — production AMR initial data
 
 Architectural change: the AMR FAS multigrid constraint solver now operates

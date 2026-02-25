@@ -198,10 +198,11 @@ void backend_compute_rhs_packed(meshblock_pack_t *pack, const sim_params_t *p)
      * memset + 5 assignments per GPU thread. Only dx varies per block. */
     grid_t g_template;
     memset(&g_template, 0, sizeof(grid_t));
-    g_template.N       = pack->N;
-    g_template.ghost   = pack->ghost;
-    g_template.Ntotal  = pack->Ntotal;
-    g_template.npoints = npts;
+    g_template.N        = pack->N;
+    g_template.ghost    = pack->ghost;
+    g_template.Ntotal   = pack->Ntotal;
+    g_template.npoints  = npts;
+    g_template.n_fields = nf;
 
     #pragma omp target teams distribute parallel for collapse(4)
     for (int b = 0; b < nb; b++) {

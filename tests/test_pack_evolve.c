@@ -97,9 +97,11 @@ static void test_packed_vs_perblock(void)
         rk4_step_mesh_perblock(m_perblk, &p, ccz4_rhs_point, p.dt);
     }
 
-    /* Compare all field values across all leaf blocks.
+    /* Compare interior field values across all leaf blocks.
      * Both meshes have the same block structure (no regridding),
-     * so blocks[bid] corresponds 1:1. */
+     * so blocks[bid] corresponds 1:1.
+     * Only compare interior points (ghost zones are communication buffers
+     * whose values differ between packed and per-block paths). */
     double max_diff = 0.0;
     int max_field = 0, max_block = 0;
     for (int bid = 0; bid < m_packed->num_blocks; bid++) {
@@ -107,16 +109,21 @@ static void test_packed_vs_perblock(void)
         block_t *bb = m_perblk->blocks[bid];
         if (!bp || !bp->is_leaf) continue;
 
-        for (int f = 0; f < NUM_FIELDS; f++) {
-            for (size_t idx = 0; idx < bp->grid->npoints; idx++) {
-                double diff = fabs(bp->grid->fields[f][idx]
-                                 - bb->grid->fields[f][idx]);
-                if (diff > max_diff) {
-                    max_diff = diff;
-                    max_field = f;
-                    max_block = bid;
+        int lo = bp->grid->ghost;
+        int hi2 = lo + bp->grid->N;
+        for (int f = 0; f < bp->grid->n_fields; f++) {
+            for (int kk = lo; kk < hi2; kk++)
+              for (int jj = lo; jj < hi2; jj++)
+                for (int ii = lo; ii < hi2; ii++) {
+                    int idx2 = IDX(bp->grid, ii, jj, kk);
+                    double diff = fabs(bp->grid->fields[f][idx2]
+                                     - bb->grid->fields[f][idx2]);
+                    if (diff > max_diff) {
+                        max_diff = diff;
+                        max_field = f;
+                        max_block = bid;
+                    }
                 }
-            }
         }
     }
 

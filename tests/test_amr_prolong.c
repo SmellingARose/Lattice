@@ -265,13 +265,14 @@ static void test_per_field_sigma(void)
 {
     printf("\n--- Test: Per-field sigma ---\n");
 
-    /* Verify the is_gauge_field classification */
+    /* Verify the is_gauge_field classification.
+     * Gauge fields: lapse(1) + shift(3) + B(3) = 7.
+     * Physical fields: chi(1) + h_ij(6) + K(1) + A_ij(6) + Theta(1) + Gamma^i(3) = 18.
+     * EM fields (E^i, BM^i) are neither gauge nor CCZ4 physical. */
     int gauge_count = 0;
-    int phys_count = 0;
-    for (int f = 0; f < NUM_FIELDS; f++) {
-        if (f >= FIELD_LAPSE) gauge_count++;
-        else phys_count++;
-    }
+    for (int f = FIELD_LAPSE; f <= FIELD_B3; f++)
+        gauge_count++;
+    int phys_count = FIELD_LAPSE;  /* fields 0..FIELD_LAPSE-1 */
 
     printf("  Gauge fields (sigma=0.99): %d (lapse, shift^i, B^i)\n", gauge_count);
     printf("  Physical fields (sigma=0.3): %d\n", phys_count);
@@ -354,10 +355,11 @@ static void test_ssl_single_bh(void)
     p.L = 64.0;
     p.dx = p.L / p.N;
     p.dt = p.CFL * p.dx;
-    p.time = 0.0;  /* SSL active at t=0 */
+    p.time = 0.0;
     int steps = 10;
 
-    /* Without SSL */
+    /* Without SSL (SSL is on by default, so explicitly disable) */
+    p.noise.use_ssl = 0;
     double mass = 1.0;
     double center[1][3] = {{0.0, 0.0, 0.0}};
     grid_t *g1 = grid_alloc(p.N, p.L, p.rk_method);

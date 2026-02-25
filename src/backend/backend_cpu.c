@@ -150,10 +150,11 @@ void backend_compute_rhs_packed(meshblock_pack_t *pack, const sim_params_t *p)
         const double *src_ptrs[NUM_FIELDS];
         grid_t g_local;
         memset(&g_local, 0, sizeof(grid_t));
-        g_local.N       = pack->N;
-        g_local.ghost   = pack->ghost;
-        g_local.Ntotal  = pack->Ntotal;
-        g_local.npoints = npts;
+        g_local.N        = pack->N;
+        g_local.ghost    = pack->ghost;
+        g_local.Ntotal   = pack->Ntotal;
+        g_local.npoints  = npts;
+        g_local.n_fields = pack->n_fields;
 
         #pragma omp for schedule(static)
         for (int bkj = 0; bkj < total_work; bkj++) {

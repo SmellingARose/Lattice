@@ -119,10 +119,13 @@ work on AMR meshes.
   Ref: Athena++ MG (Tomida & Stone 2023), arXiv:0912.2920 (Alic et al.).
 - **Tier 0 bug fixes:** `enforce_algebraic_block()` in refine.c fixed (was using slow
   `1.0/cbrt(det)` with divergent `if (det > 0.0)` guard; now uses `fast_inv_cbrt(det)`
-  unconditionally, matching `rk4.c`).
+  unconditionally, matching `rk4.c`). Packed RHS kernel `g_local.n_fields` was 0
+  (memset default), disabling KO dissipation in all AMR runs; fixed in both backends.
 - **Default integrator:** Changed from CK45 to classic RK4 (`RK_CLASSIC`). Classic is
   faster (4 stages vs 5) but uses 25% more memory. All test allocations updated.
-- **Tests:** Flat spacetime, convergence (order 6.5), Bowen-York (29/29), HiSpID (26/26), AH finder (13/13), Maxwell (15/15). Total: 31 evolved fields (25 CCZ4 + 6 EM).
+- **Tests:** Flat spacetime, convergence (order 6.5), Bowen-York (29/29), HiSpID (26/26),
+  AH finder (13/13), Maxwell (15/15), pack_evolve (8/8), amr_prolong (15/15).
+  Total: 31 evolved fields (25 CCZ4 + 6 EM).
 
 Update as milestones are reached.
 
