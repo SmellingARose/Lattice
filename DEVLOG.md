@@ -3,6 +3,58 @@
 > **Note:** When adding/removing/renaming files or functions, also update
 > `docs/architecture.html` — the living map of the codebase structure.
 
+## 2026-02-24: Solve on evolution mesh — production AMR initial data
+
+Architectural change: the AMR FAS multigrid constraint solver now operates
+directly on the evolution mesh's blocks instead of creating a separate solver
+mesh and copying/interpolating the solution back.
+
+**Before:** `main.c` → create evolution mesh → solve on temp uniform grid →
+copy fields to each leaf block (35 lines of interpolation code).
+
+**After:** `main.c` → create evolution mesh → `set_bowen_york_mesh(m, ...)` →
+refine near punctures → solve on evolution blocks → convert psi→CCZ4 in-place.
+
+**Why:** Exact discrete operator consistency (same `fd_d2()` stencils, same
+ghost zones, same grid points). Zero interpolation error. Zero extra memory
+(solver reuses 22 of 100 idle array slots at t=0). This is the Athena++ MG
+approach (Tomida & Stone 2023). Avoids the operator mismatch when using
+external solvers like TwoPunctures on FD grids (Alic et al., arXiv:0912.2920).
+
+**New functions:**
+- `refine_mesh_near_punctures()` — extracted from `create_solver_mesh()`, works
+  on any mesh (evolution or solver-owned)
+- `relaxation_solve_amr_mesh()` — 1-field BY solver on external mesh (borrows,
+  doesn't own)
+- `relaxation_solve_coupled_amr_mesh()` — 4-field HiSpID coupled solver, same
+  pattern
+- `set_ccz4_from_psi_block()` — block-aware CCZ4 conversion (read-before-write
+  to avoid aliasing with solver slots)
+- `set_ccz4_from_hispid_block()` — block-aware HiSpID→CCZ4 (two-pass: fields
+  then Gamma^i from FD)
+- `set_bowen_york_mesh()` — top-level dispatch (BL analytic / BY 1-field /
+  HiSpID 4-field), replaces 35-line copy path in main.c
+
+**CLI:** `--amr-levels <int>` (default 2). Each level halves dx near punctures.
+Level 2 = 4x finer, level 3 = 8x finer, etc. Requires `--rk classic`.
+
+**Benchmark (L=64, N=32, 2 AMR levels, dx_base=2.0 → dx_fine=0.5):**
+- Near-field Ham L2 (r=2..8M): old 1.6e-01, new 7.4e-07 → **218,000x better**
+- Far-field Ham L2 (r=8..20M): old 4.7e-02, new 2.7e-08 → **1,750,000x better**
+- Wall time: old 0.4s (coarse solve + copy), new 12.6s (fine solve)
+- At level 0 (uniform, no refinement): both produce bit-identical results
+
+The old approach solved at coarse resolution and copied to fine blocks — the fine
+blocks got staircase artifacts (O(1) constraint violation). The new approach does
+real work at fine resolution, paying compute cost for genuine accuracy.
+
+**Files changed:** `params.h`, `main.c`, `relaxation_amr.h`, `relaxation_amr.c`,
+`bowen_york.h`, `bowen_york.c`.
+
+**Tests:** All pass — flat (4.9e-14), convergence (6.56/6.25), AMR evolve (8/8),
+Maxwell (15/15), relaxation-amr (12/12), bowen-york (29/29), hispid (26/26).
+Existing non-AMR paths unchanged.
+
 ## 2026-02-23: Tier 1 complete + position-dependent eta
 
 Three changes completing all remaining Tier 1 optimizations plus one Phase 3 item:

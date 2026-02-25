@@ -16,6 +16,8 @@
 
 #include "../core/grid.h"
 #include "../core/params.h"
+#include "../amr/block.h"
+#include "../amr/mesh.h"
 
 /* Compute physical Bowen-York A_ij at point (x,y,z) by summing over
  * all punctures.  A_phys[3][3] is the output (symmetric). */
@@ -57,5 +59,39 @@ void set_hispid(grid_t *g, int n_bh, const puncture_data_t *bhs);
 
 /* Set --hispid CLI override (forces HiSpID even for low spin) */
 void set_hispid_override(int val);
+
+/*
+ * Block-aware CCZ4 conversion: convert solver data in a block's arrays
+ * to full CCZ4 fields.  Reads solver slots (0-9), writes CCZ4 slots (0-30).
+ * Read-before-write at each point avoids aliasing.
+ * n_fields controls whether EM fields (slots 25-30) are written.
+ *
+ * Ref: GRChombo BinaryBH.impl.hpp:53-68
+ */
+void set_ccz4_from_psi_block(block_t *blk, int n_bh, const puncture_data_t *bhs,
+                              int n_fields);
+
+/*
+ * Block-aware HiSpID CCZ4 conversion.
+ * Two passes: (1) set chi, h_ij, K, A_ij, gauge, EM
+ *             (2) compute Gamma^i from FD of h_ij
+ * n_fields controls whether EM fields are written.
+ *
+ * Ref: arXiv:1410.8607, GRChombo KerrBH.impl.hpp:86-93
+ */
+void set_ccz4_from_hispid_block(block_t *blk, int n_bh, const puncture_data_t *bhs,
+                                 int n_fields);
+
+/*
+ * Set initial data on an AMR evolution mesh.
+ * Dispatches: analytic BL, BY solver, or HiSpID solver.
+ * Solves constraints directly on the mesh blocks, then converts
+ * solver data → CCZ4 in-place.  Zero interpolation error.
+ *
+ * Ref: Tomida & Stone 2023 (Athena++ MG self-gravity on evolution mesh)
+ * Ref: arXiv:0912.2920 (Alic et al., FD constraint violation vs spectral)
+ */
+void set_bowen_york_mesh(mesh_t *m, int n_bh, const puncture_data_t *bhs,
+                          int n_amr_levels);
 
 #endif /* LATTICE_BOWEN_YORK_H */

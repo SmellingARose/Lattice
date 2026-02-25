@@ -26,7 +26,7 @@ endif
 CORE_SRC    = src/core/grid.c
 EVOLUTION_SRC = src/evolution/ccz4_rhs.c src/evolution/dissipation.c src/evolution/maxwell_rhs.c
 NUMERICS_SRC  = src/numerics/rk4.c
-INITIAL_SRC   = src/initial_data/puncture.c src/initial_data/bowen_york.c src/initial_data/relaxation.c src/initial_data/kerr_quasi_isotropic.c
+INITIAL_SRC   = src/initial_data/puncture.c src/initial_data/bowen_york.c src/initial_data/relaxation.c src/initial_data/relaxation_amr.c src/initial_data/kerr_quasi_isotropic.c
 DIAG_SRC      = src/diagnostics/constraints.c src/diagnostics/ah_finder.c
 BOUNDARY_SRC  = src/boundary/sommerfeld.c
 IO_SRC        = src/io/output.c
@@ -78,7 +78,7 @@ LDFLAGS = $(BACKEND_LIBS) -lm $(LTO_FLAGS)
 BUILD = build
 
 # Targets
-.PHONY: all debug test test-single-bh test-convergence test-constraints test-head-on test-amr-mesh test-amr-ghost test-amr-prolong test-amr-refine test-amr-evolve test-pack-evolve test-subcycle test-bowen-york test-hispid test-maxwell test-ah test-inspiral-convergence clean
+.PHONY: all debug test test-single-bh test-convergence test-constraints test-head-on test-amr-mesh test-amr-ghost test-amr-prolong test-amr-refine test-amr-evolve test-pack-evolve test-subcycle test-bowen-york test-hispid test-maxwell test-ah test-inspiral-convergence test-relaxation-amr clean
 
 all: $(BUILD)/lattice
 
@@ -233,6 +233,22 @@ $(BUILD)/test_inspiral_convergence: tests/test_inspiral_convergence.c $(ALL_SRC)
 test-inspiral-convergence: $(BUILD)/test_inspiral_convergence
 	@echo "=== Running inspiral convergence test ==="
 	$(BUILD)/test_inspiral_convergence
+
+$(BUILD)/test_relaxation_amr: tests/test_relaxation_amr.c $(ALL_SRC)
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS_OPT) -o $@ tests/test_relaxation_amr.c $(ALL_SRC) $(LDFLAGS)
+
+test-relaxation-amr: $(BUILD)/test_relaxation_amr
+	@echo "=== Running AMR relaxation solver test ==="
+	$(BUILD)/test_relaxation_amr
+
+$(BUILD)/test_amr_accuracy: tests/test_amr_accuracy.c $(ALL_SRC)
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS_OPT) -o $@ tests/test_amr_accuracy.c $(ALL_SRC) $(LDFLAGS)
+
+test-amr-accuracy: $(BUILD)/test_amr_accuracy
+	@echo "=== Running AMR accuracy comparison ==="
+	$(BUILD)/test_amr_accuracy
 
 clean:
 	rm -rf $(BUILD)

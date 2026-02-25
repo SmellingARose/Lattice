@@ -74,6 +74,7 @@ static void print_usage(void)
     fprintf(stderr, "  --chi_refine <float>   Refinement threshold (default 0.1)\n");
     fprintf(stderr, "  --chi_coarsen <float>  Coarsening threshold (default 0.01)\n");
     fprintf(stderr, "  --regrid_every <int>   Regrid check interval (default 1)\n");
+    fprintf(stderr, "  --amr-levels <int>    AMR levels for initial data solver (default 2)\n");
     fprintf(stderr, "\nInitial data:\n");
     fprintf(stderr, "  --hispid               Force HiSpID (high-spin) initial data\n");
     fprintf(stderr, "\nEinstein-Maxwell:\n");
@@ -171,6 +172,8 @@ int main(int argc, char **argv)
             p.amr.chi_coarsen = atof(argv[++a]);
         } else if (strcmp(argv[a], "--regrid_every") == 0 && a + 1 < argc) {
             p.amr.regrid_every = atoi(argv[++a]);
+        } else if (strcmp(argv[a], "--amr-levels") == 0 && a + 1 < argc) {
+            p.amr.solver_levels = atoi(argv[++a]);
         /* CCZ4 constraint damping */
         } else if (strcmp(argv[a], "--kappa1") == 0 && a + 1 < argc) {
             p.ccz4.kappa1 = atof(argv[++a]);
@@ -283,57 +286,14 @@ int main(int argc, char **argv)
         printf("  blocks = %d (leaves = %d)\n",
                m->num_blocks, mesh_num_leaves(m));
 
-        /* Set initial data: solve on temporary uniform grid, copy to blocks.
-         * The constraint solve (FAS multigrid) needs the full domain, so we
-         * solve globally at base AMR resolution, then distribute to blocks. */
+        /* Set initial data: solve directly on the evolution mesh.
+         * The constraint solver operates on the mesh blocks in-place,
+         * then converts solver data → CCZ4 fields. Zero interpolation error.
+         * Ref: Tomida & Stone 2023 (Athena++ MG on evolution mesh) */
         if (n_bh > 0) {
-            printf("  Initial data: Bowen-York, %d puncture(s)\n", n_bh);
-
-            /* Solve initial data on temporary uniform grid at N_eff */
-            grid_t *tmp = grid_alloc(N_eff, p.L, RK_CK45);
-            set_bowen_york(tmp, n_bh, bhs);
-
-            /* Copy solved fields from temp grid to each leaf block.
-             * Both grids have the same dx at level 0. Block origin gives
-             * the physical offset: i_temp = ghost + (i_block - ghost) + offset
-             * where offset = round((origin - (-L/2)) / dx). */
-            int ghost = GHOST_WIDTH;
-            for (int bid = 0; bid < m->num_blocks; bid++) {
-                block_t *b = m->blocks[bid];
-                if (!b || !b->is_leaf) continue;
-
-                /* Compute cell offset of this block in the global grid */
-                int off[3];
-                for (int d = 0; d < 3; d++)
-                    off[d] = (int)((b->origin[d] + p.L * 0.5) / tmp->dx + 0.5);
-
-                int Nt_b = b->grid->Ntotal;
-                int Nt_g = tmp->Ntotal;
-
-                for (int f = 0; f < tmp->n_fields; f++) {
-                    double *dst = b->grid->fields[f];
-                    const double *src = tmp->fields[f];
-                    /* Copy interior + ghost zones (clamp to temp grid bounds) */
-                    for (int k = 0; k < Nt_b; k++) {
-                        int kg = k - ghost + off[2] + ghost;
-                        if (kg < 0) kg = 0;
-                        if (kg >= Nt_g) kg = Nt_g - 1;
-                        for (int j = 0; j < Nt_b; j++) {
-                            int jg = j - ghost + off[1] + ghost;
-                            if (jg < 0) jg = 0;
-                            if (jg >= Nt_g) jg = Nt_g - 1;
-                            for (int i = 0; i < Nt_b; i++) {
-                                int ig = i - ghost + off[0] + ghost;
-                                if (ig < 0) ig = 0;
-                                if (ig >= Nt_g) ig = Nt_g - 1;
-                                dst[k * Nt_b * Nt_b + j * Nt_b + i] =
-                                    src[kg * Nt_g * Nt_g + jg * Nt_g + ig];
-                            }
-                        }
-                    }
-                }
-            }
-            grid_free(tmp);
+            printf("  Initial data: Bowen-York, %d puncture(s), "
+                   "solver_levels=%d\n", n_bh, p.amr.solver_levels);
+            set_bowen_york_mesh(m, n_bh, bhs, p.amr.solver_levels);
         } else {
             printf("  Initial data: flat spacetime (AMR)\n");
             for (int bid = 0; bid < m->num_blocks; bid++) {

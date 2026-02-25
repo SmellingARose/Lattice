@@ -83,9 +83,9 @@ Priority order:
 - Full waveform catalog capability
 
 **AMR parity gaps:** All closed. Both packed kernels (CPU + GPU) branch on
-`p->em_enabled` to call `ccz4_maxwell_rhs_point`. Initial data copy loop
-is field-agnostic (copies all NUM_FIELDS including EM). AH finder and
-output slices work on AMR meshes.
+`p->em_enabled` to call `ccz4_maxwell_rhs_point`. Initial data solved
+directly on evolution mesh (no interpolation). AH finder and output slices
+work on AMR meshes.
 
 **Current status: Phase 2 complete, Phase 3 in progress.**
 
@@ -109,6 +109,13 @@ output slices work on AMR meshes.
 - **Spin:** Bowen-York spinning punctures + HiSpID high-spin initial data (quasi-isotropic Kerr conformal metric, coupled 4-field relaxation).
 - **Apparent horizons:** Hyperbolic flow method (BHaHAHA-inspired) with 4th-order off-grid interpolation, mass/spin/area extraction, `--ah` CLI flag. Works on both single-grid and AMR meshes.
 - **AMR:** Block-structured Berger-Oliger with subcycling, Morton-ordered mesh, 6th-order prolongation/restriction, multi-level ghost exchange. AMR-aware 1D output slices and AH finder.
+- **Solve on evolution mesh:** AMR initial data constraint solver operates directly
+  on evolution blocks (`set_bowen_york_mesh()`), eliminating interpolation error
+  and ensuring exact discrete operator consistency. Solver reuses idle evolution
+  arrays at t=0 (22 of 100 slots). `--amr-levels <int>` controls refinement depth:
+  each level halves dx near punctures (level 2 = 4x finer, level 3 = 8x finer, etc.).
+  Measured 218,000x better near-field constraint quality vs the old copy approach on
+  refined meshes. Ref: Athena++ MG (Tomida & Stone 2023), arXiv:0912.2920 (Alic et al.).
 - **Tier 0 bug fixes:** `enforce_algebraic_block()` in refine.c fixed (was using slow
   `1.0/cbrt(det)` with divergent `if (det > 0.0)` guard; now uses `fast_inv_cbrt(det)`
   unconditionally, matching `rk4.c`).
@@ -148,8 +155,9 @@ lattice/
 │   │   └── rk4.c               # RK4 time integrator (+mesh stepping)
 │   ├── initial_data/
 │   │   ├── puncture.c          # Brill-Lindquist puncture data
-│   │   ├── bowen_york.h/c      # BY A_ij (momentum+spin) + CCZ4 conversion
+│   │   ├── bowen_york.h/c      # BY A_ij (momentum+spin) + CCZ4 conversion (+mesh-level API)
 │   │   ├── relaxation.h/c      # FAS multigrid constraint solver (1-field + 4-field coupled)
+│   │   ├── relaxation_amr.h/c  # AMR composite multigrid (FAS + uniform MG hierarchy)
 │   │   └── kerr_quasi_isotropic.h/c  # QI Kerr metric for HiSpID (high-spin data)
 │   ├── diagnostics/
 │   │   ├── constraints.c       # Hamiltonian + momentum constraints
@@ -320,6 +328,7 @@ constant `GR_SPACEDIM = 3`.
 | `shift_Gamma_coeff` | 0.75 | F in dt(beta^i) = F * B^i |
 | `eta` | 1.0 | Damping in Gamma-driver: dt(B^i) = dt(Gamma^i) - eta * B^i |
 | `rk_method` | `RK_CLASSIC` | Time integrator: `RK_CLASSIC` (4 stages, 4 blocks) or `RK_CK45` (5 stages, 3 blocks) |
+| `amr_levels` | 2 | Initial data solver refinement levels (`--amr-levels`). Each level halves dx near punctures (2 = 4x finer, 3 = 8x, ...). Only used with `--amr`. Requires `--rk classic`. |
 
 ### FAS Multigrid Solver Tuning
 
@@ -340,6 +349,14 @@ FMG achieves discretization accuracy in a single pass (~1.14 V-cycles of work).
 Post-FMG V-cycles polish below the FMG residual; typically 0-9 needed.
 Multigrid hierarchy: N, N/2, N/4, ... down to N_min=16.
 For production, `tol=1e-12, max_iter=50000` is the default in `set_bowen_york()`.
+
+**AMR solver resolution:** With `--amr-levels L`, the solver adds L refinement
+levels near each puncture. Each level halves the grid spacing:
+`dx_fine = dx_base / 2^L`. For example, a base grid at N=32, L=64 (dx=2M) with
+`--amr-levels 3` achieves dx=0.25M near the BH. The solver does real work at the
+fine resolution, so constraint quality scales with the finest dx, not the base dx.
+Higher `--amr-levels` is more accurate but costs more compute (each level adds
+up to 8x fine blocks that must be solved).
 
 Ref: arXiv:0705.1486 (Natchu & Matzner), arXiv:2510.11152 (GPU FAS multigrid).
 

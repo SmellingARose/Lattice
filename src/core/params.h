@@ -49,6 +49,7 @@ typedef struct {
     double chi_refine;     /* refine threshold for |grad(chi)|*dx/chi^2       */
     double chi_coarsen;    /* coarsen threshold (hysteresis)                  */
     int    regrid_every;   /* check interval: 1=every step, 0=never (static)  */
+    int    solver_levels;  /* AMR levels for initial data solver (default 2)  */
 } amr_params_t;
 
 /*
@@ -144,6 +145,7 @@ static inline sim_params_t default_params(void)
     p.amr.chi_refine    = 0.1;
     p.amr.chi_coarsen   = 0.01;
     p.amr.regrid_every  = 1;
+    p.amr.solver_levels = 2;
 
     /* Noise reduction defaults.
      * CAKO, per-field sigma, and SSL enabled by default — these are

@@ -185,7 +185,7 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 <h3>What it does</h3>
 <ul>
   <li><strong>31 evolved fields</strong> &mdash; 25 CCZ4 gravitational + 6 Einstein-Maxwell (E, B)</li>
-  <li><strong>N-body initial data</strong> &mdash; FAS multigrid constraint solver for arbitrary puncture configurations with mass, momentum, spin, and charge</li>
+  <li><strong>N-body initial data</strong> &mdash; FAS multigrid constraint solver for arbitrary puncture configurations with mass, momentum, spin, and charge. AMR mode solves directly on evolution blocks for exact discrete operator consistency.</li>
   <li><strong>High-spin black holes</strong> &mdash; HiSpID (quasi-isotropic Kerr) + Bowen-York initial data</li>
   <li><strong>Oct-tree AMR</strong> &mdash; block-structured adaptive mesh refinement with subcycling, Morton ordering, and 6th-order prolongation/restriction</li>
   <li><strong>Apparent horizon finder</strong> &mdash; hyperbolic flow method (BHaHAHA-inspired) with mass/spin extraction</li>
@@ -206,6 +206,8 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
   (Brill-Lindquist / Bowen-York /          for step = 1..N:
    HiSpID / charged punctures)               |
         |                                    +--&gt; <span class="fn">rk4_step</span>()
+        |  AMR: <span class="fn">set_bowen_york_mesh</span>()       |     |
+        |  (solve on evolution blocks)       |     |
         v                                    |     |
   <span class="type">[grid memory: 31 SoA arrays]</span>              |     for each RK stage:
         |                                    |       +--&gt; <span class="fn">ghost_exchange</span>()     <span class="comment">// AMR: 5-phase multilevel</span>
@@ -263,7 +265,7 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 <tr>
   <td>Initial data</td>
   <td>External solver (TwoPunctures), limited to 2 BHs</td>
-  <td>Built-in FAS multigrid solver for N punctures with mass, spin, charge</td>
+  <td>Built-in FAS multigrid solver for N punctures with mass, spin, charge. AMR mode solves directly on evolution mesh (zero interpolation).</td>
 </tr>
 <tr>
   <td>AMR type</td>
@@ -332,8 +334,9 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 <table class="file-table">
 <tr><th>File</th><th>Purpose</th></tr>
 <tr><td><code>puncture.c</code></td><td>Brill-Lindquist multi-puncture (up to 16 BHs at rest). Block-aware variant for AMR.</td></tr>
-<tr><td><code>bowen_york.h/c</code></td><td>Bowen-York extrinsic curvature A_ij for linear momentum + spin. CCZ4 field conversion pipeline.</td></tr>
+<tr><td><code>bowen_york.h/c</code></td><td>Bowen-York extrinsic curvature A_ij for linear momentum + spin. CCZ4 field conversion pipeline. Mesh-level API (<code>set_bowen_york_mesh</code>) solves directly on evolution blocks.</td></tr>
 <tr><td><code>relaxation.h/c</code></td><td>FAS multigrid constraint solver. 1-field (BY) and 4-field coupled (HiSpID). Full Multigrid cycle + Newton-Gauss-Seidel smoothing, 8-color GPU-compatible. O(N^3) to discretization accuracy.</td></tr>
+<tr><td><code>relaxation_amr.h/c</code></td><td>AMR composite multigrid: FAS V-cycles on AMR block levels + uniform MG hierarchy below level 0. <code>refine_mesh_near_punctures()</code> shared utility. Mesh-level solvers borrow the evolution mesh (no copy).</td></tr>
 <tr><td><code>kerr_quasi_isotropic.h/c</code></td><td>Quasi-isotropic Kerr metric for HiSpID high-spin initial data. Conformal factor and conformal metric from analytic Kerr solution.</td></tr>
 </table>
 
@@ -722,6 +725,15 @@ Level 0: everywhere (dx ~ M/2)     — outer domain + boundary</code></pre>
 </details>
 
 <details>
+<summary>Why solve initial data on the evolution mesh?</summary>
+<div class="detail-body">
+<p>In AMR mode, the constraint solver operates directly on the evolution mesh's blocks via <code>set_bowen_york_mesh()</code>. This gives exact discrete operator consistency &mdash; the same <code>fd_d2()</code> stencils, ghost zones, and grid points used by the evolution code. No interpolation from a separate solver grid, so no interpolation error. At t=0, evolution blocks have 100 idle array slots (25 fields &times; 4 arrays); the solver needs only 22 slots.</p>
+<p><code>--amr-levels &lt;int&gt;</code> (default 2) controls refinement depth: each level halves <code>dx</code> near punctures. For example, <code>--amr-levels 3</code> on a base grid with dx=2M gives dx=0.25M near the BH. The solver does real work at the fine resolution, so constraint quality scales with <code>dx_fine</code>, not <code>dx_base</code>. Benchmarked at 218,000x better near-field constraint quality vs solving at base resolution and copying to refined blocks.</p>
+<p>Requires <code>--rk classic</code> (accum arrays needed by the solver). Follows the Athena++ MG approach (Tomida &amp; Stone 2023) and avoids the operator mismatch documented by Alic et al. (arXiv:0912.2920) when using external solvers like TwoPunctures on FD grids.</p>
+</div>
+</details>
+
+<details>
 <summary>Why 6th-order for both prolongation and restriction?</summary>
 <div class="detail-body">
 <p>Matching the prolongation and restriction orders eliminates Hamiltonian constraint violations at AMR boundaries (arXiv:2504.15814, ExaHyPE). 6th-order restriction uses a symmetric 6-point Lagrange stencil with weights {-17/11520, 97/3840, 2743/5760, 2743/5760, 97/3840, -17/11520} (216 fine cells per coarse cell in 3D). 6th-order prolongation uses a 7-point stencil. Stencil reach (2&ndash;3 cells) fits within ghost width (4). Pre-computed weight product tables (<code>restrict_wkj[6][6]</code>, <code>prolong_wkj[4][7][7]</code>) eliminate one multiply per inner loop iteration.</p>
@@ -767,7 +779,8 @@ export GOMP_NVPTX_NATIVE_GPU_THREAD_STACK_SIZE=16384
 <tr><td><code>--em</code></td><td>off</td><td>Enable Einstein-Maxwell (6 extra evolved fields)</td></tr>
 <tr><td><code>--ah</code></td><td>off</td><td>Enable apparent horizon finder</td></tr>
 <tr><td><code>--N-root</code></td><td>&mdash;</td><td>Root blocks per dimension (enables AMR mode)</td></tr>
-<tr><td><code>--max-level</code></td><td>0</td><td>Maximum AMR refinement level</td></tr>
+<tr><td><code>--max-level</code></td><td>0</td><td>Maximum AMR refinement level during evolution</td></tr>
+<tr><td><code>--amr-levels</code></td><td>2</td><td>Initial data solver refinement levels. Each level halves dx near punctures (2 = 4x finer, 3 = 8x, ...). Requires <code>--rk classic</code>.</td></tr>
 </table>
 
 <!-- ========================================== -->

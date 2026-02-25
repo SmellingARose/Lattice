@@ -77,6 +77,9 @@ static void prolongate_into_child(const block_t *parent, block_t *child,
  */
 static void enforce_algebraic_block(grid_t *g)
 {
+    /* Skip if grid doesn't have full CCZ4 fields (e.g. solver-only blocks) */
+    if (g->n_fields < NUM_CCZ4_FIELDS) return;
+
     for (int k = 0; k < g->Ntotal; k++) {
         for (int j = 0; j < g->Ntotal; j++) {
             for (int i = 0; i < g->Ntotal; i++) {

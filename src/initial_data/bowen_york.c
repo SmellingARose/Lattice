@@ -16,14 +16,20 @@
 
 #include "bowen_york.h"
 #include "relaxation.h"
+#include "relaxation_amr.h"
 #include "kerr_quasi_isotropic.h"
 #include "../core/fields.h"
 #include "../numerics/finite_diff.h"
 #include "../geometry/tensor_utils.h"
+#include "../amr/ghost_exchange.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+/* Solver field slot indices (must match relaxation_amr.c) */
+#define SOL_PSI_BY   0
+#define BG_PSI_BL_BY 4
 
 void bowen_york_Aij(double A_phys[3][3], double x, double y, double z,
                     int n_bh, const puncture_data_t *bhs)
@@ -461,4 +467,338 @@ void set_bowen_york(grid_t *g, int n_bh, const puncture_data_t *bhs)
                                            1.0e-12, 50000, 1);
         printf("  Bowen-York: solver converged, ||v||_L2 = %.6e\n", residual);
     }
+}
+
+/* ================================================================
+ * Block-aware CCZ4 conversion: solve-on-evolution-mesh path
+ * ================================================================ */
+
+void set_ccz4_from_psi_block(block_t *blk, int n_bh, const puncture_data_t *bhs,
+                              int n_fields)
+{
+    /* Convert solver data (fields[SOL_PSI], fields[BG_PSI_BL]) to CCZ4.
+     * Read solver slots first at each point, then overwrite with CCZ4.
+     * This avoids aliasing since solver slots 0-9 overlap with CCZ4 slots 0-24.
+     *
+     * Ref: GRChombo BinaryBH.impl.hpp:53-68, B&S Eq. 3.10 */
+    grid_t *g = blk->grid;
+    int Nt = g->Ntotal;
+
+    /* Check if any BH has charge */
+    int has_charge = 0;
+    for (int n = 0; n < n_bh; n++)
+        if (fabs(bhs[n].charge) > 1.0e-15) has_charge = 1;
+
+    for (int k = 0; k < Nt; k++) {
+        for (int j = 0; j < Nt; j++) {
+            for (int i = 0; i < Nt; i++) {
+                int idx = IDX(g, i, j, k);
+                double x = BLOCK_COORD(blk, 0, i);
+                double y = BLOCK_COORD(blk, 1, j);
+                double z = BLOCK_COORD(blk, 2, k);
+
+                /* Read solver data BEFORE overwriting with CCZ4 */
+                double psi = g->fields[BG_PSI_BL_BY][idx]
+                           + g->fields[SOL_PSI_BY][idx];
+                double psi4 = psi * psi * psi * psi;
+                double chi  = 1.0 / psi4;
+
+                /* Conformal rescaling */
+                double A_phys[3][3];
+                bowen_york_Aij(A_phys, x, y, z, n_bh, bhs);
+                double psi6 = psi4 * psi * psi;
+                double psi6_inv = 1.0 / psi6;
+
+                /* Now write CCZ4 fields */
+                g->fields[FIELD_CHI][idx]  = chi;
+                g->fields[FIELD_H11][idx]  = 1.0;
+                g->fields[FIELD_H12][idx]  = 0.0;
+                g->fields[FIELD_H13][idx]  = 0.0;
+                g->fields[FIELD_H22][idx]  = 1.0;
+                g->fields[FIELD_H23][idx]  = 0.0;
+                g->fields[FIELD_H33][idx]  = 1.0;
+                g->fields[FIELD_K][idx]    = 0.0;
+
+                g->fields[FIELD_A11][idx] = psi6_inv * A_phys[0][0];
+                g->fields[FIELD_A12][idx] = psi6_inv * A_phys[0][1];
+                g->fields[FIELD_A13][idx] = psi6_inv * A_phys[0][2];
+                g->fields[FIELD_A22][idx] = psi6_inv * A_phys[1][1];
+                g->fields[FIELD_A23][idx] = psi6_inv * A_phys[1][2];
+                g->fields[FIELD_A33][idx] = psi6_inv * A_phys[2][2];
+
+                g->fields[FIELD_THETA][idx]  = 0.0;
+                g->fields[FIELD_GAMMA1][idx] = 0.0;
+                g->fields[FIELD_GAMMA2][idx] = 0.0;
+                g->fields[FIELD_GAMMA3][idx] = 0.0;
+                g->fields[FIELD_LAPSE][idx]  = sqrt(chi);
+                g->fields[FIELD_SHIFT1][idx] = 0.0;
+                g->fields[FIELD_SHIFT2][idx] = 0.0;
+                g->fields[FIELD_SHIFT3][idx] = 0.0;
+                g->fields[FIELD_B1][idx]     = 0.0;
+                g->fields[FIELD_B2][idx]     = 0.0;
+                g->fields[FIELD_B3][idx]     = 0.0;
+
+                /* EM fields: Coulomb E^i for charged BHs, B^i = 0 */
+                if (n_fields >= NUM_FIELDS) {
+                    double Ex = 0.0, Ey = 0.0, Ez = 0.0;
+                    if (has_charge) {
+                        for (int n = 0; n < n_bh; n++) {
+                            if (fabs(bhs[n].charge) < 1.0e-15) continue;
+                            double rx = x - bhs[n].center[0];
+                            double ry = y - bhs[n].center[1];
+                            double rz = z - bhs[n].center[2];
+                            double r2 = rx*rx + ry*ry + rz*rz;
+                            double r  = sqrt(r2);
+                            if (r < 1.0e-10) r = 1.0e-10;
+                            double Q = bhs[n].charge;
+                            double fac = Q / (4.0 * M_PI * r2 * r);
+                            Ex += psi6_inv * fac * rx;
+                            Ey += psi6_inv * fac * ry;
+                            Ez += psi6_inv * fac * rz;
+                        }
+                    }
+                    g->fields[FIELD_E1][idx]  = Ex;
+                    g->fields[FIELD_E2][idx]  = Ey;
+                    g->fields[FIELD_E3][idx]  = Ez;
+                    g->fields[FIELD_BM1][idx] = 0.0;
+                    g->fields[FIELD_BM2][idx] = 0.0;
+                    g->fields[FIELD_BM3][idx] = 0.0;
+                }
+            }
+        }
+    }
+}
+
+void set_ccz4_from_hispid_block(block_t *blk, int n_bh, const puncture_data_t *bhs,
+                                 int n_fields)
+{
+    /* Convert solver data + non-flat h_ij to CCZ4.
+     * Two passes: (1) all fields, (2) Gamma^i from FD of h_ij.
+     *
+     * Ref: arXiv:1410.8607, GRChombo KerrBH.impl.hpp:86-93 */
+    grid_t *g = blk->grid;
+    int Nt = g->Ntotal;
+
+    /* Pass 1: set chi, h_ij, K, A_ij, gauge, EM */
+    for (int k = 0; k < Nt; k++) {
+        for (int j = 0; j < Nt; j++) {
+            for (int i = 0; i < Nt; i++) {
+                int idx = IDX(g, i, j, k);
+                double x = BLOCK_COORD(blk, 0, i);
+                double y = BLOCK_COORD(blk, 1, j);
+                double z = BLOCK_COORD(blk, 2, k);
+
+                /* Read solver data BEFORE overwriting */
+                double psi = g->fields[BG_PSI_BL_BY][idx]
+                           + g->fields[SOL_PSI_BY][idx];
+                double psi4 = psi * psi * psi * psi;
+                double chi  = 1.0 / psi4;
+
+                /* Non-flat conformal metric from superposed QI Kerr */
+                double h[3][3];
+                hispid_conformal_metric(h, x, y, z, n_bh, bhs);
+
+                /* A_ij: Kerr + BY */
+                double A_kerr[3][3];
+                hispid_extrinsic(A_kerr, x, y, z, n_bh, bhs);
+                double A_by[3][3];
+                bowen_york_Aij(A_by, x, y, z, n_bh, bhs);
+                double psi6 = psi4 * psi * psi;
+                double psi6_inv = 1.0 / psi6;
+
+                /* Now write CCZ4 fields */
+                g->fields[FIELD_CHI][idx] = chi;
+                g->fields[FIELD_H11][idx] = h[0][0];
+                g->fields[FIELD_H12][idx] = h[0][1];
+                g->fields[FIELD_H13][idx] = h[0][2];
+                g->fields[FIELD_H22][idx] = h[1][1];
+                g->fields[FIELD_H23][idx] = h[1][2];
+                g->fields[FIELD_H33][idx] = h[2][2];
+                g->fields[FIELD_K][idx] = 0.0;
+
+                g->fields[FIELD_A11][idx] = psi6_inv * (A_kerr[0][0] + A_by[0][0]);
+                g->fields[FIELD_A12][idx] = psi6_inv * (A_kerr[0][1] + A_by[0][1]);
+                g->fields[FIELD_A13][idx] = psi6_inv * (A_kerr[0][2] + A_by[0][2]);
+                g->fields[FIELD_A22][idx] = psi6_inv * (A_kerr[1][1] + A_by[1][1]);
+                g->fields[FIELD_A23][idx] = psi6_inv * (A_kerr[1][2] + A_by[1][2]);
+                g->fields[FIELD_A33][idx] = psi6_inv * (A_kerr[2][2] + A_by[2][2]);
+
+                g->fields[FIELD_THETA][idx] = 0.0;
+                g->fields[FIELD_LAPSE][idx] = sqrt(chi);
+                g->fields[FIELD_SHIFT1][idx] = 0.0;
+                g->fields[FIELD_SHIFT2][idx] = 0.0;
+                g->fields[FIELD_SHIFT3][idx] = 0.0;
+                g->fields[FIELD_B1][idx]     = 0.0;
+                g->fields[FIELD_B2][idx]     = 0.0;
+                g->fields[FIELD_B3][idx]     = 0.0;
+
+                if (n_fields >= NUM_FIELDS) {
+                    g->fields[FIELD_E1][idx]  = 0.0;
+                    g->fields[FIELD_E2][idx]  = 0.0;
+                    g->fields[FIELD_E3][idx]  = 0.0;
+                    g->fields[FIELD_BM1][idx] = 0.0;
+                    g->fields[FIELD_BM2][idx] = 0.0;
+                    g->fields[FIELD_BM3][idx] = 0.0;
+                }
+            }
+        }
+    }
+
+    /* Pass 2: compute Gamma^i from FD of h_ij (interior only).
+     * Ghost zone h_ij was set analytically in pass 1, so FD stencils
+     * at block boundaries are correct. */
+    int gw = g->ghost;
+    double dx = g->dx;
+    int strides[3] = { STRIDE_X, STRIDE_Y(g), STRIDE_Z(g) };
+
+    static const int h_field_idx[3][3] = {
+        {FIELD_H11, FIELD_H12, FIELD_H13},
+        {FIELD_H12, FIELD_H22, FIELD_H23},
+        {FIELD_H13, FIELD_H23, FIELD_H33}
+    };
+
+    for (int k = gw; k < Nt - gw; k++) {
+        for (int j = gw; j < Nt - gw; j++) {
+            for (int i = gw; i < Nt - gw; i++) {
+                int idx = IDX(g, i, j, k);
+
+                /* Load h_ij */
+                double h[3][3];
+                h[0][0] = g->fields[FIELD_H11][idx];
+                h[0][1] = g->fields[FIELD_H12][idx];
+                h[0][2] = g->fields[FIELD_H13][idx];
+                h[1][0] = h[0][1];
+                h[1][1] = g->fields[FIELD_H22][idx];
+                h[1][2] = g->fields[FIELD_H23][idx];
+                h[2][0] = h[0][2];
+                h[2][1] = h[1][2];
+                h[2][2] = g->fields[FIELD_H33][idx];
+
+                double h_UU[3][3];
+                compute_inverse_sym(h, h_UU);
+
+                /* First derivatives of h_ij */
+                double d1_h[3][3][3];
+                for (int dir = 0; dir < 3; dir++) {
+                    int s = strides[dir];
+                    for (int a = 0; a < 3; a++)
+                        for (int b = a; b < 3; b++) {
+                            double val = fd_d1(
+                                g->fields[h_field_idx[a][b]], idx, s, dx);
+                            d1_h[a][b][dir] = val;
+                            d1_h[b][a][dir] = val;
+                        }
+                }
+
+                /* Christoffel symbols and contracted Gamma^i */
+                chris_t chris;
+                compute_christoffel(d1_h, h_UU, &chris);
+
+                g->fields[FIELD_GAMMA1][idx] = chris.contracted[0];
+                g->fields[FIELD_GAMMA2][idx] = chris.contracted[1];
+                g->fields[FIELD_GAMMA3][idx] = chris.contracted[2];
+            }
+        }
+    }
+
+    /* Ghost zones: Gamma^i = 0 (Sommerfeld will handle BCs during evolution) */
+    for (int k = 0; k < Nt; k++)
+        for (int j = 0; j < Nt; j++)
+            for (int i = 0; i < Nt; i++) {
+                if (i < gw || i >= Nt - gw ||
+                    j < gw || j >= Nt - gw ||
+                    k < gw || k >= Nt - gw) {
+                    int idx = IDX(g, i, j, k);
+                    g->fields[FIELD_GAMMA1][idx] = 0.0;
+                    g->fields[FIELD_GAMMA2][idx] = 0.0;
+                    g->fields[FIELD_GAMMA3][idx] = 0.0;
+                }
+            }
+}
+
+/* ================================================================
+ * set_bowen_york_mesh: initial data on an AMR evolution mesh
+ * ================================================================ */
+void set_bowen_york_mesh(mesh_t *m, int n_bh, const puncture_data_t *bhs,
+                          int n_amr_levels)
+{
+    /* Check if all momenta and spins are zero — use fast BL path */
+    int need_solver = 0;
+    int high_spin = 0;
+    for (int n = 0; n < n_bh; n++) {
+        double S_mag = sqrt(bhs[n].spin[0] * bhs[n].spin[0]
+                          + bhs[n].spin[1] * bhs[n].spin[1]
+                          + bhs[n].spin[2] * bhs[n].spin[2]);
+        double chi_spin = S_mag / (bhs[n].mass * bhs[n].mass);
+        if (chi_spin > 0.9) high_spin = 1;
+
+        for (int d = 0; d < 3; d++) {
+            if (fabs(bhs[n].momentum[d]) > 1.0e-15 ||
+                fabs(bhs[n].spin[d]) > 1.0e-15) {
+                need_solver = 1;
+            }
+        }
+    }
+
+    int nf = m->n_fields;
+
+    if (!need_solver) {
+        /* Pure Brill-Lindquist: psi is analytic, A_ij = 0 */
+        printf("  Bowen-York (mesh): P=0, S=0 — analytic BL path\n");
+
+        /* Refine near punctures if requested */
+        if (n_amr_levels > 0)
+            refine_mesh_near_punctures(m, n_amr_levels, n_bh, bhs);
+
+        for (int bid = 0; bid < m->num_blocks; bid++) {
+            block_t *blk = m->blocks[bid];
+            if (!blk || !blk->is_leaf) continue;
+            grid_t *g = blk->grid;
+            int Nt = g->Ntotal;
+
+            /* Write BL psi into solver slot, zero correction */
+            for (int k = 0; k < Nt; k++)
+                for (int j = 0; j < Nt; j++)
+                    for (int i = 0; i < Nt; i++) {
+                        int idx = IDX(g, i, j, k);
+                        double x = BLOCK_COORD(blk, 0, i);
+                        double y = BLOCK_COORD(blk, 1, j);
+                        double z = BLOCK_COORD(blk, 2, k);
+                        g->fields[BG_PSI_BL_BY][idx] =
+                            brill_lindquist_psi(x, y, z, n_bh, bhs);
+                        g->fields[SOL_PSI_BY][idx] = 0.0;
+                    }
+
+            set_ccz4_from_psi_block(blk, n_bh, bhs, nf);
+        }
+    } else if (high_spin || hispid_force) {
+        /* HiSpID: coupled 4-field solver on evolution mesh */
+        printf("  Bowen-York (mesh): HiSpID path, %d AMR levels\n", n_amr_levels);
+        double residual = relaxation_solve_coupled_amr_mesh(
+            m, n_bh, bhs, 1.0e-10, 50000, 1, n_amr_levels);
+        printf("  HiSpID (mesh): residual = %.6e\n", residual);
+
+        /* Convert solver data → CCZ4 on each leaf block */
+        for (int bid = 0; bid < m->num_blocks; bid++) {
+            block_t *blk = m->blocks[bid];
+            if (!blk || !blk->is_leaf) continue;
+            set_ccz4_from_hispid_block(blk, n_bh, bhs, nf);
+        }
+    } else {
+        /* Standard BY: 1-field solver on evolution mesh */
+        printf("  Bowen-York (mesh): 1-field path, %d AMR levels\n", n_amr_levels);
+        double residual = relaxation_solve_amr_mesh(
+            m, n_bh, bhs, 1.0e-12, 50000, 1, n_amr_levels);
+        printf("  Bowen-York (mesh): residual = %.6e\n", residual);
+
+        /* Convert solver data → CCZ4 on each leaf block */
+        for (int bid = 0; bid < m->num_blocks; bid++) {
+            block_t *blk = m->blocks[bid];
+            if (!blk || !blk->is_leaf) continue;
+            set_ccz4_from_psi_block(blk, n_bh, bhs, nf);
+        }
+    }
+
+    /* Ghost exchange for CCZ4 fields across blocks */
+    ghost_exchange_multilevel(m);
 }
