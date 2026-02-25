@@ -74,7 +74,7 @@ static void print_usage(void)
     fprintf(stderr, "  --chi_refine <float>   Refinement threshold (default 0.1)\n");
     fprintf(stderr, "  --chi_coarsen <float>  Coarsening threshold (default 0.01)\n");
     fprintf(stderr, "  --regrid_every <int>   Regrid check interval (default 1)\n");
-    fprintf(stderr, "  --amr-levels <int>    AMR levels for initial data solver (default 2)\n");
+    fprintf(stderr, "  --amr-levels <int>    Initial data solver levels (default: max-level)\n");
     fprintf(stderr, "\nInitial data:\n");
     fprintf(stderr, "  --hispid               Force HiSpID (high-spin) initial data\n");
     fprintf(stderr, "\nEinstein-Maxwell:\n");
@@ -269,6 +269,10 @@ int main(int argc, char **argv)
 
     if (p.amr.enabled) {
         /* === AMR path === */
+        /* Resolve solver_levels: default to max_level if not explicitly set */
+        if (p.amr.solver_levels < 0)
+            p.amr.solver_levels = p.amr.max_level;
+
         mesh_t *m = mesh_create_ex(p.amr.N_root, p.amr.N_block, p.L, p.rk_method,
                                     p.em_enabled ? NUM_FIELDS : NUM_CCZ4_FIELDS);
         p.dx = m->dx_base;

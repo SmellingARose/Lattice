@@ -728,7 +728,7 @@ Level 0: everywhere (dx ~ M/2)     — outer domain + boundary</code></pre>
 <summary>Why solve initial data on the evolution mesh?</summary>
 <div class="detail-body">
 <p>In AMR mode, the constraint solver operates directly on the evolution mesh's blocks via <code>set_bowen_york_mesh()</code>. This gives exact discrete operator consistency &mdash; the same <code>fd_d2()</code> stencils, ghost zones, and grid points used by the evolution code. No interpolation from a separate solver grid, so no interpolation error. At t=0, evolution blocks have 100 idle array slots (25 fields &times; 4 arrays); the solver needs only 22 slots.</p>
-<p><code>--amr-levels &lt;int&gt;</code> (default 2) controls refinement depth: each level halves <code>dx</code> near punctures. For example, <code>--amr-levels 3</code> on a base grid with dx=2M gives dx=0.25M near the BH. The solver does real work at the fine resolution, so constraint quality scales with <code>dx_fine</code>, not <code>dx_base</code>. Benchmarked at 218,000x better near-field constraint quality vs solving at base resolution and copying to refined blocks.</p>
+<p>Refinement depth defaults to <code>--max-level</code>, so initial data and evolution use the same AMR depth automatically. Override with <code>--amr-levels</code> for the rare case where you want finer initial data than evolution can maintain. Each level halves <code>dx</code> near punctures &mdash; e.g., <code>--max-level 3</code> on a base grid with dx=2M gives dx=0.25M near the BH. The solver does real work at the fine resolution, so constraint quality scales with <code>dx_fine</code>, not <code>dx_base</code>. Benchmarked at 218,000x better near-field constraint quality vs solving at base resolution and copying to refined blocks.</p>
 <p>Requires <code>--rk classic</code> (accum arrays needed by the solver). Follows the Athena++ MG approach (Tomida &amp; Stone 2023) and avoids the operator mismatch documented by Alic et al. (arXiv:0912.2920) when using external solvers like TwoPunctures on FD grids.</p>
 </div>
 </details>
@@ -780,7 +780,7 @@ export GOMP_NVPTX_NATIVE_GPU_THREAD_STACK_SIZE=16384
 <tr><td><code>--ah</code></td><td>off</td><td>Enable apparent horizon finder</td></tr>
 <tr><td><code>--N-root</code></td><td>&mdash;</td><td>Root blocks per dimension (enables AMR mode)</td></tr>
 <tr><td><code>--max-level</code></td><td>0</td><td>Maximum AMR refinement level during evolution</td></tr>
-<tr><td><code>--amr-levels</code></td><td>2</td><td>Initial data solver refinement levels. Each level halves dx near punctures (2 = 4x finer, 3 = 8x, ...). Requires <code>--rk classic</code>.</td></tr>
+<tr><td><code>--amr-levels</code></td><td><code>max-level</code></td><td>Initial data solver refinement depth. Defaults to <code>--max-level</code> so initial data and evolution use the same AMR depth. Each level halves dx near punctures. Requires <code>--rk classic</code>.</td></tr>
 </table>
 
 <!-- ========================================== -->

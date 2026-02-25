@@ -112,10 +112,11 @@ work on AMR meshes.
 - **Solve on evolution mesh:** AMR initial data constraint solver operates directly
   on evolution blocks (`set_bowen_york_mesh()`), eliminating interpolation error
   and ensuring exact discrete operator consistency. Solver reuses idle evolution
-  arrays at t=0 (22 of 100 slots). `--amr-levels <int>` controls refinement depth:
-  each level halves dx near punctures (level 2 = 4x finer, level 3 = 8x finer, etc.).
-  Measured 218,000x better near-field constraint quality vs the old copy approach on
-  refined meshes. Ref: Athena++ MG (Tomida & Stone 2023), arXiv:0912.2920 (Alic et al.).
+  arrays at t=0 (22 of 100 slots). Refinement depth defaults to `--max-level` so
+  initial data and evolution use the same AMR depth (override with `--amr-levels`).
+  Each level halves dx near punctures. Measured 218,000x better near-field constraint
+  quality vs the old copy approach on refined meshes.
+  Ref: Athena++ MG (Tomida & Stone 2023), arXiv:0912.2920 (Alic et al.).
 - **Tier 0 bug fixes:** `enforce_algebraic_block()` in refine.c fixed (was using slow
   `1.0/cbrt(det)` with divergent `if (det > 0.0)` guard; now uses `fast_inv_cbrt(det)`
   unconditionally, matching `rk4.c`).
@@ -328,7 +329,7 @@ constant `GR_SPACEDIM = 3`.
 | `shift_Gamma_coeff` | 0.75 | F in dt(beta^i) = F * B^i |
 | `eta` | 1.0 | Damping in Gamma-driver: dt(B^i) = dt(Gamma^i) - eta * B^i |
 | `rk_method` | `RK_CLASSIC` | Time integrator: `RK_CLASSIC` (4 stages, 4 blocks) or `RK_CK45` (5 stages, 3 blocks) |
-| `amr_levels` | 2 | Initial data solver refinement levels (`--amr-levels`). Each level halves dx near punctures (2 = 4x finer, 3 = 8x, ...). Only used with `--amr`. Requires `--rk classic`. |
+| `amr_levels` | `max_level` | Initial data solver refinement levels (`--amr-levels`). Defaults to `--max-level` so initial data and evolution use the same depth. Each level halves dx near punctures. Override for rare cases where you want finer initial data than evolution can afford. Requires `--rk classic`. |
 
 ### FAS Multigrid Solver Tuning
 
