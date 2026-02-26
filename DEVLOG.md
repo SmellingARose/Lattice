@@ -3,10 +3,41 @@
 > **Note:** When adding/removing/renaming files or functions, also update
 > `docs/architecture.html` — the living map of the codebase structure.
 
+## 2026-02-26: Tier 3 Item 6 — Device-side GPU ghost exchange
+
+Replaced host-side PCIe round-trip ghost exchange with 7 GPU kernel launches.
+All data stays on device during time steps — zero PCIe DMA.
+
+**Implementation:** 5 GPU kernels replacing 5 host-side static functions:
+- **Phase 0+1** (`gpu_packed_exchange_same_level`): collapse(2) over (block, neighbor).
+  Element-wise copy replaces memcpy. Uniform meshes early-return after this phase.
+- **Phase 2** (`gpu_packed_restrict_to_coarse`): collapse(4) over (b, f, ck, cj).
+  6×6×6 tensor-product stencil using `restrict_w`/`restrict_wkj`.
+- **Phase 3** (`gpu_packed_fill_coarse_buf_ghosts`): collapse(2) over (b, n).
+  Two cases: same-level sibling (coarse↔coarse) and coarser neighbor (data→coarse
+  with `round()` offset).
+- **Phase 3.5** (`gpu_packed_fill_coarse_boundary`): 3 separate kernels (X→Y→Z)
+  with implicit barriers for dimension-sweep ordering. `extrap_c[4][3]` declare-target
+  constant for quadratic extrapolation coefficients.
+- **Phase 4** (`gpu_packed_prolongate_fine_ghosts`): collapse(4) over (b, fk, fj, fi).
+  7×7×7 Lagrange stencil. Field loop inside to share geometry across fields.
+
+**Prerequisites:** Added `#pragma omp declare target` (with `#ifdef LATTICE_GPU` guards)
+to constant arrays needed on device: `nbr_offset[26][3]` (block.h/c),
+`restrict_w[6]`/`restrict_wkj[6][6]` (restriction.h/c),
+`prolong_w[7]`/`prolong_wkj[4][7][7]` (prolongation.h/c).
+
+**Testing:** CPU build zero warnings, all tests pass. GPU build (`make BACKEND=gpu
+CC=gcc-14`) zero errors, `test-gpu-debug` passes all kernels including ghost exchange.
+
+**Files changed:** `block.h`, `block.c`, `restriction.h`, `restriction.c`,
+`prolongation.h`, `prolongation.c`, `backend.h`, `backend_gpu.c`.
+
+Tier 3: 6/7 complete. Item 7 (dense output subcycling) deferred.
+
 ## 2026-02-25: Tier 3 GPU/performance optimizations (5/7)
 
 5 of 7 Table 1 optimizations complete. Item 7 (dense output subcycling) deferred.
-Item 6 (device-side ghost exchange) pending — requires GPU hardware to test.
 
 **Item 1 — Manual CSE in `ccz4_rhs_point`:**
 - Cache `K_minus_2Theta = K - 2.0 * Theta` (used 6× in evolution equations).

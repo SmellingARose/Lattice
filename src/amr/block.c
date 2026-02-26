@@ -71,6 +71,9 @@ static grid_t *coarse_buf_alloc(int N, double dx, int n_fields)
  * Order: 6 faces, 12 edges, 8 corners.
  * Ref: Athena++ bvals_base.cpp SearchAndSetNeighbors enumeration.
  */
+#ifdef LATTICE_GPU
+#pragma omp declare target
+#endif
 const int nbr_offset[NUM_NEIGHBORS][3] = {
     /* 6 faces */
     {-1,  0,  0}, { 1,  0,  0},   /* x-minus, x-plus */
@@ -84,6 +87,9 @@ const int nbr_offset[NUM_NEIGHBORS][3] = {
     {-1, -1, -1}, { 1, -1, -1}, {-1,  1, -1}, { 1,  1, -1},
     {-1, -1,  1}, { 1, -1,  1}, {-1,  1,  1}, { 1,  1,  1}
 };
+#ifdef LATTICE_GPU
+#pragma omp end declare target
+#endif
 
 block_t *block_alloc(int id, int level, int N_block, double dx,
                      const double origin[3], rk_method_t method,

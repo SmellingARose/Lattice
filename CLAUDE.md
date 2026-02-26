@@ -109,7 +109,7 @@ work on AMR meshes.
   integer sub_step in subcycling (fixes floating-point frac drift), Ricci/raise_all
   symmetry exploitation (6 vs 9 components), Sommerfeld asymptotic array lookup,
   Levi-Civita curl unrolling, hoisted advection sign.
-- **Tier 3 optimizations (in progress, 5/7 complete):**
+- **Tier 3 optimizations (in progress, 6/7 complete):**
   - *Manual CSE in `ccz4_rhs_point`:* Pre-compute `K - 2*Theta` (used 6×),
     `A_mixed[k][j] = A[i][k] * h_UU[k][j]` (eliminates inner `ll` loop in A²
     trace and RHS_A). Pure arithmetic — same math, fewer FLOPs.
@@ -132,8 +132,12 @@ work on AMR meshes.
     `sync_from_blocks` copy only the data buffer (not rhs/scratch/accum).
     `packs_dirty` flag triggers rebuild on regrid. Eliminates per-step
     malloc/free/memcpy cycle (~1 GB allocation per step for large meshes).
-  - *Remaining:* Device-side ghost exchange (GPU kernels for all 5 phases,
-    eliminates PCIe DMA during time step). Dense output subcycling deferred.
+  - *Device-side ghost exchange:* Replaced host-side PCIe round-trip with
+    7 GPU kernel launches (same-level, restriction, coarse ghost fill, 3 boundary
+    extrapolation sweeps, prolongation). Zero PCIe DMA during time steps. Uniform
+    meshes: 1 kernel launch. Constants (`nbr_offset`, `restrict_w/wkj`,
+    `prolong_w/wkj`) wrapped with `omp declare target` for device access.
+  - *Remaining:* Dense output subcycling deferred.
 - **Position-dependent eta:** `eta(x) = eta_0 / W(x)` where `W = sqrt(chi)` for
   stable unequal-mass binary evolution. Gated behind `position_dependent_eta` flag
   (default 1). Ref: arXiv:1003.0859 (Muller & Brugmann).

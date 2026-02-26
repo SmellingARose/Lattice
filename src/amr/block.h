@@ -41,7 +41,13 @@ typedef struct {
  * The nblevel[3][3][3] table uses (ox3+1, ox2+1, ox1+1) indexing
  * following Athena++ convention, so nblevel[1][1][1] = self level.
  */
+#ifdef LATTICE_GPU
+#pragma omp declare target
+#endif
 extern const int nbr_offset[NUM_NEIGHBORS][3];
+#ifdef LATTICE_GPU
+#pragma omp end declare target
+#endif
 
 /* Neighbor type classification */
 typedef enum {

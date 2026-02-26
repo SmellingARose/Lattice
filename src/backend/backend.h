@@ -140,12 +140,11 @@ void backend_axpy_packed(meshblock_pack_t *pack, double alpha, double dt);
 void backend_apply_accum_packed(meshblock_pack_t *pack);
 
 /*
- * Ghost exchange on pack buffers (Commit 2).
- * All 5 phases of multilevel ghost exchange operating directly on
- * pack->data and pack->coarse_data — no unpack/repack needed.
+ * Ghost exchange on pack buffers.
+ * All 5 phases of multilevel ghost exchange on pack->data/coarse_data.
  *
  * CPU: OpenMP parallel for on host memory.
- * GPU: syncs to host, runs 5-phase exchange, syncs back.
+ * GPU: 7 device-side kernel launches, zero PCIe DMA.
  *
  * Ref: ghost_exchange_multilevel() in ghost_exchange.c (per-block version)
  */

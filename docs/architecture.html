@@ -389,7 +389,7 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 <tr><th>File</th><th>Purpose</th></tr>
 <tr><td><code>backend.h</code></td><td>Abstract interface: RHS, Sommerfeld, CK45 update, ghost exchange, enforce_algebraic, map/unmap, copy, zero.</td></tr>
 <tr><td><code>backend_cpu.c</code></td><td>OpenMP threads. Packed: flattened (block, k, j) iteration, inner i-loop for SIMD. Ghost exchange directly on pack buffers. <code>backend_enforce_algebraic_packed()</code> for batched det(h)=1, tr(A)=0.</td></tr>
-<tr><td><code>backend_gpu.c</code></td><td>OpenMP target. Packed: collapse(4) over (block, k, j, i). ~5.3 KB stack per thread. <code>backend_enforce_algebraic_packed()</code> runs on device (no host sync). Requires GCC 15+ with 16 KB thread stack.</td></tr>
+<tr><td><code>backend_gpu.c</code></td><td>OpenMP target. Packed: collapse(4) over (block, k, j, i). ~5.3 KB stack per thread. <code>backend_enforce_algebraic_packed()</code> runs on device (no host sync). Device-side ghost exchange: 7 GPU kernel launches, zero PCIe DMA. Requires GCC 14+ with 16 KB thread stack.</td></tr>
 </table>
 
 <!-- ========================================== -->
@@ -434,7 +434,7 @@ Grid indexing:  IDX(g, i, j, k) = k * Ntotal^2 + j * Ntotal + i
 <div class="detail-body">
 <p>For AMR, all leaf blocks are packed into a single <code>meshblock_pack_t</code> with contiguous GPU buffers. Each backend operation (RHS, Sommerfeld, CK45 update) is one kernel launch over the entire pack. On GPU, the iteration space is <code>collapse(4)</code> over (block, k, j, i). Each GPU thread builds a stack-local pointer array (~400 B) and grid_t (~872 B), then calls <code>ccz4_rhs_point</code> (~4 KB). Total ~5.3 KB per thread, under the 16 KB GPU stack limit.</p>
 
-<p>Packs are cached persistently in <code>mesh_t</code> (<code>leaf_pack</code> for uniform, <code>level_packs[]</code> for AMR subcycling). Only rebuilt on regrid (<code>packs_dirty</code> flag). Data-only sync (<code>sync_to/from_blocks</code>) replaces the per-step malloc/load/store/free cycle, eliminating ~1 GB of allocation overhead per step for large meshes. Ghost exchange on GPU syncs pack data to host, runs the 5-phase multilevel exchange on CPU, and syncs back. True device-side ghost exchange is a future optimization.</p>
+<p>Packs are cached persistently in <code>mesh_t</code> (<code>leaf_pack</code> for uniform, <code>level_packs[]</code> for AMR subcycling). Only rebuilt on regrid (<code>packs_dirty</code> flag). Data-only sync (<code>sync_to/from_blocks</code>) replaces the per-step malloc/load/store/free cycle, eliminating ~1 GB of allocation overhead per step for large meshes. Ghost exchange on GPU runs entirely on device via 7 kernel launches (same-level exchange, restriction, coarse ghost fill, 3 boundary extrapolation sweeps, prolongation), zero PCIe DMA during time steps. Uniform meshes: 1 kernel launch.</p>
 </div>
 </details>
 
@@ -649,7 +649,7 @@ Level 0: everywhere (dx ~ M/2)     — outer domain + boundary</code></pre>
   |     (copy interior data between same-resolution siblings)
   |
   +--&gt; <span class="highlight">Phase 2:</span> Restrict each fine leaf to its own coarse_buf
-  |     (4th-order Lagrange, fine interior --&gt; half-res buffer)
+  |     (6th-order Lagrange, fine interior --&gt; half-res buffer)
   |
   +--&gt; <span class="highlight">Phase 3:</span> Fill coarse_buf ghost zones
   |     (sibling bufs exchange with each other; coarse neighbors
@@ -659,7 +659,10 @@ Level 0: everywhere (dx ~ M/2)     — outer domain + boundary</code></pre>
   |     (quadratic extrapolation, X--&gt;Y--&gt;Z dimension sweep)
   |
   +--&gt; <span class="highlight">Phase 4:</span> Prolongate from coarse_buf into fine ghost zones
-        (5-point Lagrange; skips directions already filled in Phase 1)</div>
+        (7-point Lagrange; skips cells already filled in Phase 1)
+
+  GPU: all 7 kernels run on device, zero PCIe DMA.
+  CPU: OpenMP parallel for on host memory.</div>
 
 <p><strong>Cross-level ghost fill (<code>ghost_fill_from_coarser</code>):</strong> Used during subcycling to fill fine-level ghost zones from time-interpolated coarser data. Split into two passes to avoid ordering bugs: Pass 1 restricts <em>all</em> fine blocks into their coarse_bufs; Pass 2 exchanges coarse_buf ghosts, extrapolates boundaries, and prolongates. This ensures same-level neighbor coarse_bufs are always valid when read.</p>
 

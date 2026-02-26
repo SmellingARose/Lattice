@@ -35,12 +35,14 @@ struct block_s;
  * Ref: Fornberg, SIAM Review 40 (1998) */
 #define RESTRICT_STENCIL 6
 
+#ifdef LATTICE_GPU
+#pragma omp declare target
+#endif
 extern const double restrict_w[RESTRICT_STENCIL];
-
-/* Pre-computed w[sk]*w[sj] products for 6×6 tensor restriction.
- * Eliminates one multiply per inner loop iteration (216 per coarse cell).
- * Verified bit-exact against runtime computation (tools/verify_weights.c). */
 extern const double restrict_wkj[RESTRICT_STENCIL][RESTRICT_STENCIL];
+#ifdef LATTICE_GPU
+#pragma omp end declare target
+#endif
 
 /*
  * Restrict a single coarse cell from fine data.
