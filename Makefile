@@ -51,14 +51,20 @@ ifeq ($(BACKEND),cpu)
     endif
 else ifeq ($(BACKEND),gpu)
     BACKEND_SRC = src/backend/backend_gpu.c
-    # GPU offloading via OpenMP target. Requires GCC 15+ for stack size control.
+    # GPU offloading via OpenMP target. Requires GCC 14+ for nvptx.
     # Set GOMP_NVPTX_NATIVE_GPU_THREAD_STACK_SIZE=16384 at runtime.
     # GPU_ARCH: nvptx-none (NVIDIA, default) or amdgcn-amdhsa (AMD)
+    #
+    # Host -O2 required: GCC -O3 generates broken nvptx IR for large
+    # inlined functions (ccz4_rhs_point ~3KB of locals). Offload-side
+    # -O3 is fine — the bug is in host-side IR generation. -O3 offload
+    # via -foffload-options keeps GPU kernel optimization aggressive.
     GPU_ARCH ?= nvptx-none
     LTO_FLAGS =
+    GPU_OPT = -O2
     BACKEND_FLAGS = -fopenmp -foffload=$(GPU_ARCH) -fcf-protection=none \
                     -fno-stack-protector \
-                    -foffload-options="-lm -fno-stack-protector" -DLATTICE_GPU
+                    -foffload-options="-lm -fno-stack-protector -O3" -DLATTICE_GPU
     BACKEND_LIBS =
 else
     $(error Unknown BACKEND=$(BACKEND). Use cpu or gpu)
@@ -79,7 +85,11 @@ endif
 # Compiler flags
 INCLUDES = -I src
 CFLAGS_BASE = -std=c17 -Wall -Wextra -Werror -D_GNU_SOURCE -Wno-unused-but-set-variable -DFD_ORDER=$(FD_ORDER) $(EM_FLAGS) $(INCLUDES) $(BACKEND_FLAGS)
-CFLAGS_OPT  = $(CFLAGS_BASE) -O3 -ffast-math -march=native $(LTO_FLAGS)
+HOST_OPT ?= -O3
+ifeq ($(BACKEND),gpu)
+    HOST_OPT = $(GPU_OPT)
+endif
+CFLAGS_OPT  = $(CFLAGS_BASE) $(HOST_OPT) -ffast-math -march=native $(LTO_FLAGS)
 CFLAGS_DBG  = $(CFLAGS_BASE) -O0 -g -fsanitize=address,undefined -DDEBUG
 
 LDFLAGS = $(BACKEND_LIBS) -lm $(LTO_FLAGS)
@@ -228,6 +238,14 @@ test-maxwell: $(BUILD)/test_maxwell
 	@echo "=== Running Maxwell test ==="
 	$(BUILD)/test_maxwell
 
+$(BUILD)/test_maxwell_debug: tests/test_maxwell_debug.c $(ALL_SRC)
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS_OPT) -DLATTICE_EM_ENABLED -o $@ tests/test_maxwell_debug.c $(ALL_SRC) $(LDFLAGS)
+
+test-maxwell-debug: $(BUILD)/test_maxwell_debug
+	@echo "=== Running Maxwell debug test ==="
+	$(BUILD)/test_maxwell_debug
+
 $(BUILD)/test_ah_finder: tests/test_ah_finder.c $(ALL_SRC)
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS_OPT) -o $@ tests/test_ah_finder.c $(ALL_SRC) $(LDFLAGS)
@@ -259,6 +277,14 @@ $(BUILD)/test_amr_accuracy: tests/test_amr_accuracy.c $(ALL_SRC)
 test-amr-accuracy: $(BUILD)/test_amr_accuracy
 	@echo "=== Running AMR accuracy comparison ==="
 	$(BUILD)/test_amr_accuracy
+
+$(BUILD)/test_gpu_debug: tests/test_gpu_debug.c $(ALL_SRC)
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS_OPT) -o $@ tests/test_gpu_debug.c $(ALL_SRC) $(LDFLAGS)
+
+test-gpu-debug: $(BUILD)/test_gpu_debug
+	@echo "=== Running GPU kernel debug test ==="
+	CUDA_VISIBLE_DEVICES=0 GOMP_NVPTX_NATIVE_GPU_THREAD_STACK_SIZE=65536 $(BUILD)/test_gpu_debug
 
 clean:
 	rm -rf $(BUILD)

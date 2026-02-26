@@ -3,18 +3,15 @@
  * Packed batch kernel validation test.
  *
  * Verifies that the packed mesh stepper (all leaf blocks batched into
- * a single meshblock_pack_t with batched kernels) produces identical
- * results to the per-block stepper (one kernel per block per stage).
+ * a single meshblock_pack_t with batched kernels) produces correct results.
  *
  * Tests:
- *   1. Packed vs per-block: identical field values after 10 steps (BH)
- *   2. Packed with multilevel AMR: regridding + evolution works
- *   3. Packed flat spacetime: constraint stability < 1e-10
+ *   1. Packed with multilevel AMR: regridding + evolution works
+ *   2. Packed flat spacetime: constraint stability < 1e-10
  *
  * Pass criteria:
- *   - Test 1: max |diff| < 1e-12 between packed and per-block fields
- *   - Test 2: Ham L2 finite and bounded, refinement triggered
- *   - Test 3: Ham L2 < 1e-10 after 100 steps
+ *   - Test 1: Ham L2 finite and bounded, refinement triggered
+ *   - Test 2: Ham L2 < 1e-10 after 100 steps
  */
 
 #include "../src/amr/mesh.h"
@@ -26,7 +23,6 @@
 #include "../src/evolution/ccz4_rhs.h"
 #include "../src/numerics/rk4.h"
 #include "../src/diagnostics/constraints.h"
-#include "../src/boundary/sommerfeld.h"
 #include "../src/backend/backend.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -47,105 +43,7 @@ static void check(int cond, const char *name)
 }
 
 /* ======================================================================
- * Test 1: Packed vs per-block identical results
- *
- * Single BH (M=1) at origin, 2x2x2 mesh, N_block=16, 10 steps.
- * Run the packed stepper on one mesh and the per-block stepper on
- * an identically-initialized second mesh. Compare all field values.
- *
- * The packed path packs all blocks into a contiguous buffer and uses
- * batched kernels; the per-block path launches one kernel per block.
- * Both should produce bit-identical results (same floating-point ops).
- *
- * Pass: max |diff| < 1e-12 between all field values.
- * ====================================================================== */
-static void test_packed_vs_perblock(void)
-{
-    printf("\n--- Test 1: Packed vs per-block identical results ---\n");
-
-    sim_params_t p = default_params();
-    p.L = 64.0;
-    p.CFL = 0.25;
-    int nsteps = 10;
-
-    double mass = 1.0;
-    double center[1][3] = {{0.0, 0.0, 0.0}};
-
-    /* Create two identical meshes: 2x2x2 blocks of N_block=16 */
-    mesh_t *m_packed  = mesh_create(2, 16, p.L, RK_CLASSIC);
-    mesh_t *m_perblk  = mesh_create(2, 16, p.L, RK_CLASSIC);
-
-    /* Both share the same dx and dt */
-    p.dx = m_packed->dx_base;
-    p.dt = p.CFL * p.dx;
-
-    /* Set identical BH initial data on both meshes */
-    for (int bid = 0; bid < m_packed->num_blocks; bid++) {
-        block_t *bp = m_packed->blocks[bid];
-        block_t *bb = m_perblk->blocks[bid];
-        if (!bp || !bp->is_leaf) continue;
-
-        set_brill_lindquist_global(bp->grid, bp->origin, 1, &mass,
-                                   (const double(*)[3])center);
-        set_brill_lindquist_global(bb->grid, bb->origin, 1, &mass,
-                                   (const double(*)[3])center);
-    }
-
-    /* Evolve: packed stepper on m_packed, per-block on m_perblk */
-    for (int step = 0; step < nsteps; step++) {
-        rk4_step_mesh(m_packed, &p, ccz4_rhs_point, p.dt);
-        rk4_step_mesh_perblock(m_perblk, &p, ccz4_rhs_point, p.dt);
-    }
-
-    /* Compare interior field values across all leaf blocks.
-     * Both meshes have the same block structure (no regridding),
-     * so blocks[bid] corresponds 1:1.
-     * Only compare interior points (ghost zones are communication buffers
-     * whose values differ between packed and per-block paths). */
-    double max_diff = 0.0;
-    int max_field = 0, max_block = 0;
-    for (int bid = 0; bid < m_packed->num_blocks; bid++) {
-        block_t *bp = m_packed->blocks[bid];
-        block_t *bb = m_perblk->blocks[bid];
-        if (!bp || !bp->is_leaf) continue;
-
-        int lo = bp->grid->ghost;
-        int hi2 = lo + bp->grid->N;
-        for (int f = 0; f < bp->grid->n_fields; f++) {
-            for (int kk = lo; kk < hi2; kk++)
-              for (int jj = lo; jj < hi2; jj++)
-                for (int ii = lo; ii < hi2; ii++) {
-                    int idx2 = IDX(bp->grid, ii, jj, kk);
-                    double diff = fabs(bp->grid->fields[f][idx2]
-                                     - bb->grid->fields[f][idx2]);
-                    if (diff > max_diff) {
-                        max_diff = diff;
-                        max_field = f;
-                        max_block = bid;
-                    }
-                }
-        }
-    }
-
-    printf("  Max |diff| = %.6e (field %d, block %d)\n",
-           max_diff, max_field, max_block);
-
-    /* Both should be finite */
-    double ham_packed = mesh_constraint_l2(m_packed);
-    double ham_perblk = mesh_constraint_l2(m_perblk);
-    printf("  Packed Ham L2 = %.6e, Per-block Ham L2 = %.6e\n",
-           ham_packed, ham_perblk);
-
-    check(isfinite(ham_packed), "Packed Ham L2 finite");
-    check(isfinite(ham_perblk), "Per-block Ham L2 finite");
-    check(max_diff < 1.0e-12, "Packed vs per-block max diff < 1e-12");
-
-    mesh_free(m_packed);
-    mesh_free(m_perblk);
-}
-
-/* ======================================================================
- * Test 2: Packed with multilevel (AMR regridding)
+ * Test 1: Packed with multilevel (AMR regridding)
  *
  * Single BH (M=1), 2x2x2 mesh, N_block=16, chi_refine=0.05.
  * Evolve 20 steps with regridding every 5 steps.
@@ -156,7 +54,7 @@ static void test_packed_vs_perblock(void)
  * ====================================================================== */
 static void test_packed_multilevel(void)
 {
-    printf("\n--- Test 2: Packed with multilevel (AMR regridding) ---\n");
+    printf("\n--- Test 1: Packed with multilevel (AMR regridding) ---\n");
 
     sim_params_t p = default_params();
     p.L = 64.0;
@@ -216,17 +114,16 @@ static void test_packed_multilevel(void)
 }
 
 /* ======================================================================
- * Test 3: Packed flat spacetime stability
+ * Test 2: Packed flat spacetime stability
  *
  * Flat Minkowski spacetime, 2x2x2 mesh, N_block=16, 100 steps.
- * The packed stepper should maintain constraint violation < 1e-10,
- * identical to the per-block stepper on flat spacetime.
+ * The packed stepper should maintain constraint violation < 1e-10.
  *
  * Pass: Ham L2 < 1e-10 after 100 steps.
  * ====================================================================== */
 static void test_packed_flat_stability(void)
 {
-    printf("\n--- Test 3: Packed flat spacetime stability ---\n");
+    printf("\n--- Test 2: Packed flat spacetime stability ---\n");
 
     sim_params_t p = default_params();
     p.L = 10.0;
@@ -267,7 +164,6 @@ int main(void)
 
     backend_init();
 
-    test_packed_vs_perblock();
     test_packed_multilevel();
     test_packed_flat_stability();
 

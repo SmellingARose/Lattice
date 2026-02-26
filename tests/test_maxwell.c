@@ -17,10 +17,10 @@
 #include "../src/initial_data/bowen_york.h"
 #include "../src/evolution/ccz4_rhs.h"
 #include "../src/evolution/maxwell_rhs.h"
-#include "../src/boundary/sommerfeld.h"
 #include "../src/numerics/rk4.h"
 #include "../src/diagnostics/constraints.h"
 #include "../src/numerics/finite_diff.h"
+#include "../src/amr/mesh.h"
 #include "../src/backend/backend.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -131,7 +131,8 @@ static void test_em_flat(void)
     p.dx = p.L / p.N;
     p.dt = p.CFL * p.dx;
 
-    grid_t *g = grid_alloc(p.N, p.L, p.rk_method);
+    mesh_t *m = mesh_create_ex(1, p.N, p.L, p.rk_method, NUM_FIELDS);
+    grid_t *g = m->blocks[0]->grid;
     p.N  = g->N;
     p.dx = g->dx;
     p.dt = p.CFL * p.dx;
@@ -141,19 +142,21 @@ static void test_em_flat(void)
     double em0 = em_field_l2(g);
     printf("  Initial EM L2 = %.6e\n", em0);
 
+    p.time = 0.0;
     for (int step = 1; step <= p.num_steps; step++) {
-        rk4_step(g, &p, ccz4_maxwell_rhs_point, apply_sommerfeld, p.dt);
+        rk4_step_mesh(m, &p, ccz4_maxwell_rhs_point, p.dt);
+        p.time += p.dt;
     }
 
     double em_final = em_field_l2(g);
-    double ham_final = compute_constraint_l2(g);
+    double ham_final = mesh_constraint_l2(m);
     printf("  Final EM L2 = %.6e\n", em_final);
     printf("  Final Ham L2 = %.6e\n", ham_final);
 
     CHECK("EM fields stay zero (< 1e-10)", em_final < 1.0e-10);
     CHECK("Ham constraint stable (< 1e-10)", ham_final < 1.0e-10);
 
-    grid_free(g);
+    mesh_free(m);
 }
 
 /*
@@ -177,7 +180,8 @@ static void test_em_wave(void)
     p.dx = p.L / p.N;
     p.dt = p.CFL * p.dx;
 
-    grid_t *g = grid_alloc(p.N, p.L, p.rk_method);
+    mesh_t *m = mesh_create_ex(1, p.N, p.L, p.rk_method, NUM_FIELDS);
+    grid_t *g = m->blocks[0]->grid;
     p.N  = g->N;
     p.dx = g->dx;
     p.dt = p.CFL * p.dx;
@@ -205,12 +209,14 @@ static void test_em_wave(void)
     double energy0 = em_energy(g);
     printf("  Initial EM energy = %.6e\n", energy0);
 
+    p.time = 0.0;
     for (int step = 1; step <= p.num_steps; step++) {
-        rk4_step(g, &p, ccz4_maxwell_rhs_point, apply_sommerfeld, p.dt);
+        rk4_step_mesh(m, &p, ccz4_maxwell_rhs_point, p.dt);
+        p.time += p.dt;
     }
 
     double energy_final = em_energy(g);
-    double ham_final = compute_constraint_l2(g);
+    double ham_final = mesh_constraint_l2(m);
     printf("  Final EM energy = %.6e\n", energy_final);
     printf("  Ham L2 = %.6e\n", ham_final);
 
@@ -224,7 +230,7 @@ static void test_em_wave(void)
           energy_ratio > 0.01 && energy_ratio < 10.0);
     CHECK("Ham constraint bounded (< 1e-6)", ham_final < 1.0e-6);
 
-    grid_free(g);
+    mesh_free(m);
 }
 
 /*
@@ -247,7 +253,8 @@ static void test_charged_bh(void)
     p.dx = p.L / p.N;
     p.dt = p.CFL * p.dx;
 
-    grid_t *g = grid_alloc(p.N, p.L, p.rk_method);
+    mesh_t *m = mesh_create_ex(1, p.N, p.L, p.rk_method, NUM_FIELDS);
+    grid_t *g = m->blocks[0]->grid;
     p.N  = g->N;
     p.dx = g->dx;
     p.dt = p.CFL * p.dx;
@@ -258,19 +265,20 @@ static void test_charged_bh(void)
     bh.mass = 1.0;
     bh.charge = 0.5;
 
-    set_bowen_york(g, 1, &bh);
+    set_bowen_york_mesh(m, 1, &bh, 0);
 
-    double ham0 = compute_constraint_l2(g);
+    double ham0 = mesh_constraint_l2(m);
     double em0  = em_field_l2(g);
     printf("  Initial Ham L2 = %.6e\n", ham0);
     printf("  Initial EM L2  = %.6e\n", em0);
 
+    p.time = 0.0;
     for (int step = 1; step <= p.num_steps; step++) {
-        rk4_step(g, &p, ccz4_maxwell_rhs_point, apply_sommerfeld, p.dt);
+        rk4_step_mesh(m, &p, ccz4_maxwell_rhs_point, p.dt);
         p.time += p.dt;
     }
 
-    double ham_final = compute_constraint_l2(g);
+    double ham_final = mesh_constraint_l2(m);
     double em_final  = em_field_l2(g);
     printf("  Final Ham L2 = %.6e\n", ham_final);
     printf("  Final EM L2  = %.6e\n", em_final);
@@ -279,7 +287,7 @@ static void test_charged_bh(void)
     CHECK("Ham constraint bounded after 50 steps (< 10)", ham_final < 10.0);
     CHECK("EM fields bounded after 50 steps", em_final < 1.0e5);
 
-    grid_free(g);
+    mesh_free(m);
 }
 
 /*
@@ -297,11 +305,12 @@ static void test_constraint_damping(void)
     p.num_steps = 200;
     p.sigma     = 0.3;
     p.em_enabled = 1;
-    p.kappa_em  = 0.5;  /* strong damping */
+    p.kappa_em  = 0.1;  /* moderate damping (kappa_em*6/dx^2*dt must be < 2.78 for RK4 stability) */
     p.dx = p.L / p.N;
     p.dt = p.CFL * p.dx;
 
-    grid_t *g = grid_alloc(p.N, p.L, p.rk_method);
+    mesh_t *m = mesh_create_ex(1, p.N, p.L, p.rk_method, NUM_FIELDS);
+    grid_t *g = m->blocks[0]->grid;
     p.N  = g->N;
     p.dx = g->dx;
     p.dt = p.CFL * p.dx;
@@ -325,8 +334,10 @@ static void test_constraint_damping(void)
     double divE0 = compute_div_E_l2(g);
     printf("  Initial div(E) L2 = %.6e\n", divE0);
 
+    p.time = 0.0;
     for (int step = 1; step <= p.num_steps; step++) {
-        rk4_step(g, &p, ccz4_maxwell_rhs_point, apply_sommerfeld, p.dt);
+        rk4_step_mesh(m, &p, ccz4_maxwell_rhs_point, p.dt);
+        p.time += p.dt;
     }
 
     double divE_final = compute_div_E_l2(g);
@@ -340,7 +351,7 @@ static void test_constraint_damping(void)
     CHECK("div(E) reduced or bounded",
           divE_final < divE0 * 2.0);  /* allow some growth due to wave dynamics */
 
-    grid_free(g);
+    mesh_free(m);
 }
 
 /*
@@ -362,7 +373,8 @@ static void test_energy_conservation(void)
     p.dx = p.L / p.N;
     p.dt = p.CFL * p.dx;
 
-    grid_t *g = grid_alloc(p.N, p.L, p.rk_method);
+    mesh_t *m = mesh_create_ex(1, p.N, p.L, p.rk_method, NUM_FIELDS);
+    grid_t *g = m->blocks[0]->grid;
     p.N  = g->N;
     p.dx = g->dx;
     p.dt = p.CFL * p.dx;
@@ -388,8 +400,10 @@ static void test_energy_conservation(void)
     double energy_max = energy0;
     double energy_min = energy0;
 
+    p.time = 0.0;
     for (int step = 1; step <= p.num_steps; step++) {
-        rk4_step(g, &p, ccz4_maxwell_rhs_point, apply_sommerfeld, p.dt);
+        rk4_step_mesh(m, &p, ccz4_maxwell_rhs_point, p.dt);
+        p.time += p.dt;
         double E = em_energy(g);
         if (E > energy_max) energy_max = E;
         if (E < energy_min) energy_min = E;
@@ -407,7 +421,7 @@ static void test_energy_conservation(void)
           energy_max < 100.0 * energy0);
     CHECK("Energy non-negative", energy_min >= 0.0);
 
-    grid_free(g);
+    mesh_free(m);
 }
 
 /* Verify that NUM_FIELDS is 31 with the new EM fields */

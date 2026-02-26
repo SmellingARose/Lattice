@@ -22,7 +22,7 @@
 #include "../src/core/fields.h"
 #include "../src/initial_data/puncture.h"
 #include "../src/evolution/ccz4_rhs.h"
-#include "../src/boundary/sommerfeld.h"
+#include "../src/amr/mesh.h"
 #include "../src/numerics/rk4.h"
 #include "../src/diagnostics/constraints.h"
 #include "../src/backend/backend.h"
@@ -91,7 +91,8 @@ int main(void)
         p.dt    = p.CFL * p.dx;
         p.num_steps = (int)(T_final / p.dt + 0.5);
 
-        grid_t *g = grid_alloc(p.N, p.L, p.rk_method);
+        mesh_t *m = mesh_create_ex(1, p.N, p.L, p.rk_method, NUM_CCZ4_FIELDS);
+        grid_t *g = m->blocks[0]->grid;
 
         /* Recompute after possible N padding */
         p.N  = g->N;
@@ -109,14 +110,17 @@ int main(void)
         set_brill_lindquist(g, 1, &mass, center);
 
         /* Evolve to T_final */
-        for (int step = 1; step <= p.num_steps; step++)
-            rk4_step(g, &p, ccz4_rhs_point, apply_sommerfeld, p.dt);
+        p.time = 0.0;
+        for (int step = 1; step <= p.num_steps; step++) {
+            rk4_step_mesh(m, &p, ccz4_rhs_point, p.dt);
+            p.time += p.dt;
+        }
 
         ham_l2[res] = constraint_l2_annular(g, r_min, r_max);
         printf("Ham_L2 = %.6e\n", ham_l2[res]);
         fflush(stdout);
 
-        grid_free(g);
+        mesh_free(m);
     }
 
     /* Convergence analysis */

@@ -55,12 +55,14 @@ static void set_bl_point(grid_t *g, int idx, double x, double y, double z,
     g->fields[FIELD_B1][idx]     = 0.0;
     g->fields[FIELD_B2][idx]     = 0.0;
     g->fields[FIELD_B3][idx]     = 0.0;
-    g->fields[FIELD_E1][idx]     = 0.0;
-    g->fields[FIELD_E2][idx]     = 0.0;
-    g->fields[FIELD_E3][idx]     = 0.0;
-    g->fields[FIELD_BM1][idx]    = 0.0;
-    g->fields[FIELD_BM2][idx]    = 0.0;
-    g->fields[FIELD_BM3][idx]    = 0.0;
+    if (g->n_fields >= NUM_FIELDS) {
+        g->fields[FIELD_E1][idx]     = 0.0;
+        g->fields[FIELD_E2][idx]     = 0.0;
+        g->fields[FIELD_E3][idx]     = 0.0;
+        g->fields[FIELD_BM1][idx]    = 0.0;
+        g->fields[FIELD_BM2][idx]    = 0.0;
+        g->fields[FIELD_BM3][idx]    = 0.0;
+    }
 }
 
 void set_flat_spacetime(grid_t *g)
@@ -95,12 +97,14 @@ void set_flat_spacetime(grid_t *g)
                 g->fields[FIELD_B1][idx]     = 0.0;
                 g->fields[FIELD_B2][idx]     = 0.0;
                 g->fields[FIELD_B3][idx]     = 0.0;
-                g->fields[FIELD_E1][idx]     = 0.0;
-                g->fields[FIELD_E2][idx]     = 0.0;
-                g->fields[FIELD_E3][idx]     = 0.0;
-                g->fields[FIELD_BM1][idx]    = 0.0;
-                g->fields[FIELD_BM2][idx]    = 0.0;
-                g->fields[FIELD_BM3][idx]    = 0.0;
+                if (g->n_fields >= NUM_FIELDS) {
+                    g->fields[FIELD_E1][idx]     = 0.0;
+                    g->fields[FIELD_E2][idx]     = 0.0;
+                    g->fields[FIELD_E3][idx]     = 0.0;
+                    g->fields[FIELD_BM1][idx]    = 0.0;
+                    g->fields[FIELD_BM2][idx]    = 0.0;
+                    g->fields[FIELD_BM3][idx]    = 0.0;
+                }
             }
         }
     }

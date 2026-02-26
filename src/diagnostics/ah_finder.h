@@ -76,39 +76,9 @@ void ah_free(ah_workspace_t *ws);
 double compute_expansion(const grid_t *g, double x, double y, double z,
                           const double s[3]);
 
-/*
- * Run the AH finder: evolve the trial surface h(theta, phi) via damped
- * wave flow until max|Theta| < tol or max_iter reached.
- *
- * Returns 1 if converged, 0 otherwise.
- * After convergence, call ah_compute_diagnostics() for area/mass/spin.
- */
-int ah_find(ah_workspace_t *ws, const grid_t *g,
-            double tol, int max_iter, int verbose);
-
-/*
- * Compute horizon diagnostics from a converged surface.
- *
- * Area:  A = integral sqrt(det(g_2d)) dtheta dphi  (trapezoidal rule)
- * Mass:  M_irr = sqrt(A / 16 pi)
- * Spin:  J = (1/8pi) integral epsilon_{cab} x^a s^b K_{cd} x^d dA
- * M_chr: sqrt(M_irr^2 + J^2 / (4 M_irr^2))
- *
- * Ref: Dreyer et al., PRD 67 (2003) 024018 (isolated horizon spin)
- */
-ah_result_t ah_compute_diagnostics(const ah_workspace_t *ws, const grid_t *g);
-
-/*
- * Evaluate expansion Theta at all angular points of the current surface.
- * Fills ws->theta_arr with expansion values. Useful for testing expansion sign.
- */
-void ah_eval_expansion(ah_workspace_t *ws, const grid_t *g);
-
 /* ========================================================================
- * AMR mesh variants — same algorithms, block-aware interpolation.
- * Each mirrors its single-grid counterpart but takes const mesh_t *m
- * instead of const grid_t *g. Uses mesh_find_block_at() to locate
- * the finest-level block containing each surface point.
+ * AMR mesh variants — block-aware interpolation.
+ * Uses mesh_find_block_at() + block-local coordinate transform.
  * ======================================================================== */
 
 struct mesh_s;  /* forward declaration */

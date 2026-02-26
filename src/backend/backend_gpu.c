@@ -1,9 +1,6 @@
 /*
  * Lattice — 3D Numerical Relativity
- * GPU backend: OpenMP target offloading for both per-grid and packed kernels.
- *
- * Per-grid API: same triple loop as CPU, but with target teams distribute.
- * Calls ccz4_rhs_point directly — GPU can't do function pointers.
+ * GPU backend: OpenMP target offloading for packed kernels.
  *
  * Packed API: batched kernels across all blocks in one launch.
  * Data mapped to device by backend_map_pack, kernels execute on device,
@@ -28,30 +25,6 @@
 #include "../amr/prolongation.h"
 #include <string.h>
 #include <math.h>
-
-/* ========================================================================
- * Legacy per-grid API
- * ======================================================================== */
-
-void backend_compute_rhs(double ** restrict rhs,
-                         const double *const * restrict src,
-                         const grid_t *g, const sim_params_t *p,
-                         rhs_point_func_t func)
-{
-    (void)func; /* GPU calls ccz4_rhs_point directly */
-
-    int lo = g->ghost;
-    int hi = g->ghost + g->N;
-
-    #pragma omp target teams distribute parallel for collapse(3)
-    for (int k = lo; k < hi; k++) {
-        for (int j = lo; j < hi; j++) {
-            for (int i = lo; i < hi; i++) {
-                ccz4_rhs_point(rhs, src, g, p, i, j, k);
-            }
-        }
-    }
-}
 
 void backend_init(void) { /* OpenMP runtime handles GPU init */ }
 void backend_cleanup(void) { /* OpenMP runtime handles GPU cleanup */ }
@@ -81,29 +54,48 @@ void backend_map_pack(meshblock_pack_t *pack, const sim_params_t *p)
     size_t total = (size_t)pack->n_fields * pack->n_blocks * pack->npts;
     int nb = pack->n_blocks;
 
+    /* Extract pointers before map clauses to avoid struct-member mapping
+     * issues (GCC 14+ requires parent struct mapped for pack->member syntax).
+     * Local vars hold the same host pointer values — OpenMP runtime maps
+     * by address, so kernels using these same pointer values find them. */
+    double *d_data    = pack->data;
+    double *d_rhs     = pack->rhs;
+    double *d_scratch = pack->scratch;
+    double *d_accum   = pack->accum;
+
     /* Core field buffers */
-    #pragma omp target enter data map(to: pack->data[0:total])
-    #pragma omp target enter data map(to: pack->rhs[0:total])
-    #pragma omp target enter data map(to: pack->scratch[0:total])
-    if (pack->accum) {
-        #pragma omp target enter data map(to: pack->accum[0:total])
+    #pragma omp target enter data map(to: d_data[0:total])
+    #pragma omp target enter data map(to: d_rhs[0:total])
+    #pragma omp target enter data map(to: d_scratch[0:total])
+    if (d_accum) {
+        #pragma omp target enter data map(to: d_accum[0:total])
     }
 
     /* Per-block metadata (read-only on device) */
-    #pragma omp target enter data map(to: pack->origins[0:nb*3])
-    #pragma omp target enter data map(to: pack->dx_per_block[0:nb])
-    #pragma omp target enter data map(to: pack->on_boundary[0:nb*6])
-    #pragma omp target enter data map(to: pack->levels[0:nb])
-    #pragma omp target enter data map(to: pack->neighbor_table[0:nb*NUM_NEIGHBORS])
-    #pragma omp target enter data map(to: pack->refined_map[0:nb])
-    #pragma omp target enter data map(to: pack->nblevel_table[0:nb*27])
+    double *d_origins    = pack->origins;
+    double *d_dx         = pack->dx_per_block;
+    int    *d_boundary   = pack->on_boundary;
+    int    *d_levels     = pack->levels;
+    int    *d_neighbors  = pack->neighbor_table;
+    int    *d_refined    = pack->refined_map;
+    int    *d_nblevel    = pack->nblevel_table;
+
+    #pragma omp target enter data map(to: d_origins[0:nb*3])
+    #pragma omp target enter data map(to: d_dx[0:nb])
+    #pragma omp target enter data map(to: d_boundary[0:nb*6])
+    #pragma omp target enter data map(to: d_levels[0:nb])
+    #pragma omp target enter data map(to: d_neighbors[0:nb*NUM_NEIGHBORS])
+    #pragma omp target enter data map(to: d_refined[0:nb])
+    #pragma omp target enter data map(to: d_nblevel[0:nb*27])
 
     /* Coarse_buf data (if present) */
     if (pack->coarse_data && pack->n_refined > 0) {
         size_t coarse_total = (size_t)pack->n_refined * pack->n_fields
                             * pack->coarse_npts;
-        #pragma omp target enter data map(to: pack->coarse_data[0:coarse_total])
-        #pragma omp target enter data map(to: pack->coarse_neighbor_table[0:pack->n_refined*NUM_NEIGHBORS])
+        double *d_coarse = pack->coarse_data;
+        int *d_cnbr = pack->coarse_neighbor_table;
+        #pragma omp target enter data map(to: d_coarse[0:coarse_total])
+        #pragma omp target enter data map(to: d_cnbr[0:pack->n_refined*NUM_NEIGHBORS])
     }
 
     /* Simulation parameters (read-only) */
@@ -117,31 +109,47 @@ void backend_map_pack(meshblock_pack_t *pack, const sim_params_t *p)
 void backend_unmap_pack(meshblock_pack_t *pack)
 {
     size_t total = (size_t)pack->n_fields * pack->n_blocks * pack->npts;
+    int nb = pack->n_blocks;
+
+    /* Extract pointers (must match the host addresses used in map_pack) */
+    double *d_data    = pack->data;
+    double *d_rhs     = pack->rhs;
+    double *d_scratch = pack->scratch;
+    double *d_accum   = pack->accum;
 
     /* Sync field buffers back to host */
-    #pragma omp target exit data map(from: pack->data[0:total])
-    #pragma omp target exit data map(from: pack->rhs[0:total])
-    #pragma omp target exit data map(from: pack->scratch[0:total])
-    if (pack->accum) {
-        #pragma omp target exit data map(from: pack->accum[0:total])
+    #pragma omp target exit data map(from: d_data[0:total])
+    #pragma omp target exit data map(from: d_rhs[0:total])
+    #pragma omp target exit data map(from: d_scratch[0:total])
+    if (d_accum) {
+        #pragma omp target exit data map(from: d_accum[0:total])
     }
 
     /* Release metadata (read-only, no sync needed) */
-    int nb = pack->n_blocks;
-    #pragma omp target exit data map(release: pack->origins[0:nb*3])
-    #pragma omp target exit data map(release: pack->dx_per_block[0:nb])
-    #pragma omp target exit data map(release: pack->on_boundary[0:nb*6])
-    #pragma omp target exit data map(release: pack->levels[0:nb])
-    #pragma omp target exit data map(release: pack->neighbor_table[0:nb*NUM_NEIGHBORS])
-    #pragma omp target exit data map(release: pack->refined_map[0:nb])
-    #pragma omp target exit data map(release: pack->nblevel_table[0:nb*27])
+    double *d_origins    = pack->origins;
+    double *d_dx         = pack->dx_per_block;
+    int    *d_boundary   = pack->on_boundary;
+    int    *d_levels     = pack->levels;
+    int    *d_neighbors  = pack->neighbor_table;
+    int    *d_refined    = pack->refined_map;
+    int    *d_nblevel    = pack->nblevel_table;
+
+    #pragma omp target exit data map(release: d_origins[0:nb*3])
+    #pragma omp target exit data map(release: d_dx[0:nb])
+    #pragma omp target exit data map(release: d_boundary[0:nb*6])
+    #pragma omp target exit data map(release: d_levels[0:nb])
+    #pragma omp target exit data map(release: d_neighbors[0:nb*NUM_NEIGHBORS])
+    #pragma omp target exit data map(release: d_refined[0:nb])
+    #pragma omp target exit data map(release: d_nblevel[0:nb*27])
 
     /* Coarse_buf data */
     if (pack->coarse_data && pack->n_refined > 0) {
         size_t coarse_total = (size_t)pack->n_refined * pack->n_fields
                             * pack->coarse_npts;
-        #pragma omp target exit data map(from: pack->coarse_data[0:coarse_total])
-        #pragma omp target exit data map(release: pack->coarse_neighbor_table[0:pack->n_refined*NUM_NEIGHBORS])
+        double *d_coarse = pack->coarse_data;
+        int *d_cnbr = pack->coarse_neighbor_table;
+        #pragma omp target exit data map(from: d_coarse[0:coarse_total])
+        #pragma omp target exit data map(release: d_cnbr[0:pack->n_refined*NUM_NEIGHBORS])
     }
 }
 
@@ -253,6 +261,7 @@ void backend_compute_rhs_packed(meshblock_pack_t *pack, const sim_params_t *p)
  */
 void backend_sommerfeld_packed(meshblock_pack_t *pack, const sim_params_t *p)
 {
+    (void)p;
     int lo = pack->ghost;
     int hi = pack->ghost + pack->N;
     int Nt = pack->Ntotal;
@@ -881,11 +890,14 @@ void backend_ghost_exchange_packed(meshblock_pack_t *pack)
 {
     size_t total = (size_t)pack->n_fields * pack->n_blocks * pack->npts;
 
-    /* Sync field data from device to host */
-    #pragma omp target update from(pack->data[0:total])
+    /* Sync field data from device to host.
+     * Extract pointer to avoid GCC 14 struct-member mapping issue. */
+    double *d_data = pack->data; (void)d_data;
+    #pragma omp target update from(d_data[0:total])
     if (pack->coarse_data && pack->n_refined > 0) {
         size_t ct = (size_t)pack->n_refined * pack->n_fields * pack->coarse_npts;
-        #pragma omp target update from(pack->coarse_data[0:ct])
+        double *d_coarse = pack->coarse_data; (void)d_coarse;
+        #pragma omp target update from(d_coarse[0:ct])
     }
 
     /* Phase 0+1: Same-level exchange */
@@ -903,10 +915,11 @@ void backend_ghost_exchange_packed(meshblock_pack_t *pack)
     }
 
     /* Sync updated data back to device */
-    #pragma omp target update to(pack->data[0:total])
+    #pragma omp target update to(d_data[0:total])
     if (pack->coarse_data && pack->n_refined > 0) {
         size_t ct = (size_t)pack->n_refined * pack->n_fields * pack->coarse_npts;
-        #pragma omp target update to(pack->coarse_data[0:ct])
+        double *d_coarse = pack->coarse_data; (void)d_coarse;
+        #pragma omp target update to(d_coarse[0:ct])
     }
 }
 

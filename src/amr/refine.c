@@ -400,7 +400,8 @@ int mesh_regrid(mesh_t *m, const amr_params_t *ap)
     int initial_blocks = mesh_num_leaves(m);
 
     /* Allocate flags array (generous upper bound) */
-    int max_flags = m->num_blocks * 2;
+    if (m->num_blocks <= 0) return 0;
+    size_t max_flags = (size_t)m->num_blocks * 2;
     refine_flag_t *flags = calloc(max_flags, sizeof(refine_flag_t));
     if (!flags) {
         fprintf(stderr, "mesh_regrid: calloc failed\n");
@@ -408,7 +409,7 @@ int mesh_regrid(mesh_t *m, const amr_params_t *ap)
     }
 
     /* Step 1: Evaluate criterion on all leaf blocks */
-    int n_flags = criterion_check_mesh(m, ap, flags, max_flags);
+    int n_flags = criterion_check_mesh(m, ap, flags, (int)max_flags);
 
     /* Step 2: Enforce 2:1 constraint */
     mesh_enforce_2to1(m, flags, &n_flags);

@@ -15,7 +15,6 @@
 #include "initial_data/bowen_york.h"
 #include "evolution/ccz4_rhs.h"
 #include "evolution/maxwell_rhs.h"
-#include "boundary/sommerfeld.h"
 #include "numerics/rk4.h"
 #include "diagnostics/constraints.h"
 #include "diagnostics/ah_finder.h"
@@ -26,8 +25,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Forward declarations for output */
-extern void output_1d_slice(const grid_t *g, int step, double time);
+/* Forward declaration for output */
 extern void output_mesh_1d_slice(const mesh_t *m, int step, double time);
 
 static void print_usage(void)
@@ -365,8 +363,14 @@ int main(int argc, char **argv)
         ah_free(ah_ws);
         mesh_free(m);
     } else {
-        /* === Single-grid path (unchanged) === */
-        p.dx = p.L / p.N;
+        /* === Single-grid path (via 1-block mesh) === */
+        int n_fields = p.em_enabled ? NUM_FIELDS : NUM_CCZ4_FIELDS;
+        mesh_t *m = mesh_create_ex(1, p.N, p.L, p.rk_method, n_fields);
+        grid_t *g = m->blocks[0]->grid;
+
+        /* mesh_create_ex may pad N — refresh derived quantities */
+        p.N  = g->N;
+        p.dx = g->dx;
         p.dt = p.CFL * p.dx;
 
         printf("  N = %d, L = %.1f, dx = %.6f, dt = %.6f\n",
@@ -374,28 +378,20 @@ int main(int argc, char **argv)
         printf("  steps = %d, sigma = %.2f, CFL = %.2f, rk = %s\n",
                p.num_steps, p.sigma, p.CFL,
                p.rk_method == RK_CK45 ? "ck45" : "classic");
-
-        grid_t *g = grid_alloc(p.N, p.L, p.rk_method);
-
-        /* Note: grid_alloc may pad N to a multiple of 16 */
-        p.N  = g->N;
-        p.dx = g->dx;
-        p.dt = p.CFL * p.dx;
-
         printf("  Ntotal = %d (N=%d + 2*ghost=%d)\n",
                g->Ntotal, g->N, g->ghost);
 
         /* Set initial data */
         if (n_bh > 0) {
             printf("  Initial data: Bowen-York, %d puncture(s)\n", n_bh);
-            set_bowen_york(g, n_bh, bhs);
+            set_bowen_york_mesh(m, n_bh, bhs, 0);
         } else {
             printf("  Initial data: flat spacetime\n");
             set_flat_spacetime(g);
         }
 
         /* Initial constraint */
-        double ham0 = compute_constraint_l2(g);
+        double ham0 = mesh_constraint_l2(m);
         printf("  Initial Ham L2 = %.6e\n", ham0);
 
         /* Select RHS function: combined CCZ4+Maxwell if EM enabled */
@@ -413,24 +409,26 @@ int main(int argc, char **argv)
         }
 
         /* Time evolution */
+        p.time = 0.0;
         for (int step = 1; step <= p.num_steps; step++) {
-            rk4_step(g, &p, rhs_func, apply_sommerfeld, p.dt);
+            rk4_step_mesh(m, &p, rhs_func, p.dt);
+            p.time += p.dt;
 
             if (step % 100 == 0 || step == p.num_steps) {
-                double ham = compute_constraint_l2(g);
+                double ham = mesh_constraint_l2(m);
                 printf("  step %5d  t = %.4f  Ham L2 = %.6e\n",
-                       step, step * p.dt, ham);
+                       step, p.time, ham);
             }
 
             if (p.output_every > 0 && step % p.output_every == 0) {
-                output_1d_slice(g, step, step * p.dt);
+                output_mesh_1d_slice(m, step, p.time);
             }
 
             /* AH finder */
             if (ah_ws && ah_every > 0 && step % ah_every == 0) {
-                int conv = ah_find(ah_ws, g, ah_tol, ah_max_iter, 0);
+                int conv = ah_find_amr(ah_ws, m, ah_tol, ah_max_iter, 0);
                 if (conv) {
-                    ah_result_t ahr = ah_compute_diagnostics(ah_ws, g);
+                    ah_result_t ahr = ah_compute_diagnostics_amr(ah_ws, m);
                     printf("  AH step %5d: A=%.4f M_irr=%.4f |J|=%.4e r=%.4f\n",
                            step, ahr.area, ahr.mass_irr, ahr.spin_mag,
                            ahr.mean_radius);
@@ -439,7 +437,7 @@ int main(int argc, char **argv)
         }
 
         ah_free(ah_ws);
-        grid_free(g);
+        mesh_free(m);
     }
 
     backend_cleanup();

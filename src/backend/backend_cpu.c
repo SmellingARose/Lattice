@@ -1,8 +1,6 @@
 /*
  * Lattice — 3D Numerical Relativity
- * CPU backend: OpenMP parallel loops for both per-grid and packed kernels.
- *
- * Per-grid API: z (outer, parallelized) -> y -> x (inner, unit stride)
+ * CPU backend: OpenMP parallel loops for packed kernels.
  *
  * Packed API: all leaf blocks batched into meshblock_pack_t.
  * Outer loop over blocks, OpenMP parallel for over (k,j) per block.
@@ -22,28 +20,6 @@
 #include "../amr/prolongation.h"
 #include <string.h>
 #include <math.h>
-
-/* ========================================================================
- * Legacy per-grid API
- * ======================================================================== */
-
-void backend_compute_rhs(double ** restrict rhs,
-                         const double *const * restrict src,
-                         const grid_t *g, const sim_params_t *p,
-                         rhs_point_func_t func)
-{
-    int lo = g->ghost;
-    int hi = g->ghost + g->N;
-
-    #pragma omp parallel for collapse(2) schedule(static)
-    for (int k = lo; k < hi; k++) {
-        for (int j = lo; j < hi; j++) {
-            for (int i = lo; i < hi; i++) {
-                func(rhs, src, g, p, i, j, k);
-            }
-        }
-    }
-}
 
 void backend_init(void) { /* no-op for CPU */ }
 void backend_cleanup(void) { /* no-op for CPU */ }

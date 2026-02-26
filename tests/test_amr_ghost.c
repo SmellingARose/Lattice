@@ -8,7 +8,6 @@
  *   2. Face, edge, and corner ghost regions all filled correctly.
  *   3. Multi-block flat spacetime evolution matches single-grid to roundoff.
  *   4. Multi-block single BH matches single-grid constraints.
- *   5. Sommerfeld block-aware: only applies to domain boundary ghost points.
  *
  * Pass criteria:
  *   - Ghost exchange error < 1e-14 (roundoff)
@@ -24,7 +23,6 @@
 #include "../src/core/fields.h"
 #include "../src/initial_data/puncture.h"
 #include "../src/evolution/ccz4_rhs.h"
-#include "../src/boundary/sommerfeld.h"
 #include "../src/numerics/rk4.h"
 #include "../src/diagnostics/constraints.h"
 #include "../src/backend/backend.h"
@@ -175,18 +173,21 @@ static void test_multiblock_flat(void)
     int N_eff = 32;
     double L = 10.0;
 
-    /* (a) Single-grid reference run */
-    grid_t *gref = grid_alloc(N_eff, L, RK_CLASSIC);
+    /* (a) Single-grid reference run (1-block mesh) */
+    mesh_t *mref = mesh_create_ex(1, N_eff, L, RK_CLASSIC, NUM_FIELDS);
+    grid_t *gref = mref->blocks[0]->grid;
     p.N  = gref->N;
     p.dx = gref->dx;
     p.dt = p.CFL * p.dx;
     p.num_steps = 50;
 
     set_flat_spacetime(gref);
+    p.time = 0.0;
     for (int step = 0; step < p.num_steps; step++) {
-        rk4_step(gref, &p, ccz4_rhs_point, apply_sommerfeld, p.dt);
+        rk4_step_mesh(mref, &p, ccz4_rhs_point, p.dt);
+        p.time += p.dt;
     }
-    double ham_ref = compute_constraint_l2(gref);
+    double ham_ref = mesh_constraint_l2(mref);
     printf("  Single-grid: Ham L2 = %.6e (N=%d, %d steps)\n",
            ham_ref, gref->N, p.num_steps);
 
@@ -200,8 +201,10 @@ static void test_multiblock_flat(void)
 
     /* Evolve with mesh stepper.
      * Use same dt as reference (based on same dx). */
+    p.time = 0.0;
     for (int step = 0; step < p.num_steps; step++) {
         rk4_step_mesh(m, &p, ccz4_rhs_point, p.dt);
+        p.time += p.dt;
     }
 
     /* Compute Ham L2 on each block, combine */
@@ -237,7 +240,7 @@ static void test_multiblock_flat(void)
     check(ratio < 10.0 && ratio > 0.1,
           "Multi-block Ham L2 within 10x of single-grid");
 
-    grid_free(gref);
+    mesh_free(mref);
     mesh_free(m);
 }
 
@@ -257,22 +260,29 @@ static void test_multiblock_pointwise(void)
     double L = 10.0;
     int nsteps = 10;
 
-    /* Single grid N=32 */
-    grid_t *gref = grid_alloc(32, L, RK_CLASSIC);
+    /* Single grid N=32 (1-block mesh) */
+    mesh_t *mref = mesh_create_ex(1, 32, L, RK_CLASSIC, NUM_FIELDS);
+    grid_t *gref = mref->blocks[0]->grid;
     p.N  = gref->N;
     p.dx = gref->dx;
     p.dt = p.CFL * p.dx;
 
     set_flat_spacetime(gref);
-    for (int s = 0; s < nsteps; s++)
-        rk4_step(gref, &p, ccz4_rhs_point, apply_sommerfeld, p.dt);
+    p.time = 0.0;
+    for (int s = 0; s < nsteps; s++) {
+        rk4_step_mesh(mref, &p, ccz4_rhs_point, p.dt);
+        p.time += p.dt;
+    }
 
     /* Multi-block 2x2x2 x 16^3 */
     mesh_t *m = mesh_create(2, 16, L, RK_CLASSIC);
     for (int bid = 0; bid < m->num_blocks; bid++)
         set_flat_spacetime(m->blocks[bid]->grid);
-    for (int s = 0; s < nsteps; s++)
+    p.time = 0.0;
+    for (int s = 0; s < nsteps; s++) {
         rk4_step_mesh(m, &p, ccz4_rhs_point, p.dt);
+        p.time += p.dt;
+    }
 
     /* Compare interior points of each block to corresponding single-grid points.
      * Block (ix,iy,iz) interior point (i,j,k) corresponds to single-grid
@@ -319,102 +329,12 @@ static void test_multiblock_pointwise(void)
     check(max_err < 1.0e-10,
           "Multi-block matches single-grid to < 1e-10");
 
-    grid_free(gref);
+    mesh_free(mref);
     mesh_free(m);
 }
 
 /* ======================================================================
- * Test 4: Sommerfeld block-aware correctness
- *
- * Set a non-trivial field on a 2x2x2 mesh. Verify that
- * apply_sommerfeld_block only modifies ghost points adjacent to
- * domain boundaries, leaving inter-block ghost points untouched.
- * ====================================================================== */
-static void test_sommerfeld_block(void)
-{
-    printf("\n--- Test: Sommerfeld block-aware boundary application ---\n");
-
-    mesh_t *m = mesh_create(2, 16, 10.0, RK_CLASSIC);
-
-    /* Set flat spacetime and fill ghost zones */
-    for (int bid = 0; bid < m->num_blocks; bid++)
-        set_flat_spacetime(m->blocks[bid]->grid);
-    ghost_exchange(m);
-
-    /* Mark all RHS values with a sentinel value */
-    double sentinel = -999.0;
-    for (int bid = 0; bid < m->num_blocks; bid++) {
-        grid_t *g = m->blocks[bid]->grid;
-        for (int f = 0; f < NUM_FIELDS; f++) {
-            for (size_t i = 0; i < g->npoints; i++)
-                g->rhs[f][i] = sentinel;
-        }
-    }
-
-    /* Apply block-aware Sommerfeld to each block */
-    for (int bid = 0; bid < m->num_blocks; bid++) {
-        block_t *b = m->blocks[bid];
-        apply_sommerfeld_block(b->grid->rhs,
-                               (const double *const *)b->grid->fields, b);
-    }
-
-    /* Check: interior points should still have sentinel (not modified) */
-    /* Check: domain boundary ghost points should be modified (not sentinel) */
-    /* Check: inter-block ghost points should still have sentinel */
-    int interior_ok = 1;
-    int boundary_modified = 0;
-    int interblock_ok = 1;
-
-    for (int bid = 0; bid < m->num_blocks; bid++) {
-        block_t *b = m->blocks[bid];
-        grid_t *g = b->grid;
-        int lo = g->ghost;
-        int hi = lo + g->N;
-        int Nt = g->Ntotal;
-
-        for (int k = 0; k < Nt; k++) {
-            for (int j = 0; j < Nt; j++) {
-                for (int i = 0; i < Nt; i++) {
-                    int idx = IDX(g, i, j, k);
-                    double val = g->rhs[0][idx];  /* check field 0 */
-                    int is_interior = (i >= lo && i < hi &&
-                                       j >= lo && j < hi &&
-                                       k >= lo && k < hi);
-
-                    if (is_interior) {
-                        if (val != sentinel) interior_ok = 0;
-                        continue;
-                    }
-
-                    /* Ghost point: check if near domain boundary */
-                    int near_bdy = 0;
-                    if (i < lo  && b->on_boundary[0]) near_bdy = 1;
-                    if (i >= hi && b->on_boundary[1]) near_bdy = 1;
-                    if (j < lo  && b->on_boundary[2]) near_bdy = 1;
-                    if (j >= hi && b->on_boundary[3]) near_bdy = 1;
-                    if (k < lo  && b->on_boundary[4]) near_bdy = 1;
-                    if (k >= hi && b->on_boundary[5]) near_bdy = 1;
-
-                    if (near_bdy) {
-                        if (val != sentinel) boundary_modified++;
-                    } else {
-                        /* Inter-block ghost: should be untouched */
-                        if (val != sentinel) interblock_ok = 0;
-                    }
-                }
-            }
-        }
-    }
-
-    check(interior_ok, "Interior points not modified by Sommerfeld");
-    check(boundary_modified > 0, "Domain boundary ghost points modified");
-    check(interblock_ok, "Inter-block ghost points not modified");
-
-    mesh_free(m);
-}
-
-/* ======================================================================
- * Test 5: Single BH through multi-block mesh
+ * Test 4: Single BH through multi-block mesh
  *
  * Evolve a single Schwarzschild puncture through the multi-block mesh
  * for a few steps. Verify constraints are bounded (not diverging).
@@ -471,8 +391,10 @@ static void test_multiblock_single_bh(void)
     p.dt = p.CFL * p.dx;
 
     /* Evolve a few steps */
+    p.time = 0.0;
     for (int step = 0; step < nsteps; step++) {
         rk4_step_mesh(m, &p, ccz4_rhs_point, p.dt);
+        p.time += p.dt;
     }
 
     /* Check constraints on interior of each block */
@@ -518,7 +440,6 @@ int main(void)
     test_ghost_polynomial();
     test_multiblock_flat();
     test_multiblock_pointwise();
-    test_sommerfeld_block();
     test_multiblock_single_bh();
 
     backend_cleanup();

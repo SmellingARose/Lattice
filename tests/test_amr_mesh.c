@@ -21,7 +21,6 @@
 #include "../src/core/fields.h"
 #include "../src/initial_data/puncture.h"
 #include "../src/evolution/ccz4_rhs.h"
-#include "../src/boundary/sommerfeld.h"
 #include "../src/numerics/rk4.h"
 #include "../src/diagnostics/constraints.h"
 #include "../src/backend/backend.h"
@@ -218,19 +217,21 @@ static void test_single_block_evolution(void)
     /* Set flat spacetime initial data */
     set_flat_spacetime(g);
 
-    double ham0 = compute_constraint_l2(g);
+    double ham0 = mesh_constraint_l2(m);
     printf("  Initial Ham L2 = %.6e\n", ham0);
 
     /* Evolve for 100 steps (lightweight — just verify mesh works) */
+    p.time = 0.0;
     for (int step = 1; step <= p.num_steps; step++) {
-        rk4_step(g, &p, ccz4_rhs_point, apply_sommerfeld, p.dt);
+        rk4_step_mesh(m, &p, ccz4_rhs_point, p.dt);
+        p.time += p.dt;
         if (step % 10 == 0) {
-            double ham = compute_constraint_l2(g);
+            double ham = mesh_constraint_l2(m);
             printf("  step %3d/%d  Ham L2 = %.6e\n", step, p.num_steps, ham);
         }
     }
 
-    double ham_final = compute_constraint_l2(g);
+    double ham_final = mesh_constraint_l2(m);
     printf("  Final Ham L2 = %.6e\n", ham_final);
     check(ham_final < 1.0e-10, "1-block mesh flat spacetime Ham L2 < 1e-10");
 

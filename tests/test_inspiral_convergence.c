@@ -36,7 +36,6 @@
 #include "../src/evolution/ccz4_rhs.h"
 #include "../src/numerics/rk4.h"
 #include "../src/diagnostics/constraints.h"
-#include "../src/boundary/sommerfeld.h"
 #include "../src/backend/backend.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -75,45 +74,6 @@ static void setup_punctures(puncture_data_t bhs[2])
     bhs[1].momentum[1] = -P_Y;            /* P_y = -0.0939 */
 }
 
-/* ── Copy solved initial data from uniform grid to AMR mesh ───────── */
-static void copy_id_to_mesh(mesh_t *m, grid_t *tmp)
-{
-    int ghost = GHOST_WIDTH;
-    for (int bid = 0; bid < m->num_blocks; bid++) {
-        block_t *b = m->blocks[bid];
-        if (!b || !b->is_leaf) continue;
-
-        int off[3];
-        for (int d = 0; d < 3; d++)
-            off[d] = (int)((b->origin[d] + m->L * 0.5) / tmp->dx + 0.5);
-
-        int Nt_b = b->grid->Ntotal;
-        int Nt_g = tmp->Ntotal;
-
-        for (int f = 0; f < NUM_FIELDS; f++) {
-            double *dst = b->grid->fields[f];
-            const double *src = tmp->fields[f];
-            for (int k = 0; k < Nt_b; k++) {
-                int kg = k - ghost + off[2] + ghost;
-                if (kg < 0) kg = 0;
-                if (kg >= Nt_g) kg = Nt_g - 1;
-                for (int j = 0; j < Nt_b; j++) {
-                    int jg = j - ghost + off[1] + ghost;
-                    if (jg < 0) jg = 0;
-                    if (jg >= Nt_g) jg = Nt_g - 1;
-                    for (int i = 0; i < Nt_b; i++) {
-                        int ig = i - ghost + off[0] + ghost;
-                        if (ig < 0) ig = 0;
-                        if (ig >= Nt_g) ig = Nt_g - 1;
-                        dst[k * Nt_b * Nt_b + j * Nt_b + i] =
-                            src[kg * Nt_g * Nt_g + jg * Nt_g + ig];
-                    }
-                }
-            }
-        }
-    }
-}
-
 /* ── Run one resolution ───────────────────────────────────────────── */
 static double *run_resolution(int res_idx, int n_block)
 {
@@ -147,9 +107,7 @@ static double *run_resolution(int res_idx, int n_block)
     printf("  steps=%d, t_final=%.1fM\n", NUM_STEPS, t_final);
     fflush(stdout);
 
-    /* Solve initial data on uniform grid at base resolution.
-     * Use CK45 for the temp grid to save memory during solve
-     * (solver doesn't use RK scratch buffers). */
+    /* Solve initial data directly on the mesh (no temp grid needed) */
     puncture_data_t bhs[2];
     setup_punctures(bhs);
 
@@ -157,15 +115,10 @@ static double *run_resolution(int res_idx, int n_block)
     fflush(stdout);
     time_t t0 = time(NULL);
 
-    grid_t *tmp = grid_alloc(n_eff, L_DOMAIN, RK_CLASSIC);
-    set_bowen_york(tmp, 2, bhs);
+    set_bowen_york_mesh(m, 2, bhs, 0);
 
     printf("  ID solve done (%.0f sec)\n", difftime(time(NULL), t0));
     fflush(stdout);
-
-    /* Copy to AMR blocks, then free temp grid */
-    copy_id_to_mesh(m, tmp);
-    grid_free(tmp);
 
     double ham0 = mesh_constraint_l2(m);
     printf("  Initial Ham L2 = %.6e, leaves = %d\n", ham0, mesh_num_leaves(m));

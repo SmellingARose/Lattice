@@ -14,7 +14,7 @@
 #include "../src/core/fields.h"
 #include "../src/initial_data/puncture.h"
 #include "../src/evolution/ccz4_rhs.h"
-#include "../src/boundary/sommerfeld.h"
+#include "../src/amr/mesh.h"
 #include "../src/numerics/rk4.h"
 #include "../src/diagnostics/constraints.h"
 #include "../src/backend/backend.h"
@@ -98,7 +98,8 @@ int main(void)
         p.dx = p.L / p.N; p.dt = p.CFL * p.dx;
         int steps = (int)(2.0 / p.dt + 0.5);
 
-        grid_t *g = grid_alloc(p.N, p.L, p.rk_method);
+        mesh_t *m = mesh_create_ex(1, p.N, p.L, p.rk_method, NUM_CCZ4_FIELDS);
+        grid_t *g = m->blocks[0]->grid;
         p.N = g->N; p.dx = g->dx; p.dt = p.CFL * p.dx;
         steps = (int)(2.0 / p.dt + 0.5);
 
@@ -108,8 +109,11 @@ int main(void)
 
         printf("  Evolving %d steps (T=2M)...\n", steps);
         fflush(stdout);
-        for (int s = 1; s <= steps; s++)
-            rk4_step(g, &p, ccz4_rhs_point, apply_sommerfeld, p.dt);
+        p.time = 0.0;
+        for (int s = 1; s <= steps; s++) {
+            rk4_step_mesh(m, &p, ccz4_rhs_point, p.dt);
+            p.time += p.dt;
+        }
 
         double ham, mom;
         constraints_annular(g, 5.0, 25.0, &ham, &mom);
@@ -120,7 +124,7 @@ int main(void)
         printf("  %s (threshold 0.1)\n\n", pass ? "PASSED" : "FAILED");
         if (!pass) all_passed = 0;
 
-        grid_free(g);
+        mesh_free(m);
     }
 
     /* ------ Test 3: Momentum convergence ------ */
@@ -137,7 +141,8 @@ int main(void)
             p.dx = p.L / p.N; p.dt = p.CFL * p.dx;
             int steps = (int)(2.0 / p.dt + 0.5);
 
-            grid_t *g = grid_alloc(p.N, p.L, p.rk_method);
+            mesh_t *m = mesh_create_ex(1, p.N, p.L, p.rk_method, NUM_CCZ4_FIELDS);
+            grid_t *g = m->blocks[0]->grid;
             p.N = g->N; p.dx = g->dx; p.dt = p.CFL * p.dx;
             steps = (int)(2.0 / p.dt + 0.5);
             dx_vals[res] = p.dx;
@@ -146,15 +151,18 @@ int main(void)
             double center[1][3] = {{0.0, 0.0, 0.0}};
             set_brill_lindquist(g, 1, &mass, center);
 
-            for (int s = 1; s <= steps; s++)
-                rk4_step(g, &p, ccz4_rhs_point, apply_sommerfeld, p.dt);
+            p.time = 0.0;
+            for (int s = 1; s <= steps; s++) {
+                rk4_step_mesh(m, &p, ccz4_rhs_point, p.dt);
+                p.time += p.dt;
+            }
 
             constraints_annular(g, 5.0, 25.0, &ham_l2[res], &mom_l2[res]);
             printf("  N=%d  Ham=%.4e  Mom=%.4e\n",
                    resolutions[res], ham_l2[res], mom_l2[res]);
             fflush(stdout);
 
-            grid_free(g);
+            mesh_free(m);
         }
 
         double ham_order = log(ham_l2[0] / ham_l2[1]) / log(dx_vals[0] / dx_vals[1]);

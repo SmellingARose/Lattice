@@ -31,7 +31,7 @@
 #include "../src/core/fields.h"
 #include "../src/initial_data/puncture.h"
 #include "../src/evolution/ccz4_rhs.h"
-#include "../src/boundary/sommerfeld.h"
+#include "../src/amr/mesh.h"
 #include "../src/numerics/rk4.h"
 #include "../src/diagnostics/constraints.h"
 #include "../src/backend/backend.h"
@@ -170,11 +170,12 @@ int main(void)
     double T_final = 50.0;
     p.num_steps = (int)(T_final / p.dt + 0.5);
 
-    /* ── grid ───────────────────────────────────────────────────── */
+    /* ── mesh ──────────────────────────────────────────────────── */
     backend_init();
-    grid_t *g = grid_alloc(p.N, p.L, p.rk_method);
+    mesh_t *m = mesh_create_ex(1, p.N, p.L, p.rk_method, NUM_CCZ4_FIELDS);
+    grid_t *g = m->blocks[0]->grid;
 
-    /* grid_alloc may pad N — refresh derived quantities */
+    /* mesh_create_ex may pad N — refresh derived quantities */
     p.N  = g->N;
     p.dx = g->dx;
     p.dt = p.CFL * p.dx;
@@ -213,8 +214,10 @@ int main(void)
     int    crashed   = 0;
 
     /* ── evolution loop ─────────────────────────────────────────── */
+    p.time = 0.0;
     for (int step = 1; step <= p.num_steps; step++) {
-        rk4_step(g, &p, ccz4_rhs_point, apply_sommerfeld, p.dt);
+        rk4_step_mesh(m, &p, ccz4_rhs_point, p.dt);
+        p.time += p.dt;
 
         /* diagnostics every step */
         if (!check_finite(g)) {
@@ -228,8 +231,8 @@ int main(void)
         ml   = min_lapse(g, &mx, &my, &mz);
         ndip = count_z_axis_minima(g, 0.8);
         sep  = (ndip >= 2) ? bh_separation(g) : 0.0;
-        ham  = compute_constraint_l2(g);
-        mom  = compute_momentum_l2(g);
+        ham  = mesh_constraint_l2(m);
+        mom  = mesh_momentum_l2(m);
 
         if (ham > ham_peak) ham_peak = ham;
         if (mom > mom_peak) mom_peak = mom;
@@ -247,7 +250,7 @@ int main(void)
         printf("  Fields finite:  NO\n");
         printf("\n  FAILED\n");
         printf("==========================================================================\n\n");
-        grid_free(g);
+        mesh_free(m);
         backend_cleanup();
         return 1;
     }
@@ -269,7 +272,7 @@ int main(void)
     printf("\n  %s\n", passed ? "PASSED" : "FAILED");
     printf("==========================================================================\n\n");
 
-    grid_free(g);
+    mesh_free(m);
     backend_cleanup();
     return passed ? 0 : 1;
 }

@@ -23,7 +23,7 @@
 #include "../src/core/fields.h"
 #include "../src/initial_data/puncture.h"
 #include "../src/evolution/ccz4_rhs.h"
-#include "../src/boundary/sommerfeld.h"
+#include "../src/amr/mesh.h"
 #include "../src/numerics/rk4.h"
 #include "../src/diagnostics/constraints.h"
 #include "../src/backend/backend.h"
@@ -91,9 +91,10 @@ int main(void)
     fflush(stdout);
     backend_init();
 
-    printf("  Allocating grid (N=%d, L=%.1f)...\n", p.N, p.L);
+    printf("  Allocating mesh (N=%d, L=%.1f)...\n", p.N, p.L);
     fflush(stdout);
-    grid_t *g = grid_alloc(p.N, p.L, p.rk_method);
+    mesh_t *m = mesh_create_ex(1, p.N, p.L, p.rk_method, NUM_CCZ4_FIELDS);
+    grid_t *g = m->blocks[0]->grid;
 
     /* Recompute after possible padding */
     p.N  = g->N;
@@ -125,8 +126,10 @@ int main(void)
     double ham_peak = 0.0;
     int crashed = 0;
 
+    p.time = 0.0;
     for (int step = 1; step <= p.num_steps; step++) {
-        rk4_step(g, &p, ccz4_rhs_point, apply_sommerfeld, p.dt);
+        rk4_step_mesh(m, &p, ccz4_rhs_point, p.dt);
+        p.time += p.dt;
 
         double pct = 100.0 * step / p.num_steps;
 
@@ -139,7 +142,7 @@ int main(void)
                 break;
             }
 
-            double ham = compute_constraint_l2(g);
+            double ham = mesh_constraint_l2(m);
             double ml  = min_lapse(g);
             double t   = step * p.dt;
 
@@ -155,7 +158,7 @@ int main(void)
     }
 
     if (!crashed) {
-        double ham_final = compute_constraint_l2(g);
+        double ham_final = mesh_constraint_l2(m);
         double ml_final  = min_lapse(g);
 
         printf("\n  Final:    Ham L2 = %.6e, min lapse = %.6f\n", ham_final, ml_final);
@@ -176,12 +179,12 @@ int main(void)
         int passed = lapse_ok && finite_ok && constraint_ok;
         printf("\n  %s\n", passed ? "PASSED" : "FAILED");
 
-        grid_free(g);
+        mesh_free(m);
         backend_cleanup();
         return passed ? 0 : 1;
     }
 
-    grid_free(g);
+    mesh_free(m);
     backend_cleanup();
     return 1;
 }

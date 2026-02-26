@@ -23,9 +23,9 @@
 #include "../src/initial_data/bowen_york.h"
 #include "../src/initial_data/relaxation.h"
 #include "../src/evolution/ccz4_rhs.h"
-#include "../src/boundary/sommerfeld.h"
 #include "../src/numerics/rk4.h"
 #include "../src/diagnostics/constraints.h"
+#include "../src/amr/mesh.h"
 #include "../src/backend/backend.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -279,9 +279,10 @@ static void test_zero_momentum(void)
 
     int N = 24;
     double L = 20.0;
-    grid_t *g = grid_alloc(N, L, RK_CLASSIC);
+    mesh_t *m = mesh_create_ex(1, N, L, RK_CLASSIC, NUM_CCZ4_FIELDS);
+    grid_t *g = m->blocks[0]->grid;
 
-    set_bowen_york(g, 1, &bh);
+    set_bowen_york_mesh(m, 1, &bh, 0);
 
     /* Check: chi at center should match BL */
     int mid = g->Ntotal / 2;
@@ -315,13 +316,13 @@ static void test_zero_momentum(void)
     CHECK(max_A < 1e-15, "BL path: A_ij = 0 everywhere");
 
     /* Hamiltonian constraint */
-    double ham = compute_constraint_l2(g);
+    double ham = mesh_constraint_l2(m);
     printf("  Ham L2 = %.6e\n", ham);
     /* Discretization error at this coarse resolution (dx~0.83) is O(dx^4) ~ O(0.5).
      * BL data has 1/r singularity near puncture, so FD error is expected. */
     CHECK(ham < 0.05, "BL path: Hamiltonian constraint bounded");
 
-    grid_free(g);
+    mesh_free(m);
 }
 
 /* ================================================================
@@ -443,7 +444,8 @@ static void test_binary_orbit(void)
 
     int N = 24;
     double L = 20.0;
-    grid_t *g = grid_alloc(N, L, RK_CLASSIC);
+    mesh_t *m = mesh_create_ex(1, N, L, RK_CLASSIC, NUM_CCZ4_FIELDS);
+    grid_t *g = m->blocks[0]->grid;
 
     printf("  Setting up binary BY initial data...\n");
     double residual = relaxation_solve(g, 2, bhs, 1e-10, 30000, 1);
@@ -451,8 +453,8 @@ static void test_binary_orbit(void)
     CHECK(residual < 1e-4, "Binary solver converged");
 
     /* Check constraints before evolution */
-    double ham0 = compute_constraint_l2(g);
-    double mom0 = compute_momentum_l2(g);
+    double ham0 = mesh_constraint_l2(m);
+    double mom0 = mesh_momentum_l2(m);
     printf("  Initial: Ham L2 = %.6e, Mom L2 = %.6e\n", ham0, mom0);
 
     /* Evolve 10 steps */
@@ -463,10 +465,12 @@ static void test_binary_orbit(void)
     p.CFL = 0.25;
     p.dt = p.CFL * p.dx;
     p.sigma = 0.3;
+    p.time = 0.0;
 
     int nan_detected = 0;
     for (int step = 1; step <= 10; step++) {
-        rk4_step(g, &p, ccz4_rhs_point, apply_sommerfeld, p.dt);
+        rk4_step_mesh(m, &p, ccz4_rhs_point, p.dt);
+        p.time += p.dt;
 
         /* Check for NaN in lapse */
         int mid = g->Ntotal / 2;
@@ -481,15 +485,15 @@ static void test_binary_orbit(void)
     CHECK(!nan_detected, "No NaN/Inf during 10 evolution steps");
 
     if (!nan_detected) {
-        double ham10 = compute_constraint_l2(g);
-        double mom10 = compute_momentum_l2(g);
+        double ham10 = mesh_constraint_l2(m);
+        double mom10 = mesh_momentum_l2(m);
         printf("  After 10 steps: Ham L2 = %.6e, Mom L2 = %.6e\n",
                ham10, mom10);
         CHECK(ham10 < 1e2, "Ham constraint bounded after evolution");
         CHECK(mom10 < 1e2, "Mom constraint bounded after evolution");
     }
 
-    grid_free(g);
+    mesh_free(m);
 }
 
 /* ================================================================
@@ -516,11 +520,12 @@ static void test_nbody(void)
 
         int N = 24;
         double L = 20.0;
-        grid_t *g = grid_alloc(N, L, RK_CLASSIC);
+        mesh_t *m = mesh_create_ex(1, N, L, RK_CLASSIC, NUM_CCZ4_FIELDS);
+        grid_t *g = m->blocks[0]->grid;
 
-        set_bowen_york(g, 3, bhs);
+        set_bowen_york_mesh(m, 3, bhs, 0);
 
-        double ham = compute_constraint_l2(g);
+        double ham = mesh_constraint_l2(m);
         printf("    Ham L2 = %.6e\n", ham);
         CHECK(ham < 1.0, "3-BH Hamiltonian constraint bounded");
 
@@ -539,7 +544,7 @@ static void test_nbody(void)
         printf("    chi_min = %.6e\n", chi_min);
         CHECK(chi_min > 0.0, "3-BH chi > 0 everywhere");
 
-        grid_free(g);
+        mesh_free(m);
     }
 
     /* --- 5 BHs in a pentagon --- */
@@ -561,11 +566,12 @@ static void test_nbody(void)
 
         int N = 24;
         double L = 20.0;
-        grid_t *g = grid_alloc(N, L, RK_CLASSIC);
+        mesh_t *m = mesh_create_ex(1, N, L, RK_CLASSIC, NUM_CCZ4_FIELDS);
+        grid_t *g = m->blocks[0]->grid;
 
-        set_bowen_york(g, 5, bhs);
+        set_bowen_york_mesh(m, 5, bhs, 0);
 
-        double ham = compute_constraint_l2(g);
+        double ham = mesh_constraint_l2(m);
         printf("    Ham L2 = %.6e\n", ham);
         CHECK(ham < 1.0, "5-BH Hamiltonian constraint bounded");
 
@@ -584,7 +590,7 @@ static void test_nbody(void)
         printf("    chi_min = %.6e\n", chi_min);
         CHECK(chi_min > 0.0, "5-BH chi > 0 everywhere");
 
-        grid_free(g);
+        mesh_free(m);
     }
 }
 

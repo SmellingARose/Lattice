@@ -2,12 +2,7 @@
  * Lattice — 3D Numerical Relativity
  * Backend abstraction layer.
  *
- * Two tiers of API:
- *
- * (1) Per-grid kernels (legacy, used by single-grid stepper):
- *     backend_compute_rhs() — one kernel per grid, function pointer dispatch.
- *
- * (2) Packed batch kernels (AMR production path):
+ * Packed batch kernels (AMR production path):
  *     backend_*_packed() — one kernel per operation across ALL blocks.
  *     All data stays on device; ghost exchange is device-to-device.
  *     CPU backend: OpenMP parallel for mirrors of all packed functions.
@@ -26,10 +21,6 @@
 #include "../core/params.h"
 #include "../amr/meshblock_pack.h"
 
-/* ========================================================================
- * Legacy per-grid API (single-grid stepper, test path)
- * ======================================================================== */
-
 /* Point-wise RHS function signature.
  * Called for each interior grid point (i,j,k).
  * Reads from src arrays, writes to rhs arrays. */
@@ -37,13 +28,6 @@ typedef void (*rhs_point_func_t)(double ** restrict rhs,
                                  const double *const * restrict src,
                                  const grid_t *g, const sim_params_t *p,
                                  int i, int j, int k);
-
-/* Compute RHS over the entire interior grid.
- * Dispatches to the selected backend (OpenMP, Metal, CUDA, HIP). */
-void backend_compute_rhs(double ** restrict rhs,
-                         const double *const * restrict src,
-                         const grid_t *g, const sim_params_t *p,
-                         rhs_point_func_t func);
 
 /* Backend lifecycle (no-op for CPU) */
 void backend_init(void);

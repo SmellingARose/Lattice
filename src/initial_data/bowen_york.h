@@ -48,15 +48,6 @@ void set_ccz4_from_hispid(grid_t *g, const double *psi_arr,
                            double *const *V_arr,
                            int n_bh, const puncture_data_t *bhs);
 
-/* Top-level dispatch: if all P=0 and S=0, uses fast BL path.
- * Otherwise runs FAS multigrid constraint solver.
- * If hispid_override is set (via --hispid), forces coupled solver. */
-void set_bowen_york(grid_t *g, int n_bh, const puncture_data_t *bhs);
-
-/* Force HiSpID path (coupled solver with non-flat conformal metric).
- * Called by set_bowen_york when high spin detected or --hispid flag set. */
-void set_hispid(grid_t *g, int n_bh, const puncture_data_t *bhs);
-
 /* Set --hispid CLI override (forces HiSpID even for low spin) */
 void set_hispid_override(int val);
 

@@ -20,13 +20,13 @@
 #include "../src/core/grid.h"
 #include "../src/core/fields.h"
 #include "../src/core/params.h"
+#include "../src/amr/mesh.h"
 #include "../src/amr/prolongation.h"
 #include "../src/amr/restriction.h"
 #include "../src/initial_data/puncture.h"
 #include "../src/diagnostics/constraints.h"
 #include "../src/numerics/rk4.h"
 #include "../src/evolution/ccz4_rhs.h"
-#include "../src/boundary/sommerfeld.h"
 #include "../src/backend/backend.h"
 
 static int pass_count = 0;
@@ -234,20 +234,28 @@ static void test_cako_flat(void)
     p.rk_method = RK_CLASSIC;
 
     /* Run without CAKO */
-    grid_t *g1 = grid_alloc(p.N, p.L, p.rk_method);
+    mesh_t *m1 = mesh_create_ex(1, p.N, p.L, p.rk_method, NUM_FIELDS);
+    grid_t *g1 = m1->blocks[0]->grid;
     set_flat_spacetime(g1);
-    for (int step = 0; step < p.num_steps; step++)
-        rk4_step(g1, &p, ccz4_rhs_point, apply_sommerfeld, p.dt);
-    double ham1 = compute_constraint_l2(g1);
+    p.time = 0.0;
+    for (int step = 0; step < p.num_steps; step++) {
+        rk4_step_mesh(m1, &p, ccz4_rhs_point, p.dt);
+        p.time += p.dt;
+    }
+    double ham1 = mesh_constraint_l2(m1);
 
     /* Run with CAKO enabled (chi=1 on flat, so sqrt(1)=1, no effect) */
     sim_params_t p2 = p;
     p2.noise.use_cako = 1;
-    grid_t *g2 = grid_alloc(p2.N, p2.L, p2.rk_method);
+    mesh_t *m2 = mesh_create_ex(1, p2.N, p2.L, p2.rk_method, NUM_FIELDS);
+    grid_t *g2 = m2->blocks[0]->grid;
     set_flat_spacetime(g2);
-    for (int step = 0; step < p2.num_steps; step++)
-        rk4_step(g2, &p2, ccz4_rhs_point, apply_sommerfeld, p2.dt);
-    double ham2 = compute_constraint_l2(g2);
+    p2.time = 0.0;
+    for (int step = 0; step < p2.num_steps; step++) {
+        rk4_step_mesh(m2, &p2, ccz4_rhs_point, p2.dt);
+        p2.time += p2.dt;
+    }
+    double ham2 = mesh_constraint_l2(m2);
 
     printf("  Without CAKO: Ham L2 = %.6e\n", ham1);
     printf("  With CAKO:    Ham L2 = %.6e\n", ham2);
@@ -256,8 +264,8 @@ static void test_cako_flat(void)
 
     check(fabs(ratio - 1.0) < 1e-6, "CAKO has no effect on flat (chi=1)");
 
-    grid_free(g1);
-    grid_free(g2);
+    mesh_free(m1);
+    mesh_free(m2);
 }
 
 /* ===== Test 5: Per-field sigma ===== */
@@ -288,16 +296,20 @@ static void test_per_field_sigma(void)
     p.dt = p.CFL * p.dx;
     p.noise.use_per_field_sigma = 1;
 
-    grid_t *g = grid_alloc(p.N, p.L, p.rk_method);
+    mesh_t *m = mesh_create_ex(1, p.N, p.L, p.rk_method, NUM_FIELDS);
+    grid_t *g = m->blocks[0]->grid;
     set_flat_spacetime(g);
-    for (int step = 0; step < 10; step++)
-        rk4_step(g, &p, ccz4_rhs_point, apply_sommerfeld, p.dt);
-    double ham = compute_constraint_l2(g);
+    p.time = 0.0;
+    for (int step = 0; step < 10; step++) {
+        rk4_step_mesh(m, &p, ccz4_rhs_point, p.dt);
+        p.time += p.dt;
+    }
+    double ham = mesh_constraint_l2(m);
     printf("  Per-field sigma flat Ham L2 = %.6e\n", ham);
 
     check(ham < 1e-10, "Per-field sigma stable on flat spacetime");
 
-    grid_free(g);
+    mesh_free(m);
 }
 
 /* ===== Test 6: CAHD on single BH ===== */
@@ -315,20 +327,28 @@ static void test_cahd_single_bh(void)
     /* Without CAHD */
     double mass = 1.0;
     double center[1][3] = {{0.0, 0.0, 0.0}};
-    grid_t *g1 = grid_alloc(p.N, p.L, p.rk_method);
+    mesh_t *m1 = mesh_create_ex(1, p.N, p.L, p.rk_method, NUM_FIELDS);
+    grid_t *g1 = m1->blocks[0]->grid;
     set_brill_lindquist(g1, 1, &mass, center);
-    for (int step = 0; step < steps; step++)
-        rk4_step(g1, &p, ccz4_rhs_point, apply_sommerfeld, p.dt);
-    double ham1 = compute_constraint_l2(g1);
+    p.time = 0.0;
+    for (int step = 0; step < steps; step++) {
+        rk4_step_mesh(m1, &p, ccz4_rhs_point, p.dt);
+        p.time += p.dt;
+    }
+    double ham1 = mesh_constraint_l2(m1);
 
     /* With CAHD */
     sim_params_t p2 = p;
     p2.noise.use_cahd = 1;
-    grid_t *g2 = grid_alloc(p2.N, p2.L, p2.rk_method);
+    mesh_t *m2 = mesh_create_ex(1, p2.N, p2.L, p2.rk_method, NUM_FIELDS);
+    grid_t *g2 = m2->blocks[0]->grid;
     set_brill_lindquist(g2, 1, &mass, center);
-    for (int step = 0; step < steps; step++)
-        rk4_step(g2, &p2, ccz4_rhs_point, apply_sommerfeld, p2.dt);
-    double ham2 = compute_constraint_l2(g2);
+    p2.time = 0.0;
+    for (int step = 0; step < steps; step++) {
+        rk4_step_mesh(m2, &p2, ccz4_rhs_point, p2.dt);
+        p2.time += p2.dt;
+    }
+    double ham2 = mesh_constraint_l2(m2);
 
     printf("  Without CAHD: Ham L2 = %.6e\n", ham1);
     printf("  With CAHD:    Ham L2 = %.6e\n", ham2);
@@ -341,8 +361,8 @@ static void test_cahd_single_bh(void)
     check(diff > 1e-10, "CAHD produces measurable effect on single BH");
     check(ham2 < ham1 * 2.0, "CAHD does not blow up constraints");
 
-    grid_free(g1);
-    grid_free(g2);
+    mesh_free(m1);
+    mesh_free(m2);
 }
 
 /* ===== Test 7: SSL on single BH ===== */
@@ -362,10 +382,11 @@ static void test_ssl_single_bh(void)
     p.noise.use_ssl = 0;
     double mass = 1.0;
     double center[1][3] = {{0.0, 0.0, 0.0}};
-    grid_t *g1 = grid_alloc(p.N, p.L, p.rk_method);
+    mesh_t *m1 = mesh_create_ex(1, p.N, p.L, p.rk_method, NUM_FIELDS);
+    grid_t *g1 = m1->blocks[0]->grid;
     set_brill_lindquist(g1, 1, &mass, center);
     for (int step = 0; step < steps; step++) {
-        rk4_step(g1, &p, ccz4_rhs_point, apply_sommerfeld, p.dt);
+        rk4_step_mesh(m1, &p, ccz4_rhs_point, p.dt);
         p.time += p.dt;
     }
 
@@ -374,10 +395,11 @@ static void test_ssl_single_bh(void)
     p2.time = 0.0;
     p2.noise.use_ssl = 1;
     p2.noise.ssl_total_mass = 1.0;
-    grid_t *g2 = grid_alloc(p2.N, p2.L, p2.rk_method);
+    mesh_t *m2 = mesh_create_ex(1, p2.N, p2.L, p2.rk_method, NUM_FIELDS);
+    grid_t *g2 = m2->blocks[0]->grid;
     set_brill_lindquist(g2, 1, &mass, center);
     for (int step = 0; step < steps; step++) {
-        rk4_step(g2, &p2, ccz4_rhs_point, apply_sommerfeld, p2.dt);
+        rk4_step_mesh(m2, &p2, ccz4_rhs_point, p2.dt);
         p2.time += p2.dt;
     }
 
@@ -406,8 +428,8 @@ static void test_ssl_single_bh(void)
 
     check(envelope < 1e-14, "SSL negligible at t=170M");
 
-    grid_free(g1);
-    grid_free(g2);
+    mesh_free(m1);
+    mesh_free(m2);
 }
 
 /* ===== Test 8: Prolongation weight sum ===== */
@@ -485,7 +507,11 @@ static void test_prolongation_linear(void)
 
 int main(void)
 {
+    setbuf(stdout, NULL);
+
     printf("=== AMR Stage 3: Prolongation + Noise Reduction Test ===\n");
+
+    backend_init();
 
     test_weight_sum();
     test_prolongation_linear();
@@ -496,6 +522,8 @@ int main(void)
     test_per_field_sigma();
     test_cahd_single_bh();
     test_ssl_single_bh();
+
+    backend_cleanup();
 
     printf("\n=== Results: %d/%d passed ===\n", pass_count, total_count);
     if (pass_count == total_count) {

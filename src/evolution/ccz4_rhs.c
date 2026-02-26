@@ -31,12 +31,6 @@
 #include "../geometry/tensor_utils.h"
 #include <math.h>
 
-/* Forward declaration */
-extern void add_ko_dissipation(double ** restrict rhs,
-                               const double *const * restrict src,
-                               const grid_t *g, const sim_params_t *p,
-                               int i, int j, int k);
-
 /* ============================================================
  * Output structs for sub-function scoping.
  * Typed outputs scope variable lifetimes so the compiler can
@@ -77,6 +71,20 @@ typedef struct {
     double Z_dot_d1lapse;
     double K_minus_2Theta;
 } ccz4_covd_t;
+
+/* RHS output structs — sub-functions write computed values here,
+ * ccz4_rhs_point stores them to rhs[] arrays. Avoids passing double**
+ * through sub-function boundaries (GCC nvptx codegen issue). */
+typedef struct {
+    double chi, K, Theta;
+    double h[3][3], A[3][3];
+    double Gamma[3];
+} ccz4_evo_rhs_t;
+
+typedef struct {
+    double lapse;
+    double shift[3], B[3];
+} ccz4_gauge_rhs_t;
 
 /* Field indices for symmetric tensor components (file-scope for sub-functions) */
 #ifdef LATTICE_GPU
@@ -317,17 +325,16 @@ static inline void ccz4_compute_covariant(
  * Writes results to rhs arrays. Outputs rhs_Gamma for the gauge phase.
  * ============================================================ */
 static inline void ccz4_compute_evolution(
-    double ** restrict rhs,
     const double *const * restrict src,
     const grid_t *g, int idx,
     const ccz4_fields_t *f, const ccz4_derivs_t *d,
     const ccz4_geom_t *geom, const ccz4_covd_t *covd,
-    const sim_params_t *p, double rhs_Gamma_out[3])
+    const sim_params_t *p, ccz4_evo_rhs_t *out)
 {
     /* --- chi ---
      * dt(chi) = advec + (2/3)*chi*(alpha*K - divshift)
      * Ref: GRChombo CCZ4RHS.impl.hpp:118-119 */
-    double rhs_chi = d->advec_chi
+    out->chi = d->advec_chi
         + (2.0 / GR_SPACEDIM) * f->chi * (f->lapse * f->K - covd->divshift);
 
     /* CAHD: Coarse-grid-Adjusted Hamiltonian-constraint Damping.
@@ -336,19 +343,18 @@ static inline void ccz4_compute_evolution(
         double H = geom->ricci.scalar
                  + ((GR_SPACEDIM - 1.0) / (double)GR_SPACEDIM) * f->K * f->K
                  - covd->tr_A2;
-        rhs_chi += 4.0 * f->chi * p->noise.cahd_coeff * p->CFL * g->dx * H;
+        out->chi += 4.0 * f->chi * p->noise.cahd_coeff * p->CFL * g->dx * H;
     }
 
     /* --- h_ij ---
      * Ref: GRChombo CCZ4RHS.impl.hpp:120-129 */
-    double rhs_h[3][3];
     FOR2(ii, jj) {
-        rhs_h[ii][jj] = d->advec_h[ii][jj]
+        out->h[ii][jj] = d->advec_h[ii][jj]
             - 2.0 * f->lapse * f->A[ii][jj]
             - (2.0 / GR_SPACEDIM) * f->h[ii][jj] * covd->divshift;
         FOR1(kk) {
-            rhs_h[ii][jj] += f->h[kk][ii] * d->d1_shift[kk][jj]
-                            + f->h[kk][jj] * d->d1_shift[kk][ii];
+            out->h[ii][jj] += f->h[kk][ii] * d->d1_shift[kk][jj]
+                             + f->h[kk][jj] * d->d1_shift[kk][ii];
         }
     }
 
@@ -368,15 +374,14 @@ static inline void ccz4_compute_evolution(
         FOR1(ll) A_mixed[kk][jj] += geom->h_UU[kk][ll] * f->A[ll][jj];
     }
 
-    double rhs_A[3][3];
     FOR2(ii, jj) {
-        rhs_A[ii][jj] = d->advec_A[ii][jj] + Adot_TF[ii][jj]
+        out->A[ii][jj] = d->advec_A[ii][jj] + Adot_TF[ii][jj]
             + f->A[ii][jj] * (f->lapse * covd->K_minus_2Theta
                           - (2.0 / GR_SPACEDIM) * covd->divshift);
         FOR1(kk) {
-            rhs_A[ii][jj] += f->A[kk][ii] * d->d1_shift[kk][jj]
-                            + f->A[kk][jj] * d->d1_shift[kk][ii]
-                            - 2.0 * f->lapse * f->A[ii][kk] * A_mixed[kk][jj];
+            out->A[ii][jj] += f->A[kk][ii] * d->d1_shift[kk][jj]
+                             + f->A[kk][jj] * d->d1_shift[kk][ii]
+                             - 2.0 * f->lapse * f->A[ii][kk] * A_mixed[kk][jj];
         }
     }
 
@@ -388,7 +393,7 @@ static inline void ccz4_compute_evolution(
     else
         kappa1_times_lapse = p->ccz4.kappa1 * f->lapse;
 
-    double rhs_Theta = d->advec_Theta
+    out->Theta = d->advec_Theta
         + 0.5 * f->lapse * (geom->ricci.scalar - covd->tr_A2
             + ((GR_SPACEDIM - 1.0) / (double)GR_SPACEDIM) * f->K * f->K
             - 2.0 * f->Theta * f->K)
@@ -398,7 +403,7 @@ static inline void ccz4_compute_evolution(
 
     /* --- K ---
      * Ref: GRChombo CCZ4RHS.impl.hpp:183-191 */
-    double rhs_K = d->advec_K
+    out->K = d->advec_K
         + f->lapse * (geom->ricci.scalar + f->K * covd->K_minus_2Theta)
         - kappa1_times_lapse * GR_SPACEDIM * (1.0 + p->ccz4.kappa2) * f->Theta
         - covd->tr_covd2lapse;
@@ -432,19 +437,29 @@ static inline void ccz4_compute_evolution(
         }
     }
 
-    double rhs_Gamma[3];
-    FOR1(ii) rhs_Gamma[ii] = d->advec_Gamma[ii] + Gammadot[ii];
+    FOR1(ii) out->Gamma[ii] = d->advec_Gamma[ii] + Gammadot[ii];
 
     /* --- EM stress-energy source terms ---
-     * Ref: B&S Eq. (2.106)-(2.112), arXiv:0907.1151 Sec. III */
+     * Ref: B&S Eq. (2.106)-(2.112), arXiv:0907.1151 Sec. III
+     *
+     * Physical stress-energy diverges as chi -> 0 (near the puncture)
+     * because rho_EM ~ chi^{-4} * (conformal E)^2 and the conformal
+     * fields only cancel 3 powers of chi, leaving a chi^{-1} divergence.
+     * We suppress the EM source by chi^2, ensuring smooth coupling that
+     * vanishes inside the horizon (chi << 1) and is full-strength in the
+     * wave zone (chi ~ 1). This is standard practice for puncture evolutions
+     * with matter coupling.
+     * Ref: arXiv:2104.06978 (Liebling & Palenzuela, charged binary inspiral) */
     if (p->em_enabled) {
         double rho_em, S_em_trace;
         double j_em[3], S_em_dd[3][3];
         em_stress_energy(src, g, idx, f->chi, geom->h_UU, f->h,
                          &rho_em, j_em, S_em_dd, &S_em_trace);
 
-        rhs_Theta += -8.0 * M_PI * rho_em;
-        rhs_K += -4.0 * M_PI * f->lapse * (rho_em + S_em_trace);
+        double em_damp = f->chi * f->chi;
+
+        out->Theta += -8.0 * M_PI * em_damp * rho_em;
+        out->K += -4.0 * M_PI * em_damp * f->lapse * (rho_em + S_em_trace);
 
         double matter_A[3][3];
         FOR2(ii2, jj2) {
@@ -453,37 +468,12 @@ static inline void ccz4_compute_evolution(
         }
         make_trace_free(matter_A, f->h, geom->h_UU);
         FOR2(ii2, jj2) {
-            rhs_A[ii2][jj2] += -8.0 * M_PI * f->lapse * matter_A[ii2][jj2];
+            out->A[ii2][jj2] += -8.0 * M_PI * em_damp * f->lapse * matter_A[ii2][jj2];
         }
         FOR1(ii2) {
-            rhs_Gamma[ii2] += -16.0 * M_PI * f->lapse * j_em[ii2];
+            out->Gamma[ii2] += -16.0 * M_PI * em_damp * f->lapse * j_em[ii2];
         }
     }
-
-    /* ---- Store evolution RHS ---- */
-    rhs[FIELD_CHI][idx]    = rhs_chi;
-    rhs[FIELD_H11][idx]    = rhs_h[0][0];
-    rhs[FIELD_H12][idx]    = rhs_h[0][1];
-    rhs[FIELD_H13][idx]    = rhs_h[0][2];
-    rhs[FIELD_H22][idx]    = rhs_h[1][1];
-    rhs[FIELD_H23][idx]    = rhs_h[1][2];
-    rhs[FIELD_H33][idx]    = rhs_h[2][2];
-    rhs[FIELD_K][idx]      = rhs_K;
-    rhs[FIELD_A11][idx]    = rhs_A[0][0];
-    rhs[FIELD_A12][idx]    = rhs_A[0][1];
-    rhs[FIELD_A13][idx]    = rhs_A[0][2];
-    rhs[FIELD_A22][idx]    = rhs_A[1][1];
-    rhs[FIELD_A23][idx]    = rhs_A[1][2];
-    rhs[FIELD_A33][idx]    = rhs_A[2][2];
-    rhs[FIELD_THETA][idx]  = rhs_Theta;
-    rhs[FIELD_GAMMA1][idx] = rhs_Gamma[0];
-    rhs[FIELD_GAMMA2][idx] = rhs_Gamma[1];
-    rhs[FIELD_GAMMA3][idx] = rhs_Gamma[2];
-
-    /* Pass rhs_Gamma to gauge phase for B^i equation */
-    rhs_Gamma_out[0] = rhs_Gamma[0];
-    rhs_Gamma_out[1] = rhs_Gamma[1];
-    rhs_Gamma_out[2] = rhs_Gamma[2];
 }
 
 /* ============================================================
@@ -491,16 +481,15 @@ static inline void ccz4_compute_evolution(
  * Ref: GRChombo MovingPunctureGauge.hpp:54-65
  * ============================================================ */
 static inline void ccz4_compute_gauge(
-    double ** restrict rhs, int idx,
     const ccz4_fields_t *f, const ccz4_derivs_t *d,
     const ccz4_covd_t *covd, const double rhs_Gamma[3],
-    const sim_params_t *p)
+    const sim_params_t *p, ccz4_gauge_rhs_t *out)
 {
     /* Lapse: dt(alpha) = -c * alpha^p * (K - 2*Theta) + advec
      * Fast path: default lapse_power=1.0 avoids pow() call. */
     double lapse_pow = (p->gauge.lapse_power == 1.0) ? f->lapse
                        : pow(f->lapse, p->gauge.lapse_power);
-    double rhs_lapse = p->gauge.lapse_advec_coeff * d->advec_lapse
+    out->lapse = p->gauge.lapse_advec_coeff * d->advec_lapse
         - p->gauge.lapse_coeff * lapse_pow * covd->K_minus_2Theta;
 
     /* SSL: Slow-Start Lapse — Gaussian damping toward trumpet solution.
@@ -512,14 +501,13 @@ static inline void ccz4_compute_gauge(
         double sigma_t = p->noise.ssl_sigma_t * M;
         double t = p->time;
         double ssl_damp = W * h_ssl * exp(-t * t / (2.0 * sigma_t * sigma_t));
-        rhs_lapse += -ssl_damp * (f->lapse - W);
+        out->lapse += -ssl_damp * (f->lapse - W);
     }
 
     /* Shift + B: Gamma-driver with position-dependent eta */
-    double rhs_shift[3], rhs_B[3];
     FOR1(ii) {
-        rhs_shift[ii] = p->gauge.shift_advec_coeff * d->advec_shift[ii]
-                       + p->gauge.shift_Gamma_coeff * f->B[ii];
+        out->shift[ii] = p->gauge.shift_advec_coeff * d->advec_shift[ii]
+                        + p->gauge.shift_Gamma_coeff * f->B[ii];
 
         /* Position-dependent eta: eta(x) = eta_0 / W(x), W = sqrt(chi).
          * Ref: arXiv:1003.0859 (Muller & Brugmann) */
@@ -528,28 +516,26 @@ static inline void ccz4_compute_gauge(
             double W = sqrt(fmax(f->chi, 1.0e-6));
             eta_eff /= fmax(W, 1.0e-6);
         }
-        rhs_B[ii] = p->gauge.shift_advec_coeff * d->advec_B[ii]
-                   - p->gauge.shift_advec_coeff * d->advec_Gamma[ii]
-                   + rhs_Gamma[ii] - eta_eff * f->B[ii];
+        out->B[ii] = p->gauge.shift_advec_coeff * d->advec_B[ii]
+                    - p->gauge.shift_advec_coeff * d->advec_Gamma[ii]
+                    + rhs_Gamma[ii] - eta_eff * f->B[ii];
     }
-
-    /* ---- Store gauge RHS ---- */
-    rhs[FIELD_LAPSE][idx]  = rhs_lapse;
-    rhs[FIELD_SHIFT1][idx] = rhs_shift[0];
-    rhs[FIELD_SHIFT2][idx] = rhs_shift[1];
-    rhs[FIELD_SHIFT3][idx] = rhs_shift[2];
-    rhs[FIELD_B1][idx]     = rhs_B[0];
-    rhs[FIELD_B2][idx]     = rhs_B[1];
-    rhs[FIELD_B3][idx]     = rhs_B[2];
 }
 
-#ifdef LATTICE_GPU
-#pragma omp end declare target
-#endif
+/* Forward declaration — add_ko_dissipation is defined in dissipation.c
+ * within its own omp declare target block. */
+extern void add_ko_dissipation(double ** restrict rhs,
+                               const double *const * restrict src,
+                               const grid_t *g, const sim_params_t *p,
+                               int i, int j, int k);
 
 /* ============================================================
  * Top-level CCZ4 RHS dispatcher.
  * Calls 5 phases + Kreiss-Oliger dissipation.
+ *
+ * All rhs[] writes are done here — sub-functions write to output
+ * structs on the stack. This avoids passing double** through
+ * sub-function boundaries (GCC nvptx codegen issue).
  * ============================================================ */
 void ccz4_rhs_point(double ** restrict rhs,
                     const double *const * restrict src,
@@ -568,10 +554,42 @@ void ccz4_rhs_point(double ** restrict rhs,
     ccz4_covd_t covd;
     ccz4_compute_covariant(&f, &d, &geom, &covd);
 
-    double rhs_Gamma[3];
-    ccz4_compute_evolution(rhs, src, g, idx, &f, &d, &geom, &covd, p, rhs_Gamma);
+    ccz4_evo_rhs_t evo;
+    ccz4_compute_evolution(src, g, idx, &f, &d, &geom, &covd, p, &evo);
 
-    ccz4_compute_gauge(rhs, idx, &f, &d, &covd, rhs_Gamma, p);
+    ccz4_gauge_rhs_t gauge;
+    ccz4_compute_gauge(&f, &d, &covd, evo.Gamma, p, &gauge);
+
+    /* ---- Store all RHS values ---- */
+    rhs[FIELD_CHI][idx]    = evo.chi;
+    rhs[FIELD_H11][idx]    = evo.h[0][0];
+    rhs[FIELD_H12][idx]    = evo.h[0][1];
+    rhs[FIELD_H13][idx]    = evo.h[0][2];
+    rhs[FIELD_H22][idx]    = evo.h[1][1];
+    rhs[FIELD_H23][idx]    = evo.h[1][2];
+    rhs[FIELD_H33][idx]    = evo.h[2][2];
+    rhs[FIELD_K][idx]      = evo.K;
+    rhs[FIELD_A11][idx]    = evo.A[0][0];
+    rhs[FIELD_A12][idx]    = evo.A[0][1];
+    rhs[FIELD_A13][idx]    = evo.A[0][2];
+    rhs[FIELD_A22][idx]    = evo.A[1][1];
+    rhs[FIELD_A23][idx]    = evo.A[1][2];
+    rhs[FIELD_A33][idx]    = evo.A[2][2];
+    rhs[FIELD_THETA][idx]  = evo.Theta;
+    rhs[FIELD_GAMMA1][idx] = evo.Gamma[0];
+    rhs[FIELD_GAMMA2][idx] = evo.Gamma[1];
+    rhs[FIELD_GAMMA3][idx] = evo.Gamma[2];
+    rhs[FIELD_LAPSE][idx]  = gauge.lapse;
+    rhs[FIELD_SHIFT1][idx] = gauge.shift[0];
+    rhs[FIELD_SHIFT2][idx] = gauge.shift[1];
+    rhs[FIELD_SHIFT3][idx] = gauge.shift[2];
+    rhs[FIELD_B1][idx]     = gauge.B[0];
+    rhs[FIELD_B2][idx]     = gauge.B[1];
+    rhs[FIELD_B3][idx]     = gauge.B[2];
 
     add_ko_dissipation(rhs, src, g, p, i, j, k);
 }
+
+#ifdef LATTICE_GPU
+#pragma omp end declare target
+#endif

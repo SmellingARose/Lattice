@@ -9,7 +9,7 @@ kernels are pure C, a thin backend abstraction swaps CPU (OpenMP threads) and
 GPU (OpenMP target teams) with no platform-specific code.
 
 Primary dev target: Apple M4 (16 GB unified memory) for CPU, NVIDIA HPC GPUs
-(V100/A100/H100) for production runs. Requires GCC 15+ for GPU offloading.
+(V100/A100/H100) for production runs. Requires GCC 14+ for GPU offloading.
 
 ## Approach
 
@@ -117,12 +117,16 @@ work on AMR meshes.
   - *Compile-time EM dispatch:* `make EM=on` adds `-DLATTICE_EM_ENABLED`.
     `COMPILED_NUM_FIELDS` macro (25 or 31) gives compiler constant loop bounds
     in dissipation/Sommerfeld hot paths. Default `EM=off` eliminates EM overhead.
-  - *Kernel restructuring:* Split 541-line `ccz4_rhs_point` into 5 `static inline`
+  - *Kernel restructuring:* Split `ccz4_rhs_point` into 5 `static inline`
     sub-functions (`ccz4_load_and_differentiate`, `ccz4_compute_geometry`,
     `ccz4_compute_covariant`, `ccz4_compute_evolution`, `ccz4_compute_gauge`).
     Scoped lifetimes via typed structs (`ccz4_fields_t`, `ccz4_derivs_t`,
-    `ccz4_geom_t`, `ccz4_covd_t`). GPU benefit: better register allocation.
-    Zero memory overhead — compiler inlines into single kernel.
+    `ccz4_geom_t`, `ccz4_covd_t`). Evolution and gauge sub-functions write to
+    output structs (`ccz4_evo_rhs_t`, `ccz4_gauge_rhs_t`); `ccz4_rhs_point`
+    does all `rhs[]` stores. This avoids passing `double**` through sub-function
+    boundaries, which triggers a GCC nvptx codegen bug. GPU benefit: better
+    register allocation from scoped lifetimes. Zero memory overhead — compiler
+    inlines into single kernel.
   - *Persistent per-level packs:* `mesh_t` caches `leaf_pack` and
     `level_packs[MAX_AMR_LEVELS]` across time steps. New `sync_to_blocks` /
     `sync_from_blocks` copy only the data buffer (not rhs/scratch/accum).
@@ -230,6 +234,7 @@ lattice/
 │   ├── test_ah_finder.c     # Apparent horizon finder tests (13/13)
 │   ├── test_maxwell.c       # Einstein-Maxwell tests (15/15)
 │   ├── test_inspiral_convergence.c  # AMR binary inspiral convergence (3 resolutions)
+│   ├── test_gpu_debug.c       # GPU kernel isolation test (per-kernel sync barriers)
 │   └── convergence.sh          # 3-resolution convergence check
 ├── docs/
 │   ├── architecture.html       # consolidated architecture & design reference
@@ -244,7 +249,7 @@ lattice/
 
 ```bash
 make                    # CPU build (-O3 -ffast-math -march=native -flto)
-make BACKEND=gpu        # GPU build (OpenMP target offloading, requires GCC 15+)
+make BACKEND=gpu        # GPU build (OpenMP target offloading, requires GCC 14+)
 make debug              # debug build (-O0 -g -fsanitize=address,undefined)
 make test               # all tests
 make test-convergence   # 3-resolution convergence verification
@@ -258,6 +263,7 @@ make test-hispid       # HiSpID high-spin initial data (QI Kerr + coupled solver
 make test-ah           # Apparent horizon finder (interpolation, Schwarzschild, diagnostics)
 make test-maxwell      # Einstein-Maxwell (flat EM, plane wave, charged BH, constraints)
 make test-inspiral-convergence  # AMR binary inspiral convergence (long run, ~hours)
+make test-gpu-debug    # GPU kernel isolation test (requires BACKEND=gpu)
 make clean
 ```
 
@@ -265,7 +271,7 @@ Backend flag: `BACKEND=cpu|gpu`. Default is `cpu` (OpenMP threads).
 Time integrator: `--rk classic|ck45`. Default is `classic` (standard 4-stage
 RK4, 4 memory blocks). Use `--rk ck45` for Carpenter-Kennedy 2N low-storage
 (5 stages, 3 memory blocks, 25% less memory).
-Compiler: `clang` on macOS (CPU only), `gcc-15` on Linux (CPU + GPU).
+Compiler: `clang` on macOS (CPU only), `gcc-14+` on Linux (CPU + GPU).
 No external dependencies beyond standard C and libomp.
 Debug builds enable NaN/Inf checking — any floating-point trap is a bug.
 
@@ -276,16 +282,24 @@ parallel for`). No CUDA, HIP, or Metal code — the same C physics kernels run
 on both CPU and GPU.
 
 **Requirements:**
-- GCC 15+ with `-foffload=nvptx-none` (NVIDIA) or `-foffload=amdgcn-amdhsa` (AMD)
+- GCC 14+ with `-foffload=nvptx-none` (NVIDIA) or `-foffload=amdgcn-amdhsa` (AMD)
 - `GOMP_NVPTX_NATIVE_GPU_THREAD_STACK_SIZE=16384` env var (required — the CCZ4
   RHS kernel uses ~4 KB stack per thread for derivative tensors, Christoffel
-  symbols, and Ricci tensor locals; GCC 13's default stack is too small)
+  symbols, and Ricci tensor locals; default stack is too small)
 - HPC-class GPU with 1:2 FP64:FP32 ratio (V100, A100, H100, MI250X, MI300X).
   Consumer GPUs (1:32 ratio) have negligible FP64 throughput.
 
+**Host -O2 required for GPU builds:** GCC's `-O3` generates broken nvptx IR
+for large inlined functions like `ccz4_rhs_point` (~3 KB of locals from 5
+inlined sub-functions). The Makefile automatically uses `-O2` for the host
+compilation and passes `-O3` to the offload compiler via `-foffload-options`.
+This means host-side code (setup/teardown) runs at `-O2` while GPU kernels
+get full `-O3` optimization — zero performance impact on the compute hot path.
+CPU builds are unaffected and still use `-O3` with LTO.
+
 ```bash
-# Example: GPU build on Linux with GCC 15 targeting NVIDIA
-make BACKEND=gpu CC=gcc-15
+# Example: GPU build on Linux with GCC 14 targeting NVIDIA
+make BACKEND=gpu CC=gcc-14
 
 # Run with stack size env var
 export GOMP_NVPTX_NATIVE_GPU_THREAD_STACK_SIZE=16384

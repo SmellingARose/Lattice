@@ -21,6 +21,7 @@
 #include "../src/core/grid.h"
 #include "../src/core/params.h"
 #include "../src/core/fields.h"
+#include "../src/amr/mesh.h"
 #include "../src/initial_data/puncture.h"
 #include "../src/initial_data/bowen_york.h"
 #include "../src/numerics/interpolate.h"
@@ -59,7 +60,8 @@ static void test_interpolation(void)
 
     int N = 32;
     double L = 10.0;
-    grid_t *g = grid_alloc(N, L, RK_CLASSIC);
+    mesh_t *m = mesh_create_ex(1, N, L, RK_CLASSIC, NUM_FIELDS);
+    grid_t *g = m->blocks[0]->grid;
 
     /* f(x,y,z) = x^2 + 2y + 3z: exact for 4th-order Lagrange */
     for (int k = 0; k < g->Ntotal; k++) {
@@ -100,7 +102,7 @@ static void test_interpolation(void)
     check(max_err < 1e-10, "Polynomial interpolation exact to roundoff");
     check(max_derr < 1e-8, "Polynomial derivative accurate");
 
-    grid_free(g);
+    mesh_free(m);
 }
 
 /* ================================================================
@@ -119,7 +121,8 @@ static void test_schwarzschild_ah(void)
     int N = 64;
     double L = 16.0;
 
-    grid_t *g = grid_alloc(N, L, RK_CLASSIC);
+    mesh_t *m = mesh_create_ex(1, N, L, RK_CLASSIC, NUM_FIELDS);
+    grid_t *g = m->blocks[0]->grid;
     double masses[1] = { M };
     double centers_bl[1][3] = { {0.0, 0.0, 0.0} };
     set_brill_lindquist(g, 1, masses, centers_bl);
@@ -129,7 +132,7 @@ static void test_schwarzschild_ah(void)
     ws->eta = 10.0;
 
     /* Use tolerance above discretization floor (dx^4 ~ 4e-3 for dx=0.25) */
-    int conv = ah_find(ws, g, 1e-2, 3000, 1);
+    int conv = ah_find_amr(ws, m, 1e-2, 3000, 1);
     check(conv, "AH finder converged (tol=1e-2)");
 
     int np = ws->n_theta * ws->n_phi;
@@ -143,7 +146,7 @@ static void test_schwarzschild_ah(void)
     check(rel_err < 0.05, "AH radius within 5% of M/2");
 
     ah_free(ws);
-    grid_free(g);
+    mesh_free(m);
 }
 
 /* ================================================================
@@ -157,7 +160,8 @@ static void test_expansion_sign(void)
     int N = 64;
     double L = 16.0;
 
-    grid_t *g = grid_alloc(N, L, RK_CLASSIC);
+    mesh_t *m = mesh_create_ex(1, N, L, RK_CLASSIC, NUM_FIELDS);
+    grid_t *g = m->blocks[0]->grid;
     double masses[1] = { M };
     double centers_bl[1][3] = { {0.0, 0.0, 0.0} };
     set_brill_lindquist(g, 1, masses, centers_bl);
@@ -166,7 +170,7 @@ static void test_expansion_sign(void)
 
     /* Outside AH (r=1.0 > M/2): expansion > 0 */
     ah_workspace_t *ws_out = ah_alloc(8, 16, center, 1.0);
-    ah_eval_expansion(ws_out, g);
+    ah_eval_expansion_amr(ws_out, m);
     int np = ws_out->n_theta * ws_out->n_phi;
     double min_theta_out = 1e30;
     for (int i = 0; i < np; i++) {
@@ -178,7 +182,7 @@ static void test_expansion_sign(void)
 
     /* Inside AH (r=0.3 < M/2): expansion < 0 */
     ah_workspace_t *ws_in = ah_alloc(8, 16, center, 0.3);
-    ah_eval_expansion(ws_in, g);
+    ah_eval_expansion_amr(ws_in, m);
     double max_theta_in = -1e30;
     for (int i = 0; i < np; i++) {
         if (ws_in->theta_arr[i] > max_theta_in)
@@ -189,7 +193,7 @@ static void test_expansion_sign(void)
 
     ah_free(ws_out);
     ah_free(ws_in);
-    grid_free(g);
+    mesh_free(m);
 }
 
 /* ================================================================
@@ -206,7 +210,8 @@ static void test_schwarzschild_area(void)
     int N = 64;
     double L = 16.0;
 
-    grid_t *g = grid_alloc(N, L, RK_CLASSIC);
+    mesh_t *m = mesh_create_ex(1, N, L, RK_CLASSIC, NUM_FIELDS);
+    grid_t *g = m->blocks[0]->grid;
     double masses[1] = { M };
     double centers_bl[1][3] = { {0.0, 0.0, 0.0} };
     set_brill_lindquist(g, 1, masses, centers_bl);
@@ -216,9 +221,9 @@ static void test_schwarzschild_area(void)
     ws->eta = 10.0;
 
     /* Run finder with tolerance above discretization floor */
-    ah_find(ws, g, 1e-2, 3000, 0);
+    ah_find_amr(ws, m, 1e-2, 3000, 0);
 
-    ah_result_t res = ah_compute_diagnostics(ws, g);
+    ah_result_t res = ah_compute_diagnostics_amr(ws, m);
     double A_expected = 16.0 * M_PI * M * M;
     double rel_err = fabs(res.area - A_expected) / A_expected;
     printf("    Area: %.6f (expected %.6f, rel_err=%.4e)\n",
@@ -226,7 +231,7 @@ static void test_schwarzschild_area(void)
     check(rel_err < 0.1, "AH area within 10% of 16 pi M^2");
 
     ah_free(ws);
-    grid_free(g);
+    mesh_free(m);
 }
 
 /* ================================================================
@@ -240,7 +245,8 @@ static void test_mass_extraction(void)
     int N = 64;
     double L = 16.0;
 
-    grid_t *g = grid_alloc(N, L, RK_CLASSIC);
+    mesh_t *m = mesh_create_ex(1, N, L, RK_CLASSIC, NUM_FIELDS);
+    grid_t *g = m->blocks[0]->grid;
     double masses[1] = { M };
     double centers_bl[1][3] = { {0.0, 0.0, 0.0} };
     set_brill_lindquist(g, 1, masses, centers_bl);
@@ -249,9 +255,9 @@ static void test_mass_extraction(void)
     ah_workspace_t *ws = ah_alloc(24, 48, center, M / 2.0);
     ws->eta = 10.0;
 
-    ah_find(ws, g, 1e-2, 3000, 0);
+    ah_find_amr(ws, m, 1e-2, 3000, 0);
 
-    ah_result_t res = ah_compute_diagnostics(ws, g);
+    ah_result_t res = ah_compute_diagnostics_amr(ws, m);
     printf("    M_irr = %.6f, M_chr = %.6f, |J| = %.6e\n",
            res.mass_irr, res.mass_christodoulou, res.spin_mag);
 
@@ -267,7 +273,7 @@ static void test_mass_extraction(void)
     check(chr_err < 0.05, "M_chr approx M_irr for zero spin");
 
     ah_free(ws);
-    grid_free(g);
+    mesh_free(m);
 }
 
 /* ================================================================
@@ -281,7 +287,8 @@ static void test_angular_convergence(void)
     int N = 64;
     double L = 16.0;
 
-    grid_t *g = grid_alloc(N, L, RK_CLASSIC);
+    mesh_t *m = mesh_create_ex(1, N, L, RK_CLASSIC, NUM_FIELDS);
+    grid_t *g = m->blocks[0]->grid;
     double masses[1] = { M };
     double centers_bl[1][3] = { {0.0, 0.0, 0.0} };
     set_brill_lindquist(g, 1, masses, centers_bl);
@@ -297,8 +304,8 @@ static void test_angular_convergence(void)
         ah_workspace_t *ws = ah_alloc(n_theta_arr[r], n_phi_arr[r],
                                        center, M / 2.0);
         ws->eta = 10.0;
-        ah_find(ws, g, 1e-2, 3000, 0);
-        ah_result_t result = ah_compute_diagnostics(ws, g);
+        ah_find_amr(ws, m, 1e-2, 3000, 0);
+        ah_result_t result = ah_compute_diagnostics_amr(ws, m);
         areas[r] = result.area;
         printf("    n_theta=%d, n_phi=%d: A = %.6f\n",
                n_theta_arr[r], n_phi_arr[r], areas[r]);
@@ -313,7 +320,7 @@ static void test_angular_convergence(void)
     check(err_hi <= err_lo * 1.1 || err_hi < 5.0,
           "Area converges with angular resolution");
 
-    grid_free(g);
+    mesh_free(m);
 }
 
 /* ================================================================
@@ -327,20 +334,20 @@ static void test_boosted_bh(void)
     int N = 64;
     double L = 16.0;
 
-    grid_t *g = grid_alloc(N, L, RK_CLASSIC);
+    mesh_t *m = mesh_create_ex(1, N, L, RK_CLASSIC, NUM_FIELDS);
 
     puncture_data_t bhs[1];
     memset(bhs, 0, sizeof(bhs));
     bhs[0].mass = M;
     bhs[0].momentum[0] = 0.1;
 
-    set_bowen_york(g, 1, bhs);
+    set_bowen_york_mesh(m, 1, bhs, 0);
 
     double center[3] = {0.0, 0.0, 0.0};
     ah_workspace_t *ws = ah_alloc(16, 32, center, M / 2.0);
     ws->eta = 10.0;
 
-    ah_find(ws, g, 1e-2, 3000, 0);
+    ah_find_amr(ws, m, 1e-2, 3000, 0);
 
     int np = ws->n_theta * ws->n_phi;
     double mean_r = 0.0;
@@ -352,7 +359,7 @@ static void test_boosted_bh(void)
     double rel_err_r = fabs(mean_r - M / 2.0) / (M / 2.0);
     check(rel_err_r < 0.05, "Boosted BH radius within 5% of M/2");
 
-    ah_result_t res = ah_compute_diagnostics(ws, g);
+    ah_result_t res = ah_compute_diagnostics_amr(ws, m);
     double A_schwarz = 16.0 * M_PI * M * M;
     double rel_err_a = fabs(res.area - A_schwarz) / A_schwarz;
     printf("    Area: %.6f (Schwarzschild: %.6f, rel_err=%.4e)\n",
@@ -360,7 +367,7 @@ static void test_boosted_bh(void)
     check(rel_err_a < 0.15, "Boosted BH area within 15% of Schwarzschild");
 
     ah_free(ws);
-    grid_free(g);
+    mesh_free(m);
 }
 
 /* ================================================================

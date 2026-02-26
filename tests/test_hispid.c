@@ -24,10 +24,10 @@
 #include "../src/initial_data/relaxation.h"
 #include "../src/initial_data/kerr_quasi_isotropic.h"
 #include "../src/evolution/ccz4_rhs.h"
-#include "../src/boundary/sommerfeld.h"
 #include "../src/numerics/rk4.h"
 #include "../src/diagnostics/constraints.h"
 #include "../src/geometry/tensor_utils.h"
+#include "../src/amr/mesh.h"
 #include "../src/backend/backend.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -333,7 +333,8 @@ static void test_high_spin_evolve(void)
 
     int N = 24;
     double L = 20.0;
-    grid_t *g = grid_alloc(N, L, RK_CLASSIC);
+    mesh_t *m = mesh_create_ex(1, N, L, RK_CLASSIC, NUM_CCZ4_FIELDS);
+    grid_t *g = m->blocks[0]->grid;
 
     printf("  Setting up HiSpID initial data (chi=0.9)...\n");
     double residual = relaxation_solve_coupled(g, 1, &bh, 1e-4, 2000, 1);
@@ -347,10 +348,12 @@ static void test_high_spin_evolve(void)
     p.CFL = 0.25;
     p.dt = p.CFL * p.dx;
     p.sigma = 0.3;
+    p.time = 0.0;
 
     int nan_detected = 0;
     for (int step = 1; step <= 10; step++) {
-        rk4_step(g, &p, ccz4_rhs_point, apply_sommerfeld, p.dt);
+        rk4_step_mesh(m, &p, ccz4_rhs_point, p.dt);
+        p.time += p.dt;
 
         int mid = g->Ntotal / 2;
         double lapse = g->fields[FIELD_LAPSE][IDX(g, mid, mid, mid)];
@@ -364,12 +367,12 @@ static void test_high_spin_evolve(void)
     CHECK(!nan_detected, "No NaN during 10 evolution steps (chi=0.9)");
 
     if (!nan_detected) {
-        double ham = compute_constraint_l2(g);
+        double ham = mesh_constraint_l2(m);
         printf("  After 10 steps: Ham L2 = %.6e\n", ham);
         CHECK(ham < 1e3, "Ham bounded after evolution");
     }
 
-    grid_free(g);
+    mesh_free(m);
 }
 
 /* ================================================================

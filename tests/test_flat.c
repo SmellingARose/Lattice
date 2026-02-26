@@ -14,7 +14,7 @@
 #include "../src/core/fields.h"
 #include "../src/initial_data/puncture.h"
 #include "../src/evolution/ccz4_rhs.h"
-#include "../src/boundary/sommerfeld.h"
+#include "../src/amr/mesh.h"
 #include "../src/numerics/rk4.h"
 #include "../src/diagnostics/constraints.h"
 #include "../src/backend/backend.h"
@@ -36,7 +36,8 @@ int main(void)
     p.dt = p.CFL * p.dx;
 
     backend_init();
-    grid_t *g = grid_alloc(p.N, p.L, p.rk_method);
+    mesh_t *m = mesh_create_ex(1, p.N, p.L, p.rk_method, NUM_CCZ4_FIELDS);
+    grid_t *g = m->blocks[0]->grid;
 
     /* Recompute after possible padding */
     p.N  = g->N;
@@ -56,12 +57,14 @@ int main(void)
     int diag_every = p.num_steps / 5;  /* full diagnostic 5 times */
     if (diag_every < 1) diag_every = 1;
 
+    p.time = 0.0;
     for (int step = 1; step <= p.num_steps; step++) {
-        rk4_step(g, &p, ccz4_rhs_point, apply_sommerfeld, p.dt);
+        rk4_step_mesh(m, &p, ccz4_rhs_point, p.dt);
+        p.time += p.dt;
 
         double pct = 100.0 * step / p.num_steps;
         if (step % diag_every == 0 || step == p.num_steps) {
-            double ham = compute_constraint_l2(g);
+            double ham = mesh_constraint_l2(m);
             printf("\r  step %4d/%d  [%5.1f%%]  Ham L2 = %.6e",
                    step, p.num_steps, pct, ham);
             fflush(stdout);
@@ -73,13 +76,13 @@ int main(void)
     printf("\n");
 
     /* Final check */
-    double ham_final = compute_constraint_l2(g);
+    double ham_final = mesh_constraint_l2(m);
     printf("  Final Ham L2 = %.6e\n", ham_final);
 
     int passed = (ham_final < 1.0e-10);
     printf("\n  %s (threshold = 1e-10)\n", passed ? "PASSED" : "FAILED");
 
-    grid_free(g);
+    mesh_free(m);
     backend_cleanup();
 
     return passed ? 0 : 1;

@@ -21,7 +21,6 @@
 #include "../src/evolution/ccz4_rhs.h"
 #include "../src/numerics/rk4.h"
 #include "../src/diagnostics/constraints.h"
-#include "../src/boundary/sommerfeld.h"
 #include "../src/backend/backend.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -60,17 +59,21 @@ static void test_uniform_vs_single_grid(void)
     double mass = 1.0;
     double center[1][3] = {{0.0, 0.0, 0.0}};
 
-    /* (a) Single-grid reference: N=32, L=64 */
-    grid_t *gref = grid_alloc(32, p.L, p.rk_method);
+    /* (a) Single-grid reference: N=32, L=64 (1-block mesh) */
+    mesh_t *mref = mesh_create_ex(1, 32, p.L, p.rk_method, NUM_FIELDS);
+    grid_t *gref = mref->blocks[0]->grid;
     p.N  = gref->N;
     p.dx = gref->dx;
     p.dt = p.CFL * p.dx;
 
     set_brill_lindquist(gref, 1, &mass, (const double(*)[3])center);
-    for (int step = 0; step < nsteps; step++)
-        rk4_step(gref, &p, ccz4_rhs_point, apply_sommerfeld, p.dt);
+    p.time = 0.0;
+    for (int step = 0; step < nsteps; step++) {
+        rk4_step_mesh(mref, &p, ccz4_rhs_point, p.dt);
+        p.time += p.dt;
+    }
 
-    double ham_ref = compute_constraint_l2(gref);
+    double ham_ref = mesh_constraint_l2(mref);
     printf("  Single-grid:  Ham L2 = %.6e (N=32, %d steps)\n",
            ham_ref, nsteps);
 
@@ -88,8 +91,11 @@ static void test_uniform_vs_single_grid(void)
                                    (const double(*)[3])center);
     }
 
-    for (int step = 0; step < nsteps; step++)
+    p.time = 0.0;
+    for (int step = 0; step < nsteps; step++) {
         rk4_step_mesh(m, &p, ccz4_rhs_point, p.dt);
+        p.time += p.dt;
+    }
 
     double ham_mesh = mesh_constraint_l2(m);
     printf("  Multi-block:  Ham L2 = %.6e (2x2x2 x 16^3, %d steps)\n",
@@ -105,7 +111,7 @@ static void test_uniform_vs_single_grid(void)
     check(ratio > 0.5 && ratio < 2.0,
           "Multi-block Ham L2 within 2x of single-grid");
 
-    grid_free(gref);
+    mesh_free(mref);
     mesh_free(m);
 }
 
@@ -152,8 +158,10 @@ static void test_dynamic_regridding(void)
     }
 
     /* Evolve with regridding */
+    p.time = 0.0;
     for (int step = 1; step <= nsteps; step++) {
         rk4_step_mesh(m, &p, ccz4_rhs_point, p.dt);
+        p.time += p.dt;
 
         if (step % p.amr.regrid_every == 0) {
             int delta = mesh_regrid(m, &p.amr);
@@ -214,8 +222,10 @@ static void test_flat_no_refinement(void)
     }
 
     /* Evolve with regridding */
+    p.time = 0.0;
     for (int step = 1; step <= nsteps; step++) {
         rk4_step_mesh(m, &p, ccz4_rhs_point, p.dt);
+        p.time += p.dt;
         if (step % p.amr.regrid_every == 0)
             mesh_regrid(m, &p.amr);
     }

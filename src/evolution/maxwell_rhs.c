@@ -41,17 +41,17 @@
 #include <math.h>
 
 /* Levi-Civita symbol epsilon_{ijk} (fully antisymmetric, values +1/-1/0) */
+#ifdef LATTICE_GPU
+#pragma omp declare target
+#endif
 static const int levi_civita[3][3][3] = {
     {{ 0, 0, 0}, { 0, 0, 1}, { 0,-1, 0}},
     {{ 0, 0,-1}, { 0, 0, 0}, { 1, 0, 0}},
     {{ 0, 1, 0}, {-1, 0, 0}, { 0, 0, 0}}
 };
-
-/* Forward declaration of KO dissipation */
-extern void add_ko_dissipation(double ** restrict rhs,
-                               const double *const * restrict src,
-                               const grid_t *g, const sim_params_t *p,
-                               int i, int j, int k);
+#ifdef LATTICE_GPU
+#pragma omp end declare target
+#endif
 
 #ifdef LATTICE_GPU
 #pragma omp declare target
