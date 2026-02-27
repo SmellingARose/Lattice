@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lattice: GPU &amp; Optimization Research</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; background: #0d1117; color: #c9d1d9; line-height: 1.6; max-width: 980px; margin: 0 auto; padding: 24px 20px; }
+  h1 { font-size: 1.7em; color: #f0f6fc; margin-bottom: 4px; }
+  .subtitle { color: #8b949e; font-size: 0.95em; margin-bottom: 28px; }
+  h2 { font-size: 1.25em; margin: 36px 0 14px 0; padding-bottom: 6px; border-bottom: 1px solid #21262d; color: #f0f6fc; }
+  h3 { font-size: 1.05em; color: #d2a8ff; margin: 20px 0 8px 0; }
+  .card { background: #161b22; border: 1px solid #21262d; border-radius: 8px; padding: 16px 18px; margin-bottom: 14px; }
+  .card-title { font-size: 1.05em; font-weight: 600; color: #f0f6fc; margin-bottom: 8px; }
+  .tag { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 0.75em; font-weight: 600; margin-left: 8px; }
+  .tag-low { background: #23883050; color: #3fb950; border: 1px solid #23883080; }
+  .tag-med { background: #9e6a0050; color: #d29922; border: 1px solid #9e6a0080; }
+  .tag-high { background: #8b1d3250; color: #f47067; border: 1px solid #8b1d3280; }
+  .tag-best { background: #1f6feb50; color: #58a6ff; border: 1px solid #1f6feb80; }
+  .tag-bug { background: #da363450; color: #ff7b72; border: 1px solid #da363480; }
+  p, li { font-size: 0.9em; color: #b1bac4; }
+  ul { padding-left: 20px; margin: 6px 0; }
+  li { margin-bottom: 3px; }
+  pre { background: #0d1117; border: 1px solid #21262d; border-radius: 6px; padding: 10px 12px; overflow-x: auto; font-size: 0.8em; line-height: 1.45; color: #e6edf3; margin: 8px 0; }
+  code { font-family: 'SF Mono', 'Fira Code', monospace; }
+  .kw { color: #ff7b72; } .fn { color: #d2a8ff; } .cm { color: #8b949e; } .str { color: #a5d6ff; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 0.85em; }
+  th { text-align: left; padding: 6px 8px; border-bottom: 2px solid #30363d; color: #8b949e; font-size: 0.85em; }
+  td { padding: 5px 8px; border-bottom: 1px solid #21262d; }
+  .highlight { color: #58a6ff; }
+  .warn { color: #d29922; }
+  .good { color: #3fb950; }
+  .bad { color: #f47067; }
+  a { color: #58a6ff; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .toc { background: #161b22; border: 1px solid #21262d; border-radius: 8px; padding: 16px 18px; margin-bottom: 28px; }
+  .toc ul { list-style: none; padding-left: 0; }
+  .toc li { margin-bottom: 4px; }
+  .toc a { font-size: 0.9em; }
+  hr { border: none; border-top: 1px solid #21262d; margin: 36px 0; }
+</style>
+</head>
+<body>
+
+<h1>Lattice: GPU &amp; Optimization Research</h1>
+<p class="subtitle">Research summary &mdash; February 2026</p>
+
+<div class="toc">
+  <p style="color: #f0f6fc; font-weight: 600; margin-bottom: 8px;">Contents</p>
+  <ul>
+    <li><a href="#beat">1. How to Surpass Every Best-in-Field Metric</a></li>
+    <li><a href="#hip">2. HIP Backend Implementation Guide</a></li>
+    <li><a href="#fused">3. Fused RHS + Dissipation Analysis</a></li>
+    <li><a href="#timeline">4. Combined Timeline</a></li>
+  </ul>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="beat">1. How to Surpass Every Best-in-Field Metric</h2>
+<!-- ============================================================ -->
+
+<h3>1.1 Spatial Accuracy (beat NRPy's 8th-order)</h3>
+<div class="card">
+  <table>
+    <tr><th>Strategy</th><th>Gain</th><th>Effort</th></tr>
+    <tr><td>8th-order FD (same ghost width=4)</td><td class="good">10&ndash;100x smaller truncation error</td><td>Low &mdash; new stencil weights</td></tr>
+    <tr><td>DRP-optimized weights in wave zone</td><td class="good">3&ndash;5x better phase accuracy</td><td>Low &mdash; different constants in FD macros</td></tr>
+    <tr><td>Richardson extrapolation (3 resolutions)</td><td class="good">Effective 12th&ndash;14th order</td><td>Zero code &mdash; post-processing</td></tr>
+  </table>
+  <p>8th-order FD fits in our current ghost width of 4. Beyond 8th requires widening ghosts (diminishing returns for punctures due to limited regularity). The combination of 8th-order + DRP wave zone + Richardson would exceed anything published for FD NR codes.</p>
+</div>
+
+<h3>1.2 GPU Performance (beat AthenaK's 200x)</h3>
+<div class="card">
+  <table>
+    <tr><th>Strategy</th><th>Gain</th><th>Effort</th></tr>
+    <tr><td>Native HIP replacing OpenMP target</td><td class="good">2.5&ndash;3.5x</td><td>Medium</td></tr>
+    <tr><td>HIP Graphs for kernel sequencing</td><td class="good">3x small grids, 1.1x large</td><td>Medium</td></tr>
+    <tr><td>Persistent mega-kernel (full RK4 in one launch)</td><td class="good">1.5&ndash;2x</td><td>High</td></tr>
+    <tr><td>Warp-level stencil sharing</td><td class="good">1.3&ndash;1.8x</td><td>High</td></tr>
+    <tr><td>NVSHMEM multi-GPU ghost exchange</td><td class="good">1.5&ndash;2x at scale</td><td>Medium-high</td></tr>
+  </table>
+  <p>Our advantage: ~15K lines of C vs AthenaK's ~80K C++ with Kokkos overhead. Lean code = tighter register usage = higher occupancy. Target: <span class="highlight">500x over single CPU core</span>.</p>
+</div>
+
+<h3>1.3 Waveform Accuracy (match SpEC)</h3>
+<div class="card">
+  <table>
+    <tr><th>Strategy</th><th>Gain</th><th>Effort</th></tr>
+    <tr><td>Perturbative Hyperboloidal Extraction (PHE)</td><td class="good">Eliminates finite-radius error (~0.1&ndash;0.3 rad)</td><td>Low-medium (post-processing)</td></tr>
+    <tr><td>CCZ3 formulation for long runs</td><td class="good">Stable to 10<sup>5</sup> M (vs ~10<sup>3</sup> M for standard CCZ4)</td><td>Low &mdash; ~20 lines in ccz4_rhs_point</td></tr>
+    <tr><td>8th-order + Richardson</td><td class="good">Effective 12th-order phase convergence</td><td>Same as above</td></tr>
+  </table>
+  <p>PHE (arXiv:2508.05743) propagates &Psi;<sub>4</sub> from finite radius to null infinity via 1D RWZ evolution. Combined with 8th-order FD + Richardson, we'd hit ~0.01&ndash;0.05 rad phase accuracy, comparable to SpEC.</p>
+</div>
+
+<h3>1.4 Constraint Violations (beat NRPy's CAKO+CAHD)</h3>
+<div class="card">
+  <table>
+    <tr><th>Strategy</th><th>Gain</th><th>Effort</th></tr>
+    <tr><td>CAKO + CAHD + slow-start lapse (arXiv:2404.01137)</td><td class="good">2&ndash;5 orders of magnitude</td><td>Low &mdash; few lines each</td></tr>
+    <tr><td>8th-order FD</td><td class="good">1&ndash;2 additional orders</td><td>Low</td></tr>
+    <tr><td>CCZ3 for long-term stability</td><td class="good">Prevents secular growth</td><td>Low</td></tr>
+    <tr><td>Kahan summation in RK4 updates</td><td class="good">Eliminates round-off floor</td><td>Low &mdash; ~20 lines</td></tr>
+  </table>
+  <p>Key insight: CCZ4's constraint propagation is inherently better than BSSN (what NRPy uses). Adding CAKO+CAHD to CCZ4 with 8th-order FD should <em>exceed</em> NRPy's results because we propagate constraint violations as waves rather than merely damping them.</p>
+</div>
+
+<h3>1.5 N-body Scaling (beat GRChombo's 25 BHs)</h3>
+<div class="card">
+  <table>
+    <tr><th>Strategy</th><th>Target</th><th>Effort</th></tr>
+    <tr><td>Current AMR + subcycling</td><td class="highlight">N=100 on single H200</td><td>Test &amp; tune</td></tr>
+    <tr><td>FMM for initial data sources</td><td class="highlight">N=1000 setup cost</td><td>Medium</td></tr>
+    <tr><td>PN-NR hybrid</td><td class="highlight">N=1000+ evolution</td><td>High</td></tr>
+  </table>
+  <p>N=100 in full GR is feasible with our current architecture &mdash; estimated ~2 hours on H200. <strong>Nobody has done it.</strong> Just bumping MAX_PUNCTURES and running it would be a first.</p>
+</div>
+
+<h3>1.6 Novel Physics (things nobody has)</h3>
+<div class="card">
+  <table>
+    <tr><th>Capability</th><th>Effort</th><th>Novelty</th></tr>
+    <tr><td>Einstein-Maxwell-Dilaton (string theory BHs)</td><td>2&ndash;4 weeks</td><td class="highlight">First compact FD code with EMDA</td></tr>
+    <tr><td>EFT corrections to GR (quantum gravity)</td><td>2&ndash;3 weeks</td><td class="highlight">Only one ET thorn has done EdGB</td></tr>
+    <tr><td>Cosmological spacetimes (periodic BCs)</td><td>1&ndash;2 months</td><td class="highlight">GPU-accelerated cosmo NR</td></tr>
+    <tr><td>Boson stars (scalar field solitons)</td><td>3&ndash;4 weeks</td><td class="highlight">Mixed BH + boson star clusters</td></tr>
+  </table>
+</div>
+
+<h3>1.7 The 4&ndash;6 Week Path to Best-in-Field</h3>
+<div class="card">
+  <p style="color: #f0f6fc; margin-bottom: 8px;">Five items, each surpassing the current leader in its category:</p>
+  <ol style="padding-left: 20px;">
+    <li><strong>CAKO + CAHD + slow-start lapse</strong> (1&ndash;2 days) &rarr; best constraints</li>
+    <li><strong>8th-order FD option</strong> (2&ndash;3 days) &rarr; best FD accuracy</li>
+    <li><strong>CCZ3 formulation</strong> (1 day) &rarr; longest stable evolutions</li>
+    <li><strong>PHE waveform extraction</strong> (1&ndash;2 weeks) &rarr; SpEC-class waveforms</li>
+    <li><strong>N=100 BH demonstration</strong> (test existing AMR) &rarr; largest full-GR N-body</li>
+  </ol>
+</div>
+
+<hr>
+
+<!-- ============================================================ -->
+<h2 id="hip">2. HIP Backend Implementation Guide</h2>
+<!-- ============================================================ -->
+
+<h3>2.1 Why HIP Covers Everything</h3>
+<div class="card">
+  <p>No need for separate CUDA and HIP backends. HIP covers both vendors:</p>
+  <ul>
+    <li><code>BACKEND=hip HIP_PLATFORM=amd</code> &rarr; hipcc calls amdclang++ &rarr; AMD GPUs</li>
+    <li><code>BACKEND=hip HIP_PLATFORM=nvidia</code> &rarr; hipcc calls nvcc &rarr; NVIDIA GPUs</li>
+  </ul>
+  <p>One backend, both vendors. <span class="good">Zero performance overhead on NVIDIA</span> (HIP&rarr;CUDA translation is compile-time).</p>
+</div>
+
+<h3>2.2 Architecture: Unity Build</h3>
+<div class="card">
+  <p>The key insight: <code>backend_hip.cpp</code> <code>#include</code>s our physics <code>.c</code> files inside <code>extern "C" {}</code>. hipcc compiles everything as C++. Our C17 code is compatible. <strong>Zero changes to existing physics files.</strong></p>
+<pre><code><span class="cm">// backend_hip.cpp</span>
+<span class="kw">#include</span> <span class="str">&lt;hip/hip_runtime.h&gt;</span>
+<span class="kw">extern</span> <span class="str">"C"</span> {
+<span class="kw">#include</span> <span class="str">"../evolution/ccz4_rhs.c"</span>
+<span class="kw">#include</span> <span class="str">"../evolution/maxwell_rhs.c"</span>
+<span class="kw">#include</span> <span class="str">"../evolution/dissipation.c"</span>
+<span class="kw">#include</span> <span class="str">"../boundary/sommerfeld.c"</span>
+<span class="kw">#include</span> <span class="str">"../amr/restriction.c"</span>
+<span class="kw">#include</span> <span class="str">"../amr/prolongation.c"</span>
+<span class="kw">#include</span> <span class="str">"../amr/block.c"</span>
+}
+<span class="cm">// ... __global__ kernel definitions + backend_* implementations</span></code></pre>
+</div>
+
+<h3>2.3 Files Changed</h3>
+<div class="card">
+  <table>
+    <tr><th>File</th><th>Change</th></tr>
+    <tr><td><code class="good">NEW src/backend/backend_hip.cpp</code></td><td>~1200&ndash;1500 lines: 12 <code>__global__</code> kernels + 13 backend functions</td></tr>
+    <tr><td><code class="good">NEW src/backend/hip_device_ptrs.h</code></td><td>~30 lines: device pointer tracking struct</td></tr>
+    <tr><td><code>src/amr/meshblock_pack.h</code></td><td>+10 lines: <code>#ifdef LATTICE_HIP</code> device pointer field</td></tr>
+    <tr><td><code>Makefile</code></td><td>+50 lines: <code>BACKEND=hip</code> rules</td></tr>
+    <tr><td>Everything else</td><td class="good">Unchanged</td></tr>
+  </table>
+</div>
+
+<h3>2.4 Key Differences from OpenMP Target</h3>
+<div class="card">
+  <table>
+    <tr><th>Aspect</th><th>OpenMP target</th><th>HIP</th></tr>
+    <tr><td>Data mapping</td><td>Implicit (<code>map(to:)</code>)</td><td>Explicit (<code>hipMalloc</code> + <code>hipMemcpy</code>)</td></tr>
+    <tr><td>Device pointers</td><td>Runtime tracks by host address</td><td>You track in <code>hip_pack_device_t</code> struct</td></tr>
+    <tr><td>Kernel launch</td><td><code>#pragma omp target teams distribute parallel for</code></td><td><code>kernel&lt;&lt;&lt;grid, block&gt;&gt;&gt;(args)</code></td></tr>
+    <tr><td>Occupancy control</td><td>None</td><td><code>__launch_bounds__(128, 4)</code></td></tr>
+    <tr><td>Constant memory</td><td>Global memory</td><td><code>__constant__</code> (L1 cache residency)</td></tr>
+    <tr><td>Launch overhead</td><td class="bad">~100+ &mu;s (creates/destroys CUDA streams)</td><td class="good">~5&ndash;10 &mu;s</td></tr>
+  </table>
+</div>
+
+<h3>2.5 Expected Performance Gain</h3>
+<div class="card">
+  <table>
+    <tr><th>Component</th><th>Speedup over OpenMP target</th></tr>
+    <tr><td>RHS kernel (compute-bound)</td><td class="good">10&ndash;30% (better occupancy tuning)</td></tr>
+    <tr><td>Simple buffer ops (zero/copy/axpy)</td><td class="good">2&ndash;5x (launch overhead dominates)</td></tr>
+    <tr><td>Ghost exchange (7 kernels)</td><td class="good">2&ndash;3x (7 launches &times; overhead savings)</td></tr>
+    <tr><td>Full RK4 step</td><td class="good">20&ndash;50%</td></tr>
+    <tr><td>+ HIP Graphs (uniform mesh)</td><td class="good">+10&ndash;20% more</td></tr>
+  </table>
+</div>
+
+<h3>2.6 RHS Kernel: The Hard Part</h3>
+<div class="card">
+  <p>The <code>ccz4_rhs_point</code> function uses ~5.3 KB stack per thread (derivative tensors, Christoffel symbols, Ricci tensor locals from 5 inlined sub-functions). This requires:</p>
+  <ul>
+    <li><code>__launch_bounds__(128, 4)</code> &mdash; limits occupancy to allow large stack</li>
+    <li>Block size of 128 threads (not 256 or 512)</li>
+    <li>At most 4 blocks per SM to keep stack within limits</li>
+  </ul>
+  <p>The unity build approach means <code>ccz4_rhs_point</code> and all its sub-functions are visible in the same translation unit &mdash; the compiler can inline and optimize register usage across the entire call chain.</p>
+</div>
+
+<h3>2.7 Implementation Timeline</h3>
+<div class="card">
+  <table>
+    <tr><th>Phase</th><th>Days</th><th>What</th></tr>
+    <tr><td>Scaffolding + data management</td><td>2&ndash;3</td><td>Get it compiling, map/unmap working</td></tr>
+    <tr><td>Simple kernels</td><td>1</td><td>zero, copy, axpy &mdash; validate with test_flat</td></tr>
+    <tr><td>RHS kernel</td><td>2&ndash;3</td><td>The hard part &mdash; device compilation of ccz4_rhs_point</td></tr>
+    <tr><td>Ghost exchange (7 sub-kernels)</td><td>2&ndash;3</td><td>Validate with test_amr_ghost</td></tr>
+    <tr><td>Sommerfeld + algebraic</td><td>1</td><td>Complete the backend</td></tr>
+    <tr><td>Integration testing</td><td>2&ndash;3</td><td>Full test suite</td></tr>
+    <tr><td>Performance tuning</td><td>2&ndash;3</td><td>launch_bounds, block sizes, HIP graphs</td></tr>
+  </table>
+  <p style="margin-top: 8px;"><strong>Total: 10&ndash;16 working days</strong></p>
+</div>
+
+<hr>
+
+<!-- ============================================================ -->
+<h2 id="fused">3. Fused RHS + Dissipation Analysis</h2>
+<!-- ============================================================ -->
+
+<h3>3.1 Surprise: Dissipation is Already Fused</h3>
+<div class="card">
+  <p><code>add_ko_dissipation</code> is called at line 590 inside <code>ccz4_rhs_point</code> &mdash; not as a separate kernel launch. Both RHS and KO happen for the same point in the same function call. There is no separate pass at the backend level.</p>
+  <p>The real optimization is reducing <strong>redundant memory loads</strong> within the per-point computation.</p>
+</div>
+
+<h3>3.2 The Real Opportunity: Fused Stencil Loaders</h3>
+<div class="card">
+  <p>Currently, three separate loops over 3 spatial directions each load from the same stencil neighborhood:</p>
+  <table>
+    <tr><th>Loop</th><th>Function</th><th>Loads per field per direction</th></tr>
+    <tr><td>1. First/second derivatives</td><td><code>fd_d1_d2</code></td><td>7 points</td></tr>
+    <tr><td>2. Advection</td><td><code>fd_adv_up / fd_adv_down</code></td><td>7 points</td></tr>
+    <tr><td>3. KO dissipation</td><td><code>add_ko_dissipation</code></td><td>9 points</td></tr>
+  </table>
+  <p style="margin-top: 8px;">All three reach into the same <code>{-4s, ..., +4s}</code> stencil neighborhood. Merging into a single 9-point load:</p>
+  <table>
+    <tr><th></th><th>Loads per field per direction</th></tr>
+    <tr><td>Current (three passes)</td><td class="bad">7 + 7 + 9 = 23</td></tr>
+    <tr><td>Fused (one pass)</td><td class="good">9</td></tr>
+    <tr><td>Savings</td><td class="highlight">14 loads &times; 25 fields &times; 3 dirs = 1050 loads/point</td></tr>
+  </table>
+</div>
+
+<h3>3.3 EM KO Dissipation Bug <span class="tag tag-bug">BUG</span></h3>
+<div class="card">
+  <p><strong>Latent bug discovered:</strong> <code>ccz4_rhs_point</code> applies KO dissipation to all 31 fields (including EM fields 25&ndash;30), but then <code>maxwell_rhs_point</code> <strong>overwrites</strong> EM RHS fields, discarding their KO dissipation.</p>
+  <p class="bad"><strong>Result:</strong> EM fields run without dissipation in coupled runs.</p>
+  <p><strong>Fix:</strong> Move KO call after Maxwell RHS stores, or accumulate KO separately and apply last.</p>
+</div>
+
+<h3>3.4 Performance Estimate</h3>
+<div class="card">
+  <table>
+    <tr><th>Platform</th><th>Expected Speedup</th><th>Why</th></tr>
+    <tr><td>GPU</td><td class="warn">0&ndash;5%</td><td>RHS is compute-bound; memory loads hidden by compute latency</td></tr>
+    <tr><td>CPU</td><td class="good">3&ndash;8%</td><td>Closer to memory-bound; savings more visible</td></tr>
+  </table>
+</div>
+
+<h3>3.5 Implementation Plan</h3>
+<div class="card">
+  <table>
+    <tr><th>Phase</th><th>What</th><th>Effort</th></tr>
+    <tr><td>1. Fix EM KO bug</td><td>Move KO call after Maxwell RHS stores</td><td>Small</td></tr>
+    <tr><td>2. Merge Phase 1 loops</td><td>Combine d1/d2 + advection into one direction loop</td><td>Medium</td></tr>
+    <tr><td>3. Fused stencil functions</td><td>New <code>fd_d1_d2_adv_ko()</code> in finite_diff.h</td><td>Medium</td></tr>
+    <tr><td>4. Precomputed KO sums</td><td>Add <code>ko_sum[25]</code> to ccz4_rhs_point, apply after RHS stores</td><td>Medium</td></tr>
+  </table>
+  <p style="margin-top: 8px;">Files to change: <code>finite_diff.h</code>, <code>ccz4_rhs.c</code>, <code>dissipation.c</code>, <code>maxwell_rhs.c</code>.</p>
+</div>
+
+<h3>3.6 Async Ghost Exchange: Not Worth It Yet</h3>
+<div class="card">
+  <p>For N=16 blocks, only <span class="bad">12.5%</span> of points are truly interior (stencil doesn't touch ghost zones). Overlap of ghost exchange with interior compute only helps if there's enough interior work to hide the communication:</p>
+  <table>
+    <tr><th>Block size</th><th>Interior fraction</th><th>Verdict</th></tr>
+    <tr><td>N=16</td><td class="bad">12.5%</td><td>Not worth it</td></tr>
+    <tr><td>N=32</td><td class="warn">42%</td><td>Marginal</td></tr>
+    <tr><td>N=64</td><td class="good">67%</td><td>Worth it</td></tr>
+  </table>
+  <p style="margin-top: 8px;">Deferred until block sizes increase. Also requires advanced OpenMP <code>nowait</code>+<code>depend</code> features that are fragile in GCC.</p>
+</div>
+
+<hr>
+
+<!-- ============================================================ -->
+<h2 id="timeline">4. Combined Roadmap</h2>
+<!-- ============================================================ -->
+
+<div class="card">
+  <p style="color: #f0f6fc; font-weight: 600; margin-bottom: 10px;">Priority order for maximum impact:</p>
+  <table>
+    <tr><th>#</th><th>Item</th><th>Time</th><th>Impact</th></tr>
+    <tr><td>1</td><td>Fix EM KO bug</td><td>1 day</td><td class="bad">Bug fix (EM fields have no dissipation)</td></tr>
+    <tr><td>2</td><td>CAKO + CAHD + slow-start lapse</td><td>1&ndash;2 days</td><td class="good">2&ndash;5 orders better constraints</td></tr>
+    <tr><td>3</td><td>8th-order FD option</td><td>2&ndash;3 days</td><td class="good">10&ndash;100x smaller truncation error</td></tr>
+    <tr><td>4</td><td>CCZ3 formulation</td><td>1 day</td><td class="good">Stable to 10<sup>5</sup> M</td></tr>
+    <tr><td>5</td><td>Fused stencil loaders</td><td>3&ndash;5 days</td><td class="warn">3&ndash;8% CPU speedup</td></tr>
+    <tr><td>6</td><td>HIP backend</td><td>10&ndash;16 days</td><td class="good">20&ndash;50% faster than OpenMP target GPU</td></tr>
+    <tr><td>7</td><td>PHE waveform extraction</td><td>1&ndash;2 weeks</td><td class="good">SpEC-class waveform accuracy</td></tr>
+    <tr><td>8</td><td>N=100 BH demo</td><td>Test &amp; tune</td><td class="highlight">First-ever full-GR 100-body simulation</td></tr>
+  </table>
+</div>
+
+<p style="color: #8b949e; font-size: 0.8em; margin-top: 36px; text-align: center;">Lattice &mdash; 3D Numerical Relativity Simulator</p>
+
+</body>
+</html>
