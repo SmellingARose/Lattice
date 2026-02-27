@@ -53,6 +53,9 @@
     <li><a href="#hip">2. HIP Backend Implementation Guide</a></li>
     <li><a href="#fused">3. Fused RHS + Dissipation Analysis</a></li>
     <li><a href="#timeline">4. Combined Timeline</a></li>
+    <li><a href="#detectors">5. Next-Gen Detector Accuracy Requirements</a></li>
+    <li><a href="#chain">6. AMR-CCZ4 Chain Audit for CCE</a></li>
+    <li><a href="#cce-roadmap">7. CCE Readiness Roadmap</a></li>
   </ul>
 </div>
 
@@ -327,6 +330,248 @@
     <tr><td>8</td><td>N=100 BH demo</td><td>Test &amp; tune</td><td class="highlight">First-ever full-GR 100-body simulation</td></tr>
   </table>
 </div>
+
+<hr>
+
+<!-- ============================================================ -->
+<h2 id="detectors">5. Next-Gen Detector Accuracy Requirements</h2>
+<!-- ============================================================ -->
+
+<h3>5.1 Detector Summary</h3>
+<div class="card">
+  <p>The indistinguishability criterion: a waveform template is adequate if <code>mismatch &lt; D / (2 * SNR&sup2;)</code> where D is the number of intrinsic parameters (~8 for BBH). Higher SNR = tighter accuracy.</p>
+  <table>
+    <tr><th>Detector</th><th>Era</th><th>Max SNR</th><th>Phase Accuracy</th><th>Mismatch Target</th><th>GW Cycles in Band</th></tr>
+    <tr><td>LIGO A+ / A#</td><td>2025&ndash;2030</td><td>~100</td><td class="good">~0.1 rad</td><td>~10<sup>-3</sup></td><td>10&ndash;64</td></tr>
+    <tr><td>Einstein Telescope</td><td>~2035</td><td>~1,000</td><td class="warn">~0.01 rad</td><td>~10<sup>-5</sup> to 10<sup>-6</sup></td><td>~1,025 (from 2 Hz)</td></tr>
+    <tr><td>Cosmic Explorer</td><td>~2035</td><td>~3,000</td><td class="warn">~0.01 rad</td><td>~10<sup>-5</sup> to 10<sup>-6</sup></td><td>~217 (from 5 Hz)</td></tr>
+    <tr><td>LISA</td><td>~2035</td><td>~10,000</td><td class="bad">~0.01 rad (merger)</td><td>~10<sup>-3</sup> (NR part)</td><td>Millions (inspiral by PN/EOB)</td></tr>
+    <tr><td>DECIGO / BBO</td><td>~2040s</td><td>Very high</td><td class="bad">&lt;0.01 rad</td><td>~10<sup>-5</sup></td><td>Thousands</td></tr>
+  </table>
+  <p style="margin-top: 8px;">Key finding: current NR waveform catalogs are "inadequate" for ET/CE loud events (<a href="https://arxiv.org/abs/2312.10241">arXiv:2312.10241</a>, <a href="https://arxiv.org/abs/1912.10055">arXiv:1912.10055</a>). 3G detectors need 3 orders of magnitude improvement in mismatch.</p>
+</div>
+
+<h3>5.2 Lattice's Current Status vs Requirements</h3>
+<div class="card">
+  <table>
+    <tr><th>Capability</th><th>Lattice Status</th><th>3G Requirement</th><th>Gap?</th></tr>
+    <tr><td>FD order</td><td class="good">6th (measured ~6.5)</td><td>4th minimum, 6th preferred</td><td class="good">No gap</td></tr>
+    <tr><td>Convergence order</td><td class="good">~6.5 (verified)</td><td>&ge; 4th</td><td class="good">Exceeds</td></tr>
+    <tr><td>CCZ4 constraint damping</td><td class="good">kappa1=0.1</td><td>Yes, essential</td><td class="good">Adequate</td></tr>
+    <tr><td>KO dissipation</td><td class="good">6th order + CAKO</td><td>Per-field sigma</td><td class="good">Implemented</td></tr>
+    <tr><td>AMR prolongation</td><td class="good">6th order Lagrange</td><td>5th&ndash;6th typical</td><td class="good">Matches best</td></tr>
+    <tr><td>AMR restriction</td><td class="good">6th order Lagrange</td><td>0th&ndash;6th</td><td class="good">Exceeds most</td></tr>
+    <tr><td>Initial data solver</td><td class="good">FAS multigrid, discretization accuracy</td><td>Yes</td><td class="good">Adequate</td></tr>
+    <tr><td>Time integration</td><td class="good">RK4 (4th order)</td><td>4th order standard</td><td class="good">Matches</td></tr>
+    <tr><td>&Psi;<sub>4</sub> extraction</td><td class="bad">Not implemented</td><td>Needed</td><td class="bad">Critical gap</td></tr>
+    <tr><td>Binary inspiral</td><td class="bad">Failed convergence (0.30)</td><td>Must succeed with AMR</td><td class="bad">Needs resolution</td></tr>
+  </table>
+  <p style="margin-top: 8px;">The mathematical infrastructure is competitive with production codes. The gaps are <strong>implementation completeness</strong>, not numerical accuracy.</p>
+</div>
+
+<h3>5.3 Detector Readiness Verdict</h3>
+<div class="card">
+  <table>
+    <tr><th>Detector</th><th>Ready?</th><th>What's Needed</th></tr>
+    <tr><td>LIGO A+ / A#</td><td class="good">YES (once Psi4 + inspiral work)</td><td>6th-order scheme easily meets requirements at moderate resolution</td></tr>
+    <tr><td>Einstein Telescope</td><td class="warn">LIKELY YES with improvements</td><td>CAKO+CAHD + Richardson extrapolation + PHE extraction</td></tr>
+    <tr><td>Cosmic Explorer</td><td class="warn">LIKELY YES with improvements</td><td>Same as ET; sufficient AMR resolution is the compute challenge</td></tr>
+    <tr><td>LISA</td><td class="warn">PARTIALLY</td><td>NR only covers merger/ringdown; needs CCZ3 for long runs + PHE</td></tr>
+    <tr><td>DECIGO / BBO</td><td class="warn">SAME as ET/CE</td><td>Plus CCZ3 for longer-duration runs</td></tr>
+  </table>
+  <p style="margin-top: 8px;">With planned improvements (8th-order FD + CAKO+CAHD + Richardson + PHE), Lattice can produce mismatch &lt; 10<sup>-5</sup> waveforms. The primary gap is <span class="bad">~2&ndash;4 months of implementation work</span>, not fundamental limitations.</p>
+</div>
+
+<hr>
+
+<!-- ============================================================ -->
+<h2 id="chain">6. AMR-CCZ4 Chain Audit for CCE</h2>
+<!-- ============================================================ -->
+
+<p style="margin-bottom: 16px;">CCE (Cauchy-Characteristic Evolution) takes Cauchy data on a worldtube and evolves it on null hypersurfaces to future null infinity (scri+), producing exact asymptotic waveforms. This audit checks every link in Lattice's chain for CCE-quality data.</p>
+
+<h3>6.1 Link 1: Initial Data Solver <span class="tag tag-low">PASS</span></h3>
+<div class="card">
+  <p><strong>Implementation:</strong> FAS multigrid with FMG + Newton-Gauss-Seidel, 8-color ordering. Solves to discretization accuracy O(dx<sup>4</sup>&ndash;dx<sup>6</sup>). FMG achieves this in ~1.14 V-cycles.</p>
+  <p><strong>Key strength:</strong> Solver operates directly on AMR evolution mesh (no interpolation). Documented as 218,000x better near-field constraint quality vs copy approach.</p>
+  <p><strong>CCE verdict:</strong> Initial constraint residual is at or below evolution truncation error. Will not pollute the evolution. Level-boundary restriction/prolongation errors are O(dx<sup>6</sup>), matching the FD scheme.</p>
+</div>
+
+<h3>6.2 Link 2: AMR Prolongation (Coarse &rarr; Fine) <span class="tag tag-low">PASS</span></h3>
+<div class="card">
+  <p><strong>Implementation:</strong> 6th-order cell-centered Lagrange via 7&times;7&times;7 tensor-product stencil. Weights derived via SymPy, verified bit-exact.</p>
+  <table>
+    <tr><th>Code</th><th>Prolongation Order</th></tr>
+    <tr><td class="highlight">Lattice</td><td class="good">6th order</td></tr>
+    <tr><td>GRChombo</td><td>4th order (Chombo default)</td></tr>
+    <tr><td>AthenaK</td><td>5th order (N_ghost + 1)</td></tr>
+    <tr><td>BAM</td><td>4th&ndash;6th order</td></tr>
+  </table>
+  <p style="margin-top: 8px;"><strong>CCE verdict:</strong> Matches or exceeds all major FD production codes. At the CCE worldtube radius (100M+), refinement boundary errors are negligible if the extraction sphere doesn't coincide with a level boundary.</p>
+</div>
+
+<h3>6.3 Link 3: AMR Restriction (Fine &rarr; Coarse) <span class="tag tag-low">PASS</span></h3>
+<div class="card">
+  <p><strong>Implementation:</strong> 6th-order cell-average restriction, 6<sup>3</sup>=216 fine cells per coarse cell. Exact for polynomials through degree 5.</p>
+  <p><strong>Noise concern:</strong> Slightly negative outer weights (-17/11520) are not monotonicity-preserving but this only matters for sharp features. In the wave zone (where the CCE worldtube sits), fields are smooth.</p>
+  <p><strong>Key design strength:</strong> Matching prolongation/restriction orders (both 6th) prevents the "order mismatch" artifacts documented in ExaGRyPE (<a href="https://arxiv.org/abs/2504.15814">arXiv:2504.15814</a>).</p>
+</div>
+
+<h3>6.4 Link 4: Ghost Exchange <span class="tag tag-low">PASS</span></h3>
+<div class="card">
+  <p><strong>Implementation:</strong> Multi-phase AthenaK-style coarse-buffer architecture: same-level exchange &rarr; restriction &rarr; coarse_buf ghost fill &rarr; boundary extrapolation &rarr; prolongation.</p>
+  <p><strong>Order-of-operations:</strong> Carefully sequenced &mdash; all restrictions complete before coarse_buf exchange, all ghosts filled before prolongation. Same-level exchange is exact copy (zero error). Cross-level is 6th-order.</p>
+  <p><strong>Minor weakness:</strong> Quadratic (3-point, O(dx<sup>2</sup>)) extrapolation for domain boundary ghost cells in coarse_bufs. Only affects blocks at the outer boundary, not the extraction region.</p>
+</div>
+
+<h3>6.5 Link 5: CCZ4 RHS + Dissipation <span class="tag tag-low">PASS</span> <span class="tag tag-med">+CAHD recommended</span></h3>
+<div class="card">
+  <p><strong>Implementation:</strong> 5 static inline sub-functions with scoped lifetimes. 6th-order KO with CAKO (sigma_eff = W * sigma_base). Per-field sigma (0.99 gauge, 0.3 physical).</p>
+  <p><strong>Wave-zone dissipation check:</strong> For a GW with N_lambda = lambda/dx = 20 grid points per wavelength:</p>
+  <pre>KO dissipation per crossing ~ sigma * (pi/N_lambda)^6 ~ 10^-8</pre>
+  <p>This is negligible. For marginal resolution (N_lambda=10): ~10<sup>-5</sup>, still acceptable.</p>
+  <p><strong>Recommended improvement:</strong> CAHD (Coarse-grid-Adjusted Hamiltonian Damping, C=0.15) would reduce extraction-zone Hamiltonian violations by ~5 orders of magnitude. Not a blocker, but significant quality improvement.</p>
+</div>
+
+<h3>6.6 Link 6: Sommerfeld Boundary Conditions <span class="tag tag-high">WEAK LINK</span></h3>
+<div class="card">
+  <p><strong>Implementation:</strong> 4th-order Sommerfeld radiative BCs with 5 adaptive stencil variants.</p>
+  <p class="bad"><strong>This is the weakest link in the chain for CCE.</strong></p>
+  <ul>
+    <li><strong>Reflection coefficient:</strong> Decays as (k&middot;R_boundary)<sup>-4</sup>. At R=500M with GW wavelength ~100M, reflections are ~10<sup>-4</sup> to 10<sup>-6</sup> of incident amplitude.</li>
+    <li><strong>CCE worldtube interaction:</strong> Reflected waves arrive at worldtube (R_wt=100M) after t ~ 2&times;(R_boundary - R_wt). For R_boundary=500M, this is t ~ 800M. For a ~1000M merger simulation, this is <span class="warn">marginal</span>.</li>
+    <li><strong>Production comparison:</strong> SpEC uses R &ge; 800M with higher-order absorbing BCs (HOBC). Recent <a href="https://arxiv.org/abs/2402.12544">arXiv:2402.12544</a> shows HOBC gives "impressively lower errors."</li>
+  </ul>
+  <p style="margin-top: 8px;"><strong>Mitigations:</strong></p>
+  <ol style="padding-left: 20px;">
+    <li>Outer boundary at R &ge; 800M (larger domain)</li>
+    <li>CCE worldtube at R ~ 100&ndash;200M (far from boundary)</li>
+    <li>Implement HOBC (higher-order absorbing boundary conditions)</li>
+    <li>Or use PHE instead of CCE (less sensitive to boundary reflections)</li>
+  </ol>
+</div>
+
+<h3>6.7 Link 7: Waveform Extraction <span class="tag tag-bug">CRITICAL GAP</span></h3>
+<div class="card">
+  <p class="bad"><strong>&Psi;<sub>4</sub> extraction is not yet implemented.</strong> No waveform extraction of any kind exists. This is the most urgent development need.</p>
+  <p style="margin-top: 8px;"><strong>For CCE worldtube output, Lattice needs:</strong></p>
+  <ol style="padding-left: 20px;">
+    <li>Full spatial metric &gamma;<sub>ij</sub> (available: h_ij &times; chi<sup>-1</sup>)</li>
+    <li>Extrinsic curvature K<sub>ij</sub> (available: A_ij + (1/3)K&gamma;_ij)</li>
+    <li>Lapse &alpha; and shift &beta;<sup>i</sup> (available: evolved fields)</li>
+    <li>Spatial derivatives of all above on extraction sphere</li>
+    <li>Interpolation onto coordinate sphere (existing 4th-order Lagrange is adequate)</li>
+    <li>Spin-weighted spherical harmonic decomposition</li>
+    <li>Conversion to Bondi-Sachs variables (or use SpECTRE's <code>PreprocessCceWorldtube</code>)</li>
+    <li>H5 output in SpECTRE CCE format (9 datasets: Beta, DrJ, DuR, H, J, Q, R, U, W)</li>
+  </ol>
+  <p style="margin-top: 8px;"><strong>PHE alternative:</strong> PHE only needs &Psi;<sub>4</sub> at finite radius (no full metric). Once &Psi;<sub>4</sub> extraction exists, PHE is simpler than CCE coupling and achieves &lt; 0.05 rad phase difference from CCE.</p>
+  <p style="margin-top: 8px;"><strong>Estimated effort:</strong> &Psi;<sub>4</sub> extraction: 2&ndash;4 weeks. Full worldtube output for SpECTRE CCE: 4&ndash;6 weeks additional.</p>
+</div>
+
+<h3>6.8 Link 8: Time Integration (RK4 + Subcycling) <span class="tag tag-low">PASS</span></h3>
+<div class="card">
+  <p><strong>Implementation:</strong> Classic RK4 (4th-order) with Berger-Oliger subcycling and quartic temporal interpolation at level boundaries.</p>
+  <p><strong>Is RK4 sufficient?</strong> Yes. Overall convergence = min(spatial, temporal) = min(6, 4) = 4. At typical CFL numbers (dt ~ 0.25dx), the 4th-order temporal error coefficient is much smaller than the 6th-order spatial error coefficient. AthenaK also uses RK4 + 6th-order spatial and reports 4th-order waveform convergence.</p>
+  <p><strong>Subcycling temporal interpolation:</strong> 4th-order quartic (5 constraints). Matches the RK4 time integration order. Same approach as Athena++ and GRChombo.</p>
+</div>
+
+<h3>6.9 Chain Audit Summary</h3>
+<div class="card">
+  <table>
+    <tr><th>Link</th><th>Component</th><th>Order</th><th>CCE-Ready?</th><th>Weakest?</th></tr>
+    <tr><td>1</td><td>Initial data solver</td><td>O(dx<sup>4</sup>&ndash;dx<sup>6</sup>)</td><td class="good">YES</td><td></td></tr>
+    <tr><td>2</td><td>AMR prolongation</td><td>6th order</td><td class="good">YES</td><td></td></tr>
+    <tr><td>3</td><td>AMR restriction</td><td>6th order</td><td class="good">YES</td><td></td></tr>
+    <tr><td>4</td><td>Ghost exchange</td><td>6th (2nd at boundary)</td><td class="good">YES</td><td>Minor</td></tr>
+    <tr><td>5</td><td>CCZ4 RHS + dissipation</td><td>6th + CAKO</td><td class="good">YES (add CAHD)</td><td></td></tr>
+    <tr><td>6</td><td>Sommerfeld BCs</td><td class="warn">4th order</td><td class="warn">WEAK LINK</td><td class="bad">YES</td></tr>
+    <tr><td>7</td><td>&Psi;<sub>4</sub> / worldtube extraction</td><td class="bad">NOT IMPLEMENTED</td><td class="bad">NO</td><td class="bad">CRITICAL</td></tr>
+    <tr><td>8</td><td>Time integration</td><td>4th order RK4</td><td class="good">YES</td><td></td></tr>
+  </table>
+</div>
+
+<h3>6.10 Existing FD + CCE Implementations</h3>
+<div class="card">
+  <p>FD + CCE coupling is <strong>established practice</strong>:</p>
+  <ul>
+    <li><strong>SpECTRE</strong> (SXS): Native CCE, spectral Cauchy solver. Gold standard.</li>
+    <li><strong>Einstein Toolkit</strong> (Cactus/Carpet): <code>CCE_Export</code> thorn (May 2025) &rarr; SpECTRE CCE. FD-based Cauchy.</li>
+    <li><strong>BAM</strong> (Brugmann et al.): Has used PITTNull for CCE. FD-based.</li>
+    <li><strong>GR-Athena++/AthenaK</strong>: CCE coupling in development (2024).</li>
+  </ul>
+  <p style="margin-top: 8px;">The worldtube data format is well-documented. SpECTRE provides <code>PreprocessCceWorldtube</code> for conversion from 3+1 Cauchy data to Bondi-Sachs variables.</p>
+</div>
+
+<hr>
+
+<!-- ============================================================ -->
+<h2 id="cce-roadmap">7. CCE Readiness Roadmap</h2>
+<!-- ============================================================ -->
+
+<div class="card">
+  <p style="color: #f0f6fc; font-weight: 600; margin-bottom: 10px;">Immediate (1&ndash;2 months)</p>
+  <table>
+    <tr><th>#</th><th>Item</th><th>Impact</th></tr>
+    <tr><td>1</td><td>Implement &Psi;<sub>4</sub> extraction at finite radius</td><td class="bad">Critical &mdash; no waveforms without this</td></tr>
+    <tr><td>2</td><td>Fix binary inspiral convergence (AMR resolution tuning)</td><td class="bad">Critical &mdash; can't quote any accuracy number</td></tr>
+    <tr><td>3</td><td>Validate waveform phase with Richardson extrapolation</td><td class="good">Standard technique for catalog-quality waveforms</td></tr>
+  </table>
+</div>
+
+<div class="card">
+  <p style="color: #f0f6fc; font-weight: 600; margin-bottom: 10px;">Short-term (2&ndash;4 months)</p>
+  <table>
+    <tr><th>#</th><th>Item</th><th>Impact</th></tr>
+    <tr><td>4</td><td>Implement PHE (Perturbative Hyperboloidal Extraction)</td><td class="good">&lt; 0.05 rad phase difference from CCE, simpler to implement</td></tr>
+    <tr><td>5</td><td>Implement CAHD for extraction-zone constraint quality</td><td class="good">~5 orders of magnitude improvement</td></tr>
+    <tr><td>6</td><td>Move outer boundary to R &ge; 500M for production runs</td><td class="warn">Reduces Sommerfeld reflections</td></tr>
+  </table>
+</div>
+
+<div class="card">
+  <p style="color: #f0f6fc; font-weight: 600; margin-bottom: 10px;">Medium-term (4&ndash;8 months)</p>
+  <table>
+    <tr><th>#</th><th>Item</th><th>Impact</th></tr>
+    <tr><td>7</td><td>Worldtube data output (4-metric on coordinate sphere + spherical harmonic decomposition)</td><td class="good">Enables SpECTRE CCE coupling</td></tr>
+    <tr><td>8</td><td>Test with SpECTRE CCE via <code>PreprocessCceWorldtube</code></td><td class="highlight">Gold-standard waveforms at null infinity</td></tr>
+    <tr><td>9</td><td>Implement HOBC (higher-order absorbing BCs)</td><td class="good">Replaces Sommerfeld, eliminates weakest link</td></tr>
+    <tr><td>10</td><td>CCZ3 formulation for long-duration stability</td><td class="good">Stable to 10<sup>5</sup> M</td></tr>
+  </table>
+</div>
+
+<div class="card">
+  <p style="color: #f0f6fc; font-weight: 600; margin-bottom: 10px;">Long-term (6&ndash;12 months)</p>
+  <table>
+    <tr><th>#</th><th>Item</th><th>Impact</th></tr>
+    <tr><td>11</td><td>Richardson extrapolation pipeline (3 resolutions, automated)</td><td class="good">Effective 12th&ndash;14th order accuracy</td></tr>
+    <tr><td>12</td><td>Waveform catalog production capability</td><td class="highlight">Publishable NR waveforms</td></tr>
+    <tr><td>13</td><td>Validation against SXS catalog waveforms</td><td class="highlight">Community acceptance</td></tr>
+  </table>
+</div>
+
+<div class="card" style="border-color: #1f6feb;">
+  <p style="color: #f0f6fc; font-weight: 600; margin-bottom: 8px;">Bottom Line</p>
+  <p>Lattice's numerical infrastructure (6th-order FD, matched prolongation/restriction, FAS multigrid, CAKO dissipation) is <span class="good">at or above state of the art</span> for finite-difference NR codes. The measured convergence order of ~6.5 exceeds what most production codes achieve.</p>
+  <p style="margin-top: 8px;">The gaps are <strong>implementation completeness</strong>, not mathematical accuracy: no &Psi;<sub>4</sub> extraction, binary inspiral not yet converging, no CCE/PHE pipeline. The pragmatic path is: <span class="highlight">&Psi;<sub>4</sub> first &rarr; PHE &rarr; CCE worldtube output</span>.</p>
+  <p style="margin-top: 8px;">Closing the gaps to CCE-quality waveform production: <strong>~6&ndash;8 months</strong> focused development. First &Psi;<sub>4</sub> waveforms: <strong>4&ndash;6 weeks</strong>. PHE waveforms at null infinity: <strong>3&ndash;4 months</strong>.</p>
+</div>
+
+<hr>
+
+<p style="color: #8b949e; font-size: 0.75em; margin-top: 16px;">
+  <strong>Sources:</strong>
+  <a href="https://arxiv.org/abs/1912.10055">arXiv:1912.10055</a> (3G waveform accuracy requirements),
+  <a href="https://arxiv.org/abs/2312.10241">arXiv:2312.10241</a> (NR accuracy limitations),
+  <a href="https://arxiv.org/abs/2401.15331">arXiv:2401.15331</a> (NR for space-based detectors),
+  <a href="https://arxiv.org/abs/2404.01137">arXiv:2404.01137</a> (CAKO+CAHD),
+  <a href="https://arxiv.org/abs/2501.01055">arXiv:2501.01055</a> (CCZ3),
+  <a href="https://arxiv.org/abs/2508.05743">arXiv:2508.05743</a> (PHE),
+  <a href="https://arxiv.org/abs/2110.08635">arXiv:2110.08635</a> (SpECTRE CCE),
+  <a href="https://arxiv.org/abs/2402.12544">arXiv:2402.12544</a> (HOBC for NR),
+  <a href="https://arxiv.org/abs/2504.15814">arXiv:2504.15814</a> (ExaGRyPE AMR),
+  <a href="https://arxiv.org/abs/2308.10361">arXiv:2308.10361</a> (3D Cauchy-characteristic matching)
+</p>
 
 <p style="color: #8b949e; font-size: 0.8em; margin-top: 36px; text-align: center;">Lattice &mdash; 3D Numerical Relativity Simulator</p>
 
