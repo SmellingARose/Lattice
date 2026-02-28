@@ -56,6 +56,7 @@
     <li><a href="#detectors">5. Next-Gen Detector Accuracy Requirements</a></li>
     <li><a href="#chain">6. AMR-CCZ4 Chain Audit for CCE</a></li>
     <li><a href="#cce-roadmap">7. CCE Readiness Roadmap</a></li>
+    <li><a href="#impl">8. Implementation Specifics</a></li>
   </ul>
 </div>
 
@@ -555,6 +556,108 @@
   <p>Lattice's numerical infrastructure (6th-order FD, matched prolongation/restriction, FAS multigrid, CAKO dissipation) is <span class="good">at or above state of the art</span> for finite-difference NR codes. The measured convergence order of ~6.5 exceeds what most production codes achieve.</p>
   <p style="margin-top: 8px;">The gaps are <strong>implementation completeness</strong>, not mathematical accuracy: no &Psi;<sub>4</sub> extraction, binary inspiral not yet converging, no CCE/PHE pipeline. The pragmatic path is: <span class="highlight">&Psi;<sub>4</sub> first &rarr; PHE &rarr; CCE worldtube output</span>.</p>
   <p style="margin-top: 8px;">Closing the gaps to CCE-quality waveform production: <strong>~6&ndash;8 months</strong> focused development. First &Psi;<sub>4</sub> waveforms: <strong>4&ndash;6 weeks</strong>. PHE waveforms at null infinity: <strong>3&ndash;4 months</strong>.</p>
+</div>
+
+<hr>
+
+<!-- ============================================================ -->
+<h2 id="impl">8. Implementation Specifics</h2>
+<!-- ============================================================ -->
+
+<p style="margin-bottom: 16px;">Concrete implementation details for each gap identified in the chain audit. Two items (<span class="good">CAHD</span>, <span class="good">SSL</span>) are already implemented.</p>
+
+<h3>8.1 &Psi;<sub>4</sub> Extraction <span class="tag tag-bug">CRITICAL</span></h3>
+<div class="card">
+  <p><strong>New file:</strong> <code>src/diagnostics/psi4.c</code> + <code>psi4.h</code> (~800 lines total)</p>
+  <p><strong>Three components:</strong></p>
+  <table>
+    <tr><th>Component</th><th>Lines</th><th>What</th></tr>
+    <tr><td>Point-wise Psi4</td><td>~400</td><td>E_ij, B_ij (Weyl tensor), NP tetrad, contraction</td></tr>
+    <tr><td>Sphere extraction</td><td>~250</td><td>Interpolate onto coordinate spheres at r=50,75,100M using existing <code>interpolate.h</code></td></tr>
+    <tr><td>SH decomposition</td><td>~150</td><td>Spin-weight s=-2 harmonics, l_max=4&ndash;8, Gauss-Legendre quadrature</td></tr>
+  </table>
+  <p style="margin-top: 8px;"><strong>Reuses:</strong> <code>tensor_utils.h</code> (Christoffel, inverse metric), <code>interpolate.h</code> (4th-order Lagrange), <code>finite_diff.h</code> (d1/d2 stencils). AH finder (<code>ah_finder.c</code>) already does sphere interpolation + Christoffel computation &mdash; same pattern.</p>
+  <p><strong>Cost:</strong> ~13.5 MFLOP per extraction (3 radii &times; 32&times;64 angular grid). Negligible vs one RHS eval (~1 GFLOP at N=128). Extract every 4&ndash;8 steps.</p>
+  <p><strong>Effort: 3&ndash;5 days.</strong> Dependencies: none. Blocks PHE and CCE worldtube.</p>
+</div>
+
+<h3>8.2 PHE (Perturbative Hyperboloidal Extraction)</h3>
+<div class="card">
+  <p><strong>New file:</strong> <code>tools/phe_extract.c</code> (~500&ndash;700 lines). Standalone post-processing tool.</p>
+  <p><strong>Algorithm</strong> (<a href="https://arxiv.org/abs/2508.05743">arXiv:2508.05743</a>): Solve 1+1 Regge-Wheeler-Zerilli equation on hyperboloidal slices to propagate &Psi;<sub>4</sub> from finite radius to scri+.</p>
+  <ul>
+    <li><strong>Input:</strong> &Psi;<sub>4</sub> mode time series from extraction (item 8.1), projected to RWZ master function</li>
+    <li><strong>Solver:</strong> 1D RK4 in time, 4th-order FD in compactified radial coordinate</li>
+    <li><strong>Output:</strong> &Psi;<sub>4</sub> at null infinity, gauge-invariant</li>
+  </ul>
+  <p><strong>Accuracy:</strong> &lt; 0.05 rad phase difference from full CCE. Amplitude &lt; 0.5%. Does not capture nonlinear memory.</p>
+  <p><strong>Effort: 1&ndash;2 weeks</strong> (after Psi4). Dependencies: item 8.1.</p>
+</div>
+
+<h3>8.3 CCE Worldtube Output</h3>
+<div class="card">
+  <p><strong>New file:</strong> <code>src/io/cce_worldtube.c</code> + <code>cce_worldtube.h</code> (~600&ndash;800 lines)</p>
+  <p><strong>SpECTRE "metric modal" format</strong> &mdash; 30 HDF5 datasets:</p>
+  <table>
+    <tr><th>Data</th><th>Datasets</th><th>Source in Lattice</th></tr>
+    <tr><td>&gamma;<sub>ij</sub> + Dr + Dt</td><td>18</td><td>h_ij/chi, FD radial deriv, analytic Dt from CCZ4 RHS</td></tr>
+    <tr><td>&beta;<sup>i</sup> + Dr + Dt</td><td>9</td><td>shift, FD radial deriv, analytic Dt from gauge RHS</td></tr>
+    <tr><td>&alpha; + Dr + Dt</td><td>3</td><td>lapse, FD radial deriv, analytic Dt from gauge RHS</td></tr>
+  </table>
+  <p style="margin-top: 8px;">Each dataset = time series of spin-weighted SH coefficients (s=0, l_max=12&ndash;24). Requires Gauss-Legendre quadrature on extraction sphere + HDF5 library (first external dependency, or use Python converter).</p>
+  <p><strong>Effort: 2&ndash;3 weeks.</strong> Dependencies: item 8.1 (sphere interpolation infrastructure).</p>
+</div>
+
+<h3>8.4 CCZ3 Formulation</h3>
+<div class="card">
+  <p><strong>~25 lines changed</strong> in <code>ccz4_rhs.c</code>, gated by <code>--ccz3</code> CLI flag.</p>
+  <table>
+    <tr><th>Change</th><th>Where</th></tr>
+    <tr><td>Force Theta = 0</td><td><code>ccz4_load_and_differentiate()</code> (~line 130)</td></tr>
+    <tr><td>Set rhs_Theta = 0</td><td><code>ccz4_compute_evolution()</code> (~lines 396&ndash;402)</td></tr>
+    <tr><td>Set kappa1 = 0</td><td>K equation (~line 408), Gamma equation (~line 418)</td></tr>
+    <tr><td>K_minus_2Theta &rarr; K</td><td><code>ccz4_compute_gauge()</code> (~2 lines)</td></tr>
+  </table>
+  <p><strong>Impact:</strong> Stable to 10<sup>5</sup> M vs ~10<sup>4</sup> M for standard CCZ4. Essential for LISA-relevant runs.</p>
+  <p><strong>Effort: 1&ndash;2 days.</strong> Dependencies: none.</p>
+</div>
+
+<h3>8.5 CAHD <span class="tag tag-low">ALREADY IMPLEMENTED</span></h3>
+<div class="card">
+  <p>Implemented at <code>ccz4_rhs.c:342&ndash;347</code>. Adds <code>-C * CFL * dx * H</code> to dt(chi), where H = Hamiltonian constraint. Stronger damping on coarser AMR levels (CFL*dx scales with level).</p>
+  <p><strong>Enable:</strong> <code>--cahd</code> CLI flag. Default off. Recommend flipping to default on for production.</p>
+  <p><strong>Effort: 0 days.</strong></p>
+</div>
+
+<h3>8.6 Slow-Start Lapse <span class="tag tag-low">ALREADY IMPLEMENTED</span></h3>
+<div class="card">
+  <p>Implemented at <code>ccz4_rhs.c:497&ndash;505</code>. Gaussian-damped term drives lapse toward trumpet during early evolution, suppressing junk radiation.</p>
+  <p><strong>Default ON.</strong> Parameters: h=0.6M, sigma_t=20M. Active for t &lt; ~60M then decays to zero.</p>
+  <p><strong>Effort: 0 days.</strong></p>
+</div>
+
+<h3>8.7 HOBC (Higher-Order Absorbing BCs)</h3>
+<div class="card">
+  <p><strong>New file:</strong> <code>src/boundary/hobc.c</code> + <code>hobc.h</code> (~800&ndash;1200 lines)</p>
+  <p>Solves auxiliary ODE systems per (l,m) mode at the boundary. Reflection coefficient: (kR)<sup>-2(L+1)</sup> with order L, vs (kR)<sup>-4</sup> for Sommerfeld.</p>
+  <p><strong>Architectural change:</strong> Current Sommerfeld is point-by-point (local). HOBC requires SH decomposition at boundary (global), auxiliary variable storage (~16K doubles), and coupling to RK4 for time integration of auxiliaries.</p>
+  <p><strong>Alternative:</strong> Just double the domain size (R: 500M &rarr; 1000M). Costs ~8x memory on coarsest level but trivial to implement. With AMR, cost is moderate since only the coarsest level extends.</p>
+  <p><strong>Effort: 3&ndash;4 weeks.</strong> Dependencies: benefits from SH code in item 8.1.</p>
+</div>
+
+<h3>8.8 Summary</h3>
+<div class="card">
+  <table>
+    <tr><th>Item</th><th>Status</th><th>Effort</th><th>Blocks</th></tr>
+    <tr><td>&Psi;<sub>4</sub> extraction</td><td class="bad">NOT IMPL</td><td>3&ndash;5 days</td><td>PHE, CCE worldtube</td></tr>
+    <tr><td>CCZ3</td><td class="bad">NOT IMPL</td><td>1&ndash;2 days</td><td>Nothing</td></tr>
+    <tr><td>CAHD</td><td class="good">DONE</td><td>0</td><td>&mdash;</td></tr>
+    <tr><td>SSL</td><td class="good">DONE</td><td>0</td><td>&mdash;</td></tr>
+    <tr><td>PHE</td><td class="bad">NOT IMPL</td><td>1&ndash;2 weeks</td><td>Needs &Psi;<sub>4</sub></td></tr>
+    <tr><td>CCE worldtube</td><td class="bad">NOT IMPL</td><td>2&ndash;3 weeks</td><td>Needs &Psi;<sub>4</sub></td></tr>
+    <tr><td>HOBC</td><td class="bad">NOT IMPL</td><td>3&ndash;4 weeks</td><td>Nothing (or just enlarge domain)</td></tr>
+  </table>
+  <p style="margin-top: 8px;"><strong>Critical path:</strong> &Psi;<sub>4</sub> (3&ndash;5 days) &rarr; PHE (1&ndash;2 weeks) = <span class="highlight">production waveforms in ~3 weeks</span>. CCZ3 in parallel (1&ndash;2 days).</p>
 </div>
 
 <hr>
