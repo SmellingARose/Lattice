@@ -3,6 +3,37 @@
 > **Note:** When adding/removing/renaming files or functions, also update
 > `docs/architecture.html` — the living map of the codebase structure.
 
+## 2026-03-01: Upgrade off-grid interpolation to 6th order
+
+Replaced 4th-order (5-point) Lagrange interpolation with 6th-order (7-point)
+in `src/numerics/interpolate.h`. This was the one link in the evolution chain
+that needlessly degraded 6th-order evolution data when interpolating onto the
+CCE worldtube sphere.
+
+**Changes:**
+- Added `lagrange_basis_7()`: 7-point Lagrange basis with nodes {-3,...,+3},
+  denominators {720, -120, 48, -36, 48, -120, 720}. Half-width 3 fits in
+  ghost width 4.
+- Added `lagrange_basis_deriv_7()`: derivative using sum-of-products form
+  for numerical stability near nodes.
+- Updated all 4 interpolation functions to use 7-point basis (343 source
+  points per interpolation vs 125 previously).
+- Legacy 5-point functions retained as `lagrange_basis_5`/`lagrange_basis_deriv_5`.
+- `INTERP_STENCIL` = 7, `INTERP_HALF` = 3 (was 5/2).
+
+**Verification:** Weights independently verified via Python computation of
+`prod_{j!=k} (n_k - n_j)`. All 6 mathematical tests pass: partition of unity
+(sum = 1 to machine precision), Kronecker property, exact polynomial
+interpolation through degree 6, exact derivatives through degree 5.
+
+**Motivation:** GR-Athena++ achieves 10^-12 CCE mismatch with the same chain
+(6th FD, RK4, 6th prolongation/restriction, Sommerfeld) — all links are
+sufficient except off-grid interpolation, which was 4th-order. This upgrade
+closes the last accuracy bottleneck for CCE worldtube data.
+
+**Testing:** All tests pass (flat, convergence order 6.5, AMR 8/8, AH 13/13,
+Maxwell 15/15).
+
 ## 2026-02-26: Tier 3 Item 6 — Device-side GPU ghost exchange
 
 Replaced host-side PCIe round-trip ghost exchange with 7 GPU kernel launches.

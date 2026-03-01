@@ -91,7 +91,8 @@ work on AMR meshes.
 
 **Phase 3 progress:**
 - **6th-order operators:** FD stencils, KO dissipation, AMR prolongation (7-point)
-  and restriction (6-point) all upgraded from 4th to 6th order. 4th-order Sommerfeld
+  and restriction (6-point) all upgraded from 4th to 6th order. 6th-order off-grid
+  Lagrange interpolation (7-point stencil, half-width 3). 4th-order Sommerfeld
   BCs. Quartic temporal interpolation for subcycling.
 - **Tier 1 optimizations (all complete):** LTO for CPU builds, fast-path `pow(lapse,1)`,
   `restrict` qualifiers on RHS pointers, skip EM fields in dissipation/Sommerfeld,
@@ -195,7 +196,7 @@ lattice/
 │   │   └── tensor_utils.h      # inline tensor operations
 │   ├── numerics/
 │   │   ├── finite_diff.h       # FD_D1, FD_D2 macros (6th-order)
-│   │   ├── interpolate.h       # 4th-order off-grid Lagrange interpolation
+│   │   ├── interpolate.h       # 6th-order off-grid Lagrange interpolation
 │   │   └── rk4.c               # RK4 time integrator (+mesh stepping)
 │   ├── initial_data/
 │   │   ├── puncture.c          # Brill-Lindquist puncture data

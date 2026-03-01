@@ -313,7 +313,7 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 <tr><th>File</th><th>Purpose</th></tr>
 <tr><td><code>finite_diff.h</code></td><td>Header-only 6th-order FD operators: centered 1st/2nd, fused 1st+2nd (<code>fd_d1_d2()</code>), mixed 2nd, upwind advection, KO dissipation. GPU-annotated. Compile-time <code>FD_ORDER</code> selects 4th or 6th order.</td></tr>
 <tr><td><code>rk4.c</code></td><td>Single-grid stepper (<code>rk4_step</code>) and AMR mesh stepper (<code>rk4_step_mesh</code>). Packed batch: all leaf blocks in one kernel per operation. Persistent per-level packs (<code>mesh_t.leaf_pack</code>, <code>level_packs[]</code>) cached across steps; <code>packs_dirty</code> flag triggers rebuild on regrid. Data-only sync (<code>sync_to/from_blocks</code>) replaces full load/store cycle. Flattened update loops (single OMP region over all fields). Subcycling uses integer <code>sub_step</code> for drift-free temporal interpolation. Also <code>enforce_algebraic()</code>.</td></tr>
-<tr><td><code>interpolate.h</code></td><td>4th-order off-grid Lagrange interpolation (used by AH finder for field access at non-grid points).</td></tr>
+<tr><td><code>interpolate.h</code></td><td>6th-order off-grid Lagrange interpolation (7-point stencil, half-width 3). Used by AH finder and CCE worldtube extraction for field access at non-grid points. Legacy 5-point (4th-order) basis retained.</td></tr>
 </table>
 
 <!-- ========================================== -->
@@ -348,7 +348,7 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 <table class="file-table">
 <tr><th>File</th><th>Purpose</th></tr>
 <tr><td><code>constraints.c</code></td><td>Hamiltonian (H = R + 2/3 K^2 - A^ij A_ij) and momentum constraints. L2 norms for single-grid and AMR mesh.</td></tr>
-<tr><td><code>ah_finder.h/c</code></td><td>Hyperbolic flow AH finder (BHaHAHA-inspired). 4th-order off-grid interpolation. Works on single-grid and AMR. Ref: arXiv:2505.15912.</td></tr>
+<tr><td><code>ah_finder.h/c</code></td><td>Hyperbolic flow AH finder (BHaHAHA-inspired). 6th-order off-grid interpolation. Works on single-grid and AMR. Ref: arXiv:2505.15912.</td></tr>
 <tr><td><code>psi4.c</code></td><td>Weyl scalar Psi4 for gravitational wave extraction.</td></tr>
 </table>
 
