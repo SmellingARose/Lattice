@@ -209,7 +209,7 @@ static void test_fallback(void)
     bh.mass = 1.0;
     bh.momentum[0] = 0.1;
 
-    int N = 24;
+    int N = 32;
     double L = 20.0;
 
     /* Uniform */

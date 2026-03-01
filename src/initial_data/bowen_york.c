@@ -219,12 +219,14 @@ void set_ccz4_from_psi(grid_t *g, const double *psi_arr,
                         Ez += psi6_inv * fac * rz;
                     }
                 }
-                g->fields[FIELD_E1][idx]  = Ex;
-                g->fields[FIELD_E2][idx]  = Ey;
-                g->fields[FIELD_E3][idx]  = Ez;
-                g->fields[FIELD_BM1][idx] = 0.0;
-                g->fields[FIELD_BM2][idx] = 0.0;
-                g->fields[FIELD_BM3][idx] = 0.0;
+                if (g->n_fields > FIELD_E1) {
+                    g->fields[FIELD_E1][idx]  = Ex;
+                    g->fields[FIELD_E2][idx]  = Ey;
+                    g->fields[FIELD_E3][idx]  = Ez;
+                    g->fields[FIELD_BM1][idx] = 0.0;
+                    g->fields[FIELD_BM2][idx] = 0.0;
+                    g->fields[FIELD_BM3][idx] = 0.0;
+                }
             }
         }
     }
@@ -314,12 +316,14 @@ void set_ccz4_from_hispid(grid_t *g, const double *psi_arr,
                 g->fields[FIELD_B3][idx]     = 0.0;
 
                 /* EM fields: zero for HiSpID path (charge not yet supported) */
-                g->fields[FIELD_E1][idx]  = 0.0;
-                g->fields[FIELD_E2][idx]  = 0.0;
-                g->fields[FIELD_E3][idx]  = 0.0;
-                g->fields[FIELD_BM1][idx] = 0.0;
-                g->fields[FIELD_BM2][idx] = 0.0;
-                g->fields[FIELD_BM3][idx] = 0.0;
+                if (g->n_fields > FIELD_E1) {
+                    g->fields[FIELD_E1][idx]  = 0.0;
+                    g->fields[FIELD_E2][idx]  = 0.0;
+                    g->fields[FIELD_E3][idx]  = 0.0;
+                    g->fields[FIELD_BM1][idx] = 0.0;
+                    g->fields[FIELD_BM2][idx] = 0.0;
+                    g->fields[FIELD_BM3][idx] = 0.0;
+                }
             }
         }
     }

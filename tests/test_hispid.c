@@ -212,7 +212,7 @@ static void test_zero_spin_reduces_to_by(void)
     bh.momentum[0] = 0.1;
     /* spin = 0: HiSpID should reduce to standard BY behavior */
 
-    int N = 24;
+    int N = 32;
     double L = 20.0;
 
     /* Standard BY solve */
@@ -258,7 +258,7 @@ static void test_moderate_spin(void)
     bh.mass = 1.0;
     bh.spin[2] = 0.5;  /* chi = S/M^2 = 0.5 */
 
-    int N = 24;
+    int N = 32;
     double L = 20.0;
     grid_t *g = grid_alloc(N, L, RK_CLASSIC);
 
@@ -297,7 +297,7 @@ static void test_constraints_after_solve(void)
     bh.mass = 1.0;
     bh.spin[2] = 0.5;
 
-    int N = 24;
+    int N = 32;
     double L = 20.0;
     grid_t *g = grid_alloc(N, L, RK_CLASSIC);
 
@@ -331,7 +331,7 @@ static void test_high_spin_evolve(void)
     bh.mass = 1.0;
     bh.spin[2] = 0.9;  /* chi = 0.9 */
 
-    int N = 24;
+    int N = 32;
     double L = 20.0;
     mesh_t *m = mesh_create_ex(1, N, L, RK_CLASSIC, NUM_CCZ4_FIELDS);
     grid_t *g = m->blocks[0]->grid;
@@ -387,7 +387,7 @@ static void test_det_h_unity(void)
     bh.mass = 1.0;
     bh.spin[2] = 0.5;
 
-    int N = 24;
+    int N = 32;
     double L = 20.0;
     grid_t *g = grid_alloc(N, L, RK_CLASSIC);
 

@@ -277,7 +277,7 @@ static void test_zero_momentum(void)
     bh.mass = 1.0;
     /* P = 0, S = 0 */
 
-    int N = 24;
+    int N = 32;
     double L = 20.0;
     mesh_t *m = mesh_create_ex(1, N, L, RK_CLASSIC, NUM_CCZ4_FIELDS);
     grid_t *g = m->blocks[0]->grid;
@@ -337,7 +337,7 @@ static void test_small_momentum(void)
     bh.mass = 1.0;
     bh.momentum[0] = 0.1;
 
-    int N = 24;
+    int N = 32;
     double L = 20.0;
     grid_t *g = grid_alloc(N, L, RK_CLASSIC);
 
@@ -442,7 +442,7 @@ static void test_binary_orbit(void)
     bhs[1].center[2] = -3.0;
     bhs[1].momentum[1] = -0.1;
 
-    int N = 24;
+    int N = 32;
     double L = 20.0;
     mesh_t *m = mesh_create_ex(1, N, L, RK_CLASSIC, NUM_CCZ4_FIELDS);
     grid_t *g = m->blocks[0]->grid;
@@ -518,7 +518,7 @@ static void test_nbody(void)
         bhs[2].mass = 1.0; bhs[2].center[0] =  3.0;
         bhs[2].momentum[1] = -0.05;
 
-        int N = 24;
+        int N = 32;
         double L = 20.0;
         mesh_t *m = mesh_create_ex(1, N, L, RK_CLASSIC, NUM_CCZ4_FIELDS);
         grid_t *g = m->blocks[0]->grid;
@@ -564,7 +564,7 @@ static void test_nbody(void)
             bhs[n].momentum[1] =  0.02 * cos(angle);
         }
 
-        int N = 24;
+        int N = 32;
         double L = 20.0;
         mesh_t *m = mesh_create_ex(1, N, L, RK_CLASSIC, NUM_CCZ4_FIELDS);
         grid_t *g = m->blocks[0]->grid;
