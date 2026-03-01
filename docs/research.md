@@ -1,299 +1,584 @@
-# Lattice Performance Optimization Research
+# Lattice — Remaining Implementation Research
 
-> Compiled 2026-02-20 from four parallel research agents analyzing parallelization,
-> algorithms, kernel-level optimization, and memory/IO strategies.
-
----
-
-## Top Recommendations (ranked by impact/effort)
-
-| # | Optimization | Speedup | Effort | Notes |
-|---|-------------|---------|--------|-------|
-| 1 | **6th-order FD stencils** | 3-10x (coarser grids, same accuracy) | Low-Med | Ghost=4 already sufficient. Add to finite_diff.h |
-| 2 | **Enable LTO** (`-flto`) | 5-15% CPU | Trivial | One Makefile line. Allows cross-TU inlining |
-| 3 | **Fused d1/d2 stencil** | 10-15% CPU, 5-10% GPU | Low | Load 5 points once, return both derivatives |
-| 4 | **Checkpoint/restart** | N/A (prevents data loss) | Low | Raw binary + CRC32. ~300 lines. Critical for 40h runs |
-| 5 | **Persistent pack** (no per-step alloc) | 10-20% GPU | Med | Eliminates 4 GB/step memcpy |
-| 6 | **Selective GPU transfer** (ghost only) | 3-8x transfer phase | Low-Med | Transfer 40 MB instead of 342 MB per sync |
-| 7 | **GPU-native ghost exchange** | 2-5x overall on GPU | Med-High | Phase 1 (same-level) is straightforward as GPU kernel |
-| 8 | **Fused RHS+CK45 update** | 15-25% CPU, 10-20% GPU | Med | Eliminate rhs buffer round-trip |
-| 9 | **Larger AMR blocks** (32^3) | 1.7x (ghost overhead) | Low | Ghost drops from 70% to 45%. Better GPU occupancy |
-| 10 | **GPU kernel splitting** | 20-40% GPU | Med-High | Split RHS into 2 stages to double occupancy (15%→30%) |
-| 11 | **CCZ3 formulation** | Stability to 10^5 M | Low-Med | Theta=0, kappa1=0. Ref: arXiv:2501.01055 |
-| 12 | **3D output** (raw binary + XDMF) | N/A (enables science) | Low | VisIt/ParaView compatible. ~200 lines |
-| 13 | **Multi-GPU** (split pack per device) | 1.5-3.5x on 4 GPUs | Med-High | Per-device meshblock_pack |
-| 14 | **Fields-only block grids** | 33% memory reduction | Med | AMR blocks only need fields array; RK scratch in pack |
-| 15 | **MPI domain decomposition** | Linear with node count | High | 2-3 months. Morton-partitioned blocks across ranks |
+Compiled research for all remaining Phase 3 features. Each section covers the
+math, simplest implementation path, estimated effort, and key references.
 
 ---
 
-## 1. Parallelization & Multi-GPU
+## Executive Summary
 
-### GPU ghost exchange is the #1 GPU bottleneck
+| Item | Effort | Lines | Difficulty | Blocks | Competitive Edge |
+|------|--------|-------|------------|--------|-----------------|
+| **Psi4 extraction** | 3-5 days | ~580 | Medium | PHE, CCE | Table stakes — every NR code has this |
+| **PHE** | 1-2 weeks | ~470 | Medium | — | **No public standalone PHE exists** — first-of-kind tool |
+| **CCE worldtube** | 2-3 weeks | ~930 | Medium | Needs HDF5 | Matches GR-Athena++, SpECTRE interop |
+| **HIP backend** | 1-2 weeks | ~900 | Medium | — | **AMD + NVIDIA from one source** — only AthenaK does this (via Kokkos) |
+| **Constraint-preserving BC** | 2-3 weeks | ~500 | Hard | — | Matches BAM; most CCZ4 codes lack this |
+| **Larger domain (AMR)** | 0 days | 0 | Trivial | — | Already possible, just use `--L 4000` |
 
-Current flow per RK stage:
+**Fast path to publishable waveforms:** Psi4 (5 days) + PHE (2 weeks) = ~3 weeks.
+No external dependencies, pure C17.
+
+### How Lattice Compares After Implementation
+
+| Capability | Lattice (current) | Lattice (after) | GRChombo | SpECTRE | GR-Athena++ | ET |
+|------------|-------------------|-----------------|----------|---------|-------------|-----|
+| Spatial FD order | 6th | 6th | 4th | Spectral | 6th | 4th-8th |
+| Off-grid interpolation | 6th | 6th | 4th | Spectral | 4th | 4th |
+| Waveform extraction | None | Psi4 + PHE + CCE | Psi4 only | Full CCE | CCE | Psi4 + CCE |
+| GPU backend | OpenMP target | OpenMP + HIP | None | Charm++ | Kokkos | None |
+| AMD GPU support | No | **Yes (HIP)** | No | No | Yes (Kokkos) | No |
+| N-body (N>2) | Yes (32) | Yes (32) | No | No | No | Yes |
+| Einstein-Maxwell | Yes | Yes | No | No | No | Yes |
+| High-spin initial data | Yes (HiSpID) | Yes | Yes | Yes | No | Yes |
+| Boundary conditions | Sommerfeld | CP-Sommerfeld | Sommerfeld | CP + Bjorhus | Sommerfeld | Sommerfeld |
+| AMR | Yes (block) | Yes | Yes (Chombo) | Yes (AMR) | Yes (block) | Yes (Carpet) |
+| Formulation | CCZ4 | CCZ4 | CCZ4 | Gen. Harmonic | Z4c | BSSN |
+
+**Unique advantages after completion:**
+- **Only code with N-body + EM + GPU + CCE pipeline** (no other code combines all four)
+- **PHE tool** would be first publicly available standalone implementation
+- **HIP backend** gives AMD GPU support — only AthenaK has this, via heavier Kokkos abstraction
+- **6th-order interpolation everywhere** — most codes use 4th-order off-grid
+
+---
+
+## Table of Contents
+
+1. [Psi4 Extraction](#1-psi4-extraction)
+2. [PHE (Perturbative Hyperboloidal Extraction)](#2-phe)
+3. [CCE Worldtube Output](#3-cce-worldtube-output)
+4. [HIP Backend](#4-hip-backend)
+5. [HOBC (Higher-Order Absorbing BCs)](#5-hobc)
+6. [Priority & Dependencies](#6-priority--dependencies)
+
+---
+
+## 1. Psi4 Extraction
+
+**Status:** Not implemented. Blocks PHE and CCE.
+**Effort:** 3-5 days, ~580 lines across `psi4.h` + `psi4.c`.
+**Dependencies:** None — reuses existing infrastructure heavily.
+
+### 1.1 Core Math
+
+Psi4 encodes outgoing gravitational radiation via the electric and magnetic
+parts of the Weyl tensor projected onto a null tetrad.
+
+**Electric part E_ij** (B&S Eq. 3.28, GRChombo `Weyl4.impl.hpp`):
+
 ```
-GPU: compute RHS         (fast)
-GPU→CPU: sync ALL data   (342 MB — slow!)
-CPU: 5-phase exchange    (slow)
-CPU→GPU: sync ALL back   (342 MB — slow!)
+E_ij = R_ij + (K - Theta) * K_ij - K_ik * K^k_j
 ```
 
-Fix 1 (easy): Transfer only ghost slabs, not full buffer. Cuts transfer 5-10x.
+- `R_ij` = spatial Ricci with CCZ4 Z terms (`dZ_coeff=1`)
+- `K_ij = (A_ij + (K/3) h_ij) / chi` (physical extrinsic curvature)
+- Index raising uses physical inverse metric `gamma^{ij} = chi * h^{ij}`
+- Make trace-free after: `E_ij -= (1/3) gamma_ij * tr(E)`
 
-Fix 2 (medium): Run Phase 1 (same-level exchange) as a GPU kernel — it's just
-device-to-device copies within the pack. Pre-compute a work list on host, map
-to device, run a copy kernel.
+**Magnetic part B_ij** (B&S Eq. 3.29):
 
-Fix 3 (hard): All 5 phases on GPU. Phases 2-4 (restriction, coarse_buf fill,
-prolongation) are compute-per-point operations that parallelize well.
+```
+B_ij = epsilon^{ikl} nabla_k K_{lj}
+```
 
-### Multi-GPU (one node)
+- `epsilon^{ikl} = levi_civita[i][k][l] * alpha / chi^{3/2}`
+- `nabla_k K_{ij}` uses physical Christoffels (already in `ah_finder.c:196-203`)
+- Symmetrize: `B_ij = (B_ij + B_ji) / 2`
 
-Split meshblock_pack across devices. Each GPU gets a subset of blocks with its
-own pack. Inter-device ghost exchange via host staging buffers or CUDA-aware MPI.
+**Covariant derivative of K_ij** (chain rule from CCZ4 variables):
 
-**Warning from Parthenon-VIBE (arXiv:2509.19701):** 16^3 blocks are at the
-lower boundary of GPU efficiency (only 4096 interior points per block). 32^3+
-recommended for production GPU runs.
+```
+d_k K_{ij} = d_k(A_ij)/chi - d_k(chi)/chi * K_ij
+           + (1/3) d_k(h_ij) * K / chi + (1/3) h_ij * d_k(K) / chi
+```
 
-### MPI (multi-node)
+**Newman-Penrose tetrad** — Gram-Schmidt orthonormalization:
 
-Partition Morton-sorted leaf blocks across ranks. Ghost exchange becomes:
-- Intra-rank: direct memory copy (same as today)
-- Inter-rank: MPI_Isend/Irecv with packed ghost buffers
+1. `u^i = (x - x_center, y - y_center, z - z_center)` (radial)
+2. `v^i = (-y + y_center, x - x_center, 0)` (azimuthal)
+3. `w^i = epsilon^{ijk} v_j u_k / sqrt(det(gamma))` (cross product)
+4. Orthonormalize against physical metric `gamma_{ij} = h_{ij}/chi`
 
-Subcycling complication: fine blocks needing coarse neighbor data across ranks
-require temporal interpolation data to be communicated after each coarse step.
+**Psi4 contraction** (gr-qc/0104063):
 
-Estimated: 85-90% efficiency at 8 nodes, 70-80% at 64 nodes.
+```
+Re(Psi4) = (1/2) * [E_ij (w^i w^j - v^i v^j) - 2 B_ij w^i v^j]
+Im(Psi4) = (1/2) * [B_ij (-w^i w^j + v^i v^j) - 2 E_ij w^i v^j]
+```
 
-### Not recommended: task-based parallelism
+### 1.2 Simplest Implementation Path
 
-5-15% benefit, 2-4 month effort, breaks the simple bulk-synchronous model.
-Subcycling already provides inter-level asynchrony.
+**Strategy: compute on grid, interpolate scalars.** This is what GRChombo does.
+
+1. `psi4_at_point()` — E_ij + B_ij + tetrad + contraction at one grid point.
+   Uses existing `fd_d1`, `fd_d2`, `fd_d2_mixed` for derivatives, same Ricci
+   pattern as `constraints.c`, physical Christoffels from `ah_finder.c`. ~200 lines.
+
+2. `psi4_compute_grid()` — loop over grid, store Re/Im in two scratch arrays. ~30 lines.
+
+3. `psi4_extract_spheres()` — interpolate Re/Im onto extraction spheres at
+   r=50,75,100M using existing `interp_field_at()`. Follow `ah_finder.c`
+   pattern for AMR. ~80 lines.
+
+4. `psi4_decompose_modes()` — integrate Psi4 * conj(_{-2}Y_{lm}). Start with
+   l_max=4 (25 modes). Hardcode l=2 harmonics, general Goldberg formula for
+   l >= 3. ~130 lines.
+
+**No new FD code. No changes to existing files.** Two scratch arrays (same size
+as one field each, ~40 MB at N=128).
+
+### 1.3 Spin-Weighted Spherical Harmonics (s = -2)
+
+Dominant l=2 modes — hardcode closed forms:
+
+```
+_{-2}Y_{20} = sqrt(15/(32*pi)) * sin^2(theta)
+_{-2}Y_{22} = sqrt(5/(64*pi)) * cos^4(theta/2) * e^{2i*phi}
+_{-2}Y_{21} = sqrt(5/(16*pi)) * cos^3(theta/2) * sin(theta/2) * e^{i*phi}
+```
+
+Typical l_max: 4 for equal-mass BBH, 8 for high-spin/precessing.
+
+### 1.4 Reusable Code
+
+| Existing code | What it provides | Location |
+|---------------|-----------------|----------|
+| `compute_inverse_sym()` | 3x3 inverse | `tensor_utils.h:52` |
+| `compute_christoffel()` | Conformal Christoffels | `tensor_utils.h:123` |
+| `make_trace_free()` | Remove trace | `tensor_utils.h:169` |
+| `fd_d1/d2/d2_mixed()` | 6th-order derivatives | `finite_diff.h` |
+| `interp_field_at()` | 6th-order interpolation | `interpolate.h:170` |
+| Physical Christoffel pattern | Conformal→physical | `ah_finder.c:196-203` |
+| Block cache + lookup | AMR sphere sampling | `ah_finder.c:366-378` |
+| `levi_civita[3][3][3]` | Levi-Civita symbol | `maxwell_rhs.c:47` |
+
+### 1.5 New Files
+
+| File | Lines | Purpose |
+|------|-------|---------|
+| `src/diagnostics/psi4.h` | ~80 | API declarations, extraction sphere struct |
+| `src/diagnostics/psi4.c` | ~500 | Core physics + extraction + mode decomposition |
+
+### 1.6 Key References
+
+- B&S Eqs. 3.28-3.29 (E_ij, B_ij definitions)
+- GRChombo `Source/CCZ4/Weyl4.impl.hpp` (full implementation to cross-check)
+- gr-qc/0104063 (NP tetrad construction for Psi4)
 
 ---
 
-## 2. Algorithmic Improvements
+## 2. PHE
 
-### 6th-order FD stencils (highest impact)
+**Status:** Not implemented. **No public standalone PHE tool exists** — this
+would be a genuine first-of-kind contribution.
+**Effort:** 1-2 weeks, ~470 lines in `tools/phe_extract.c`.
+**Dependencies:** Requires Psi4 extraction (Section 1).
 
-Ghost width is already 4 — sufficient for 6th-order FD + 8th-order KO.
-No memory layout change needed.
+### 2.1 What PHE Does
 
-For equivalent accuracy, 6th order needs N = N_4th^(2/3):
-- N=128 at 4th order → N=40 at 6th order (33x fewer points)
-- Realistic speedup after accounting for wider stencil compute: **3-10x**
+Post-processing tool that takes Psi4 multipoles extracted at finite radius and
+propagates them to null infinity via the Regge-Wheeler-Zerilli (RWZ) equations
+on hyperboloidal slices. Removes finite-radius extraction error without
+modifying the evolution code.
 
-AthenaK uses 6th-order as their standard NR configuration.
+**Published accuracy (arXiv:2508.05743):** PHE vs CCE phase difference < 0.05
+rad for BBH mergers. Sufficient for LIGO A+, ET, and CE detectors.
 
-Implementation: add 7-point stencil coefficients to finite_diff.h. Compile-time
-or runtime flag (FD_ORDER=4 or FD_ORDER=6).
+### 2.2 The RWZ Master Equation
 
-### CCZ3 formulation
+Perturbations of Schwarzschild satisfy a 1+1 wave equation per (l,m) mode:
 
-arXiv:2501.01055 shows that setting Theta=0 and kappa1=0 in all CCZ4 equations
-gives stable evolutions to 10^5 M. Eliminates momentum-constraint-damping
-instabilities seen in standard CCZ4 at late times.
+```
+d²Psi/dt² - d²Psi/dr*² + V_l(r) * Psi = 0
+```
 
-Direct speedup is small (remove 1 field, ~4% memory savings), but enables
-much longer stable inspiral runs — the real bottleneck for science.
+**Tortoise coordinate:** `r* = r + 2M ln(r/(2M) - 1)`
 
-### Classic RK4 over CK45
+**Potentials:**
 
-Classic RK4 = 4 RHS evaluations. CK45 = 5 RHS evaluations. **1.25x speedup**
-by switching from CK45 to classic when memory allows. Already available via
-`--rk classic`.
+```
+V_RW(r) = (1 - 2M/r) * [l(l+1)/r² - 6M/r³]               (odd parity)
+V_Z(r)  = (1 - 2M/r) * [2λ²(λ+1)r³ + 6λ²Mr² + 18λM²r + 18M³]
+                       / [r³(λr + 3M)²]                     (even parity)
+```
 
-### Paired Explicit RK (P-ERK) — future
+where `λ = (l-1)(l+2)/2`.
 
-Different blocks use different numbers of RK stages based on local stiffness.
-Stiff blocks (near punctures) get many stages; non-stiff blocks get few.
-2-5x speedup on AMR meshes. High implementation effort.
+### 2.3 Hyperboloidal Compactification
 
-### Not recommended
+Transform (t, r*) → (tau, rho) via height function:
 
-- IMEX for gauge terms: too complex for 1.2x gain
-- Operator splitting: breaks 4th-order convergence
-- Local timestepping (per-block dt): DAG scheduling complexity, 1.5-2x gain
+```
+tau = t - h(r*)           (time transformation)
+r*  = rho / Omega(rho)    (spatial compactification)
+```
+
+**Domain:**
+
+```
+rho_min = r*(r_ext)        inner boundary (extraction radius)
+rho_*   = 1.5 * rho_min    start of hyperboloidal layer
+rho_S   = 2.0 * rho_min    null infinity (Omega = 0)
+```
+
+At null infinity the equation becomes purely ingoing — **no outer boundary
+condition needed**. This is the key advantage.
+
+**Inner boundary:** NR data provides ingoing characteristic variable
+`g(t) = Psi_t - Psi_{r*}` at r_ext, smoothed by activation function
+ramping 0→1 over ~100M.
+
+### 2.4 Implementation
+
+Standalone post-processing — zero coupling to evolution code:
+
+```
+tools/phe_extract.c
+  Input:  psi4_lm_rXXX.csv (Psi4 multipole time series)
+  Output: strain_lm_scri.csv (h at null infinity)
+  Build:  make phe-extract (pure C17 + libm, no Lattice dependency)
+```
+
+Steps per (l,m) mode:
+1. Set up 1D radial grid (N = 401-1601 points)
+2. Compute compactification functions Omega(rho), H(rho), V_l(rho)
+3. Read NR time series, construct inner BC with activation
+4. Time-step hyperboloidal RWZ: RK4 in time, 4th-order FD in space
+5. Record waveform at rho_S (null infinity)
+
+### 2.5 Resolution & Accuracy
+
+| N (radial) | Phase accuracy | Use case |
+|------------|---------------|----------|
+| 401 | ~0.01 rad | Development |
+| 801 | ~10⁻³ rad | Production |
+| 1601 | ~10⁻⁴ rad | High accuracy |
+
+CFL is modest: a 5000M run at N=401 takes ~25,000 steps — seconds on a laptop.
+
+### 2.6 Line Count
+
+| Component | Lines |
+|-----------|-------|
+| Grid setup + compactification | ~120 |
+| RWZ RHS (4th-order FD + potential) | ~80 |
+| RK4 time stepper | ~60 |
+| Inner BC (characteristic + activation) | ~50 |
+| I/O (CSV read/write) | ~100 |
+| Main + CLI | ~60 |
+| **Total** | **~470** |
+
+### 2.7 Key References
+
+- arXiv:2508.05743 (Bernuzzi et al. 2025) — the PHE paper
+- arXiv:1008.3809 (Zenginoglu 2011) — hyperboloidal layers
+- arXiv:1107.5402 (Bernuzzi, Nagar, Zenginoglu 2012) — BBH with hyperboloidal
+- gr-qc/0502028 (Martel & Poisson 2005) — gauge-invariant RWZ formalism
 
 ---
 
-## 3. Kernel-Level Optimization
+## 3. CCE Worldtube Output
 
-### Fused d1/d2 stencil
+**Status:** Not implemented.
+**Effort:** 2-3 weeks, ~930 lines in `cce_worldtube.h` + `cce_worldtube.c`.
+**Dependencies:** Requires Psi4 infrastructure (shares interpolation). Requires
+HDF5 library (conditional: `make HDF5=on`).
 
-`fd_d1` and `fd_d2` load the same 5 stencil points. Fusing them halves the
-loads for the ~14 fields needing both derivatives:
+### 3.1 Overview
+
+Output worldtube boundary data on a coordinate sphere for SpECTRE's CCE solver.
+SpECTRE does the characteristic evolution to null infinity — gold standard for
+waveform accuracy.
+
+**Workflow:**
+1. Lattice outputs **ADM Metric Nodal** format (simplest from CCZ4 variables)
+2. Run SpECTRE `PreprocessCceWorldtube` to convert to Bondi-Sachs modal
+3. Run SpECTRE CCE on the converted file
+
+### 3.2 Required Data (31 HDF5 Datasets)
+
+| Category | Datasets | Count |
+|----------|----------|-------|
+| Spatial metric | `gxx.dat` ... `gzz.dat` | 6 |
+| Extrinsic curvature | `Kxx.dat` ... `Kzz.dat` | 6 |
+| Lapse + derivatives | `Lapse.dat`, `D{x,y,z}Lapse.dat` | 4 |
+| Shift + derivatives | `Shift{x,y,z}.dat`, `D{x,y,z}Shift{x,y,z}.dat` | 12 |
+| Gauge auxiliary | `AuxiliaryShift{x,y,z}.dat` (= B^i) | 3 |
+
+### 3.3 Angular Grid
+
+- theta: `l_max + 1` Gauss-Legendre points in cos(theta)
+- phi: `2 * l_max + 1` equally spaced
+- Default l_max = 16 → 17 × 33 = 561 points per timestep per dataset
+- Row format: `[time, val(phi_0,theta_0), val(phi_0,theta_1), ...]`
+- `Legend` attribute required on every dataset
+- File naming: `CceR{XXXX}.h5` (zero-padded radius)
+
+### 3.4 Conformal-to-Physical Reconstruction
 
 ```c
-static inline void fd_d1_d2(const double *f, int idx, int s, double dx,
-                             double *d1, double *d2) {
-    double fm2 = f[idx-2*s], fm1 = f[idx-s], f0 = f[idx];
-    double fp1 = f[idx+s],   fp2 = f[idx+2*s];
-    *d1 = ((1.0/12)*fm2 - (2.0/3)*fm1 + (2.0/3)*fp1 - (1.0/12)*fp2) / dx;
-    *d2 = (-(1.0/12)*fm2 + (4.0/3)*fm1 - (5.0/2)*f0 + (4.0/3)*fp1 - (1.0/12)*fp2) / (dx*dx);
-}
+gamma_ij = h_ij / chi                                    // physical metric
+K_ij     = (A_ij + (K/3) * h_ij) / chi                  // physical ext. curvature
+d_k gamma_ij = d_k(h_ij)/chi - h_ij * d_k(chi) / chi²  // chain rule
 ```
 
-Saves ~210 loads per point. 10-15% CPU speedup.
+Cartesian derivatives via `interp_field_deriv_at()` — no FD on the sphere.
 
-### LTO (link-time optimization)
+### 3.5 PreprocessCceWorldtube Config
 
-Adding `-flto` to CFLAGS allows GCC to inline `ccz4_rhs_point` into the
-backend loop. Currently the inner i-loop calls it as a function pointer,
-preventing all cross-TU optimization. **Trivial change, 5-15% CPU speedup.**
+```yaml
+InputDataFormat:
+  AdmMetricNodal:
+    Lapse: { Advective: True }         # 1+log slicing
+    Shift: { Advective: True }         # Gamma-driver
+    FirstOrderDriverFactor: 0.75       # shift_Gamma_coeff
+    SecondOrderDriverEta: 1.0          # eta
+ExtractionRadius: 100
+LMaxFactor: 3
+```
 
-### Fused RHS + CK45 update
+### 3.6 HDF5 Dependency
 
-Instead of: RHS writes to `rhs[]` buffer → CK45 reads `rhs[]` buffer, fuse
-them so RHS values go directly into the CK45 update:
+Required — SpECTRE only reads HDF5. Gated behind `make HDF5=on`:
+```makefile
+ifeq ($(HDF5),on)
+    HDF5_FLAGS = -DLATTICE_HDF5 $(shell pkg-config --cflags hdf5)
+    HDF5_LIBS  = $(shell pkg-config --libs hdf5)
+endif
+```
+
+Default `HDF5=off` — zero impact on normal builds.
+
+**Alternative:** Python postprocessor (`tools/write_cce_worldtube.py`, ~150
+lines) reads raw binary and writes HDF5 via h5py. Avoids C dependency.
+
+### 3.7 CLI Flags
+
+```
+--cce-radius 100     # extraction radius (M)
+--cce-every 20       # output cadence in steps
+--cce-lmax 16        # angular resolution
+```
+
+### 3.8 Line Count
+
+| Component | Lines |
+|-----------|-------|
+| Header | ~60 |
+| Gauss-Legendre nodes/weights | ~80 |
+| Sphere coordinate setup | ~40 |
+| HDF5 file creation + Legend attrs | ~200 |
+| Per-step interpolation + reconstruction | ~250 |
+| Per-step HDF5 write | ~120 |
+| Cartesian derivatives (chain rule) | ~150 |
+| Cleanup | ~30 |
+| **Total** | **~930** |
+
+### 3.9 Key References
+
+- arXiv:2110.08635 (Moxon et al. 2023) — SpECTRE CCE system
+- spectre-code.org/tutorial_cce.html — exact HDF5 format spec
+- arXiv:2411.11989 (GR-Athena++ waveforms) — CCE from non-SpECTRE code
+
+---
+
+## 4. HIP Backend
+
+**Status:** Not implemented.
+**Effort:** 1-2 weeks, ~900 lines in `backend_hip.cpp` + Makefile.
+**Dependencies:** None (independent of other work).
+
+### 4.1 What HIP Is
+
+AMD's GPU programming model — near-identical CUDA syntax, compiles for both:
+
+- `HIP_PLATFORM=amd` → AMD GPUs (MI250X, MI300X) via ROCm
+- `HIP_PLATFORM=nvidia` → NVIDIA GPUs (V100, A100, H100) via nvcc
+
+20-50% faster than OpenMP target offloading. Avoids GCC nvptx codegen bugs.
+
+### 4.2 Translation Pattern
+
+| OpenMP Target | HIP |
+|---------------|-----|
+| `#pragma omp target teams distribute parallel for` | `__global__` kernel + `<<<grid,block>>>` |
+| `#pragma omp target enter data map(to:)` | `hipMalloc` + `hipMemcpy` |
+| `#pragma omp target exit data map(from:)` | `hipMemcpy` + `hipFree` |
+| `#pragma omp declare target` on function | `__device__` attribute |
+| `#pragma omp declare target` on constant | `__constant__` memory |
+
+### 4.3 Architecture
+
+**Single new file:** `src/backend/backend_hip.cpp` (.cpp required for hipcc).
+
+**Compile everything with hipcc.** All physics code is valid C++ — hipcc handles
+it. Required because `ccz4_rhs_point` and everything it calls must be
+`__device__`-annotated.
+
+**Device macro:** Add `LATTICE_DEVICE` to existing headers:
+
 ```c
-// Inside ccz4_rhs_point, instead of: rhs[f][idx] = rhs_val
-scratch[f][idx] = A_s * scratch[f][idx] + dt * rhs_val;
-data[f][idx] += B_s * scratch[f][idx];
+#ifdef LATTICE_HIP
+  #define LATTICE_DEVICE __device__
+#else
+  #define LATTICE_DEVICE
+#endif
 ```
 
-Eliminates the rhs buffer entirely (saves 25% memory for CK45) and removes
-one full memory pass (~500 MB at N=128). **15-25% CPU, 10-20% GPU.**
+### 4.4 Required Kernels (~17)
 
-Sommerfeld BCs need special handling for boundary points.
+| Function | Kernels | Lines | Notes |
+|----------|---------|-------|-------|
+| `backend_map/unmap_pack` | 0 | ~110 | hipMalloc/hipMemcpy for ~15 buffers |
+| `backend_zero/copy/axpy/accum/apply` | 5 | ~75 | Trivial flat loops |
+| `backend_compute_rhs_packed` | 1 | ~50 | Calls ccz4_rhs_point |
+| `backend_sommerfeld_packed` | 1 | ~60 | Face iteration |
+| `backend_update_ck45_packed` | 1 | ~15 | Flat loop |
+| `backend_ghost_exchange_packed` | 7 | ~300 | 7 phases (same as GPU backend) |
+| `backend_enforce_algebraic_packed` | 1 | ~60 | det/inverse/trace-free |
+| `backend_init/cleanup` | 0 | ~20 | hipMemcpyToSymbol |
 
-### GPU occupancy
+### 4.5 Performance Notes
 
-ccz4_rhs_point uses ~400 registers per thread → ~15% occupancy on A100.
-Splitting into two stages (derivatives → algebra+RHS) halves register pressure,
-doubling occupancy to ~30%. **20-40% GPU speedup.**
+- **No shared memory for RHS.** 25+ fields × 7-point stencils = ~690 KB needed,
+  far exceeding 48-64 KB limits. Global memory + cache is correct (same as
+  AthenaK).
+- **Block size:** 128-256 for RHS (5.3 KB stack/thread), 256-512 for simple
+  kernels.
 
-The `memset(&g_local, 0, sizeof(grid_t))` in backend_gpu.c zeroes 872 bytes
-per thread unnecessarily. Replace with targeted initialization of the 5 fields
-actually used. **Trivial, 2-5% GPU.**
+### 4.6 Makefile Addition
 
-### Mixed precision: NOT recommended
+```makefile
+else ifeq ($(BACKEND),hip)
+    HIPCC ?= hipcc
+    HIP_PLATFORM ?= $(shell hipconfig --platform 2>/dev/null || echo amd)
+    ifeq ($(HIP_PLATFORM),nvidia)
+        GPU_ARCH_HIP ?= sm_80
+    else
+        GPU_ARCH_HIP ?= gfx90a
+    endif
+    CC = $(HIPCC)
+    CFLAGS_BASE = -std=c++17 -DLATTICE_HIP --offload-arch=$(GPU_ARCH_HIP) ...
+endif
+```
 
-Float32 Christoffel symbols accumulate ~1e-5 roundoff near punctures,
-comparable to N=256 truncation error. Would break convergence. FP64 is
-non-negotiable for all physics arrays.
+### 4.7 Implementation Order
 
-### Precomputed inverse metric: NOT recommended
+1. Add `LATTICE_DEVICE` macro to ~17 headers (~30 min)
+2. Simple kernels: zero, copy, axpy, etc. (~1 hr)
+3. Map/unmap: mechanical hipMalloc/hipMemcpy (~1 hr)
+4. enforce_algebraic (~30 min)
+5. compute_rhs — the big one (~2 hr)
+6. sommerfeld (~30 min)
+7. Ghost exchange (7 kernels) (~3 hr)
+8. Makefile + test (~2 hr)
 
-The inverse metric computation is 30 FLOPs (~0.6% of RHS). Storing as 6 extra
-fields adds 48 bytes/point of bandwidth for negligible compute savings.
-Slightly negative net effect (kernel is bandwidth-limited on GPU).
+### 4.8 Key References
+
+- ROCm HIP Programming Guide: rocm.docs.amd.com
+- AthenaK (arXiv:2409.10383) — GPU NR with Kokkos targeting HIP
+- HIP Porting Guide — CUDA→HIP API mapping tables
 
 ---
 
-## 4. Memory & I/O
+## 5. HOBC
 
-### Checkpoint/restart (critical infrastructure)
+**Status:** Not implemented. Current Sommerfeld is the "weakest link."
+**Effort:** Depends on approach (0 to 3 weeks).
 
-**Format:** Raw binary + CRC32 checksum. Zero dependencies.
-```
-Header: magic, version, N, L, ghost, num_fields, step, time, params
-Per block: metadata (level, origin) + field data
-Footer: CRC32
-```
+### 5.1 Three Paths (Pick One)
 
-Checkpoint every 500 steps: 0.2% overhead, max 37 min lost on crash.
-Ring buffer of 2 files. ~300 lines of C.
+#### Path A: Larger Domain — Zero Code Changes (Recommended First)
 
-### Persistent pack
+Push outer boundary from R~500M to R~1500-2000M using AMR coarse levels.
 
-Currently the pack is allocated, loaded, and freed every timestep. For static
-meshes (no regridding), create once and reuse. Eliminates ~4 GB of memcpy per
-step. Invalidate on regrid.
+- **Effort:** 0 lines. Just use `--L 4000`.
+- **Cost:** ~10-20% more compute (only adds coarse blocks).
+- **Benefit:** Reflections reduced 4-16x. Round-trip time exceeds run duration.
+- **This is what every BSSN/CCZ4 production code does.**
 
-### Fields-only block grids
+#### Path B: Constraint-Preserving Sommerfeld (~500 lines, 2-3 weeks)
 
-AMR blocks currently allocate 3 arrays (fields + rhs + scratch) even though
-the packed path does all computation in the pack. Allocating only `fields`
-saves 66% of per-block memory. For 200 blocks: 1.37 GB saved.
+Decompose into characteristic variables at boundary, zero incoming constraint
+modes. This is what BAM uses.
 
-Combined with persistent pack: peak memory drops 33%.
+**CCZ4 characteristic speeds at boundary (far field, alpha→1, beta→0):**
 
-### 3D output
+| Speed | Variables | Count |
+|-------|-----------|-------|
+| 0 | chi, h_ij, Theta | 8 |
+| ±1 | K, A_ij, Gamma^i | 20 (10 in, 10 out) |
+| ±1 | GW modes | 4 (2 in, 2 out) |
 
-Raw binary data files + XDMF descriptors. VisIt/ParaView load XDMF natively.
-Zero dependencies (~200 lines of C for binary writer + XML emitter).
+**Implementation:** Project onto characteristic variables, Sommerfeld on
+outgoing modes, zero incoming constraint modes (Theta, Gamma^i).
 
-Async I/O thread for high-frequency output (pthread + staging buffer, ~100 extra lines).
+**New files:** `src/boundary/cpbc.h` (~80), `src/boundary/cpbc.c` (~400)
+**CLI:** `--bc sommerfeld|cpbc`
 
-### CK45 is already optimal
+#### Path C: Full RWZ-Based HOBC (~1200 lines, 2-3 months)
 
-CK45 uses 3 memory blocks (the minimum for 4th-order stencil PDEs). Cannot
-reduce further: stencils read from `U` at neighboring points, so RHS output
-must go to a separate buffer. 2N refers to solution registers, not counting
-the mandatory RHS scratch.
+Bayliss-Turkel hierarchy on gauge-invariant RWZ scalars. **Never done for
+CCZ4** — only SpEC (generalized harmonic) has this. Research contribution.
 
-### Conditional EM allocation
+Not recommended unless needed for sub-dominant mode accuracy.
 
-When `--em` is not used, the 6 EM fields waste 19% of memory at N=256.
-Compile-time `#define LATTICE_VACUUM` setting NUM_FIELDS=25 saves 2.7 GB.
+### 5.2 What Production Codes Use
 
-### Not recommended
+| Code | Formulation | BCs |
+|------|------------|-----|
+| SpEC | Gen. Harmonic | HOBC (only code with full implementation) |
+| SpECTRE | Gen. Harmonic | Constraint-preserving + Bjorhus |
+| BAM | Z4c/BSSN | Sommerfeld + constraint-preserving |
+| GRChombo | CCZ4 | Sommerfeld |
+| Einstein Toolkit | BSSN | Sommerfeld |
 
-- Unified GPU memory: page fault overhead, GCC immaturity
-- Perturbation storage (h_ij = delta + epsilon): no savings at FP64
-- Ghost width reduction: would break convergence
-- Shared sibling coarse_bufs: high effort for ~140 MB savings
+**No BSSN/CCZ4 code has full HOBC.** All rely on Sommerfeld + large domains.
 
----
+### 5.3 Recommendation
 
-## Implementation Roadmap
+1. **Now:** Larger domain with AMR. Zero effort, solves the problem.
+2. **Phase 3:** Constraint-preserving Sommerfeld (Path B) for long runs (>10⁴M).
+3. **Only if needed:** Full HOBC (Path C) — research project.
 
-### Immediate (days)
+### 5.4 Key References
 
-1. `-flto` in Makefile (1 line)
-2. Fused `fd_d1_d2()` in finite_diff.h
-3. Replace GPU memset with targeted init
-4. Checkpoint/restart (raw binary)
-
-### Short-term (1-2 weeks)
-
-5. 6th-order FD stencils (+ 8th-order KO)
-6. Selective GPU transfer (ghost slabs only)
-7. Persistent pack for AMR
-8. 3D output (raw binary + XDMF)
-
-### Medium-term (weeks to months)
-
-9. Fused RHS+CK45 compute-and-accumulate
-10. GPU-native ghost exchange (Phase 1 on device)
-11. GPU kernel splitting for occupancy
-12. CCZ3 formulation mode
-13. 32^3 block size option for GPU production
-14. Fields-only block grids for AMR
-
-### Long-term (months)
-
-15. Multi-GPU support (per-device packs)
-16. MPI domain decomposition
-17. P-ERK multi-rate time integration
+- arXiv:0811.3593 (Buchman, Rinne, Sarbach 2009) — HOBC implementation
+- arXiv:1010.0523 (Ruiz, Hilditch, Bernuzzi 2011) — CP BCs for Z4c
+- arXiv:1707.09910 (Dumbser et al. 2018) — CCZ4 eigenstructure
 
 ---
 
-## Key References
+## 6. Priority & Dependencies
 
-### Parallelization
-- arXiv:2409.16053 — AthenaK: MPI + Kokkos, 80% scaling to 65K GPUs
-- arXiv:2509.19701 — Parthenon-VIBE: block size vs GPU performance
-- arXiv:2505.00097 — superB/NRPy: Charm++ task-based NR
-- arXiv:2509.21527 — GROMACS NVSHMEM halo exchange
+### Dependency Chain
 
-### Algorithms
-- arXiv:2501.01055 — CCZ3: stable to 10^5 M with kappa1=0
-- arXiv:2409.10383 — AthenaK NR: 6th-order FD, GPU benchmarks
-- arXiv:2312.05438 — AMR refinement strategy comparison
-- arXiv:2404.01137 — CAKO/CAHD/SSL dissipation techniques
-- Carpenter & Kennedy 1994 — CK45 coefficients (NASA TM-109112)
-- Vermeire 2019 — Paired Explicit Runge-Kutta
+```
+Psi4 (3-5 days)
+  ├─→ PHE (1-2 weeks) ───→ production waveforms at scri+
+  └─→ CCE worldtube (2-3 weeks) ───→ gold-standard via SpECTRE
 
-### Kernel optimization
-- Williams et al. 2009 — Roofline model (CACM)
-- NVIDIA A100 whitepaper — register file, shared memory specs
+HIP backend (1-2 weeks) ─── independent, no blockers
 
-### Memory/IO
-- Ketcheson 2010 — Minimum storage RK methods
-- GRChombo wiki — HDF5 checkpoint/visualization
-- ADIOS2 docs — high-performance I/O engine
+Larger domain (0 days) ─── just change --L flag
+CP-Sommerfeld (2-3 weeks) ─── independent, nice-to-have
+```
+
+### Recommended Order
+
+| # | Item | Effort | Why first? |
+|---|------|--------|------------|
+| 1 | **Psi4 extraction** | 3-5 days | Blocks everything else |
+| 2 | **PHE** | 1-2 weeks | Fast path to publishable waveforms |
+| 3 | **HIP backend** | 1-2 weeks | Can run in parallel with PHE |
+| 4 | **Larger domain** | 0 days | Just use `--L 4000` |
+| 5 | **CCE worldtube** | 2-3 weeks | Gold standard, needs HDF5 |
+| 6 | **CP-Sommerfeld** | 2-3 weeks | Nice-to-have for very long runs |
+
+### Fast Path to First Publishable Waveforms
+
+**Psi4 (5 days) + PHE (2 weeks) = ~3 weeks total.**
+
+No HDF5, no external tools, pure C17. Produces waveforms at null infinity with
+< 0.05 rad phase accuracy — sufficient for current and next-gen detectors.
