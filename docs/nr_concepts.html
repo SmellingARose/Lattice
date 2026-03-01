@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lattice — Numerical Relativity Concepts</title>
+<style>
+  body {
+    font-family: Georgia, serif;
+    max-width: 800px;
+    margin: 40px auto;
+    padding: 0 20px;
+    line-height: 1.7;
+    color: #222;
+    background: #fafafa;
+  }
+  h1 { font-size: 1.8em; border-bottom: 2px solid #333; padding-bottom: 8px; }
+  h2 { font-size: 1.3em; margin-top: 2em; color: #444; }
+  h3 { font-size: 1.05em; margin-top: 1.5em; color: #555; }
+  .qa {
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    padding: 20px 24px;
+    margin: 16px 0;
+  }
+  .qa h3 { margin-top: 0; color: #1a5276; }
+  .key {
+    background: #eef6fc;
+    border-left: 3px solid #2980b9;
+    padding: 10px 14px;
+    margin: 12px 0;
+    font-style: italic;
+  }
+  code {
+    background: #f0f0f0;
+    padding: 2px 5px;
+    border-radius: 3px;
+    font-size: 0.95em;
+  }
+  .eq {
+    text-align: center;
+    margin: 12px 0;
+    font-family: "Times New Roman", serif;
+    font-size: 1.1em;
+  }
+  .toc { background: #fff; border: 1px solid #ddd; border-radius: 6px; padding: 16px 24px; }
+  .toc ul { margin: 0; padding-left: 20px; }
+  .toc li { margin: 4px 0; }
+  .toc a { text-decoration: none; color: #2980b9; }
+  .toc a:hover { text-decoration: underline; }
+  .pipeline {
+    background: #2c3e50;
+    color: #ecf0f1;
+    border-radius: 6px;
+    padding: 20px 24px;
+    margin: 20px 0;
+    font-family: monospace;
+    font-size: 0.95em;
+    line-height: 1.9;
+  }
+</style>
+</head>
+<body>
+
+<h1>Numerical Relativity Concepts</h1>
+<p>A self-contained guide to the physics and numerical methods behind the Lattice
+CCZ4 code, organized as questions and answers covering the full pipeline from
+the 3+1 decomposition to gravitational wave extraction.</p>
+
+<div class="toc">
+<strong>Contents</strong>
+<ul>
+  <li><a href="#s1">1. The 3+1 Split (ADM)</a></li>
+  <li><a href="#s2">2. Conformal Decomposition</a></li>
+  <li><a href="#s3">3. CCZ4 Formulation</a></li>
+  <li><a href="#s4">4. Gauge Conditions</a></li>
+  <li><a href="#s5">5. Initial Data</a></li>
+  <li><a href="#s6">6. Numerical Methods</a></li>
+  <li><a href="#s7">7. AMR &amp; Gravitational Waves</a></li>
+  <li><a href="#s8">8. The Full Pipeline</a></li>
+</ul>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="s1">1. The 3+1 Split (ADM)</h2>
+
+<div class="qa">
+<h3>Q: What are the lapse and shift, and what do they physically control?</h3>
+<p>The ADM formalism splits 4D spacetime into a stack of 3D spatial slices
+evolving in time. Two quantities control how the slices are laid out:</p>
+<ul>
+  <li><strong>Lapse (&#945;)</strong> &mdash; controls how much proper time elapses
+    between adjacent slices at each point. A large lapse means time runs fast
+    there; a small lapse means time is frozen.</li>
+  <li><strong>Shift (&#946;<sup>i</sup>)</strong> &mdash; controls how spatial
+    coordinates slide sideways between slices. A nonzero shift means the
+    coordinate labels drift relative to the physics.</li>
+</ul>
+<p>Together they define the coordinate system. The physics doesn't depend on
+their values, but the stability and quality of a simulation depends critically
+on choosing them well.</p>
+</div>
+
+<div class="qa">
+<h3>Q: What is the extrinsic curvature K<sub>ij</sub>? What does it measure?</h3>
+<p>The extrinsic curvature measures how each spatial slice is embedded in 4D
+spacetime &mdash; specifically, how the slice bends. Formally:</p>
+<div class="eq">K<sub>ij</sub> = &minus;(1/2&#945;) (&#8706;<sub>t</sub> g<sub>ij</sub>
+&minus; D<sub>i</sub>&#946;<sub>j</sub> &minus; D<sub>j</sub>&#946;<sub>i</sub>)</div>
+<p>It is the "time derivative" of the spatial metric (up to gauge). A spatial
+slice through flat spacetime has K<sub>ij</sub> = 0. A slice through a collapsing
+region has large K<sub>ij</sub>. Together, g<sub>ij</sub> and K<sub>ij</sub> are
+the 12 dynamical variables of general relativity.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="s2">2. Conformal Decomposition</h2>
+
+<div class="qa">
+<h3>Q: Why decompose the metric into a conformal factor and conformal metric?</h3>
+<p>Evolving the raw ADM equations (g<sub>ij</sub> and K<sub>ij</sub> directly)
+is numerically unstable. Simulations blow up within ~10M of evolution. The
+reason is mathematical: the ADM system is only <em>weakly hyperbolic</em>,
+meaning small perturbations can grow without bound.</p>
+<p>The fix (Shibata &amp; Nakamura 1995, Baumgarte &amp; Shapiro 1998): split
+the metric into two pieces:</p>
+<div class="eq">g<sub>ij</sub> = &#967;<sup>&minus;1</sup> h&#771;<sub>ij</sub></div>
+<p>where &#967; (chi) carries the "size" and h&#771;<sub>ij</sub> carries the
+"shape" with det(h&#771;) = 1. Similarly, K<sub>ij</sub> is split into its trace
+K and traceless part &#195;<sub>ij</sub>.</p>
+<p>This separates gauge/constraint degrees of freedom from physical ones.
+The resulting system (BSSN) is <em>strongly hyperbolic</em>, which is required
+for numerical stability.</p>
+<div class="key">Evolving raw ADM is weakly hyperbolic. The conformal decomposition
+makes the system strongly hyperbolic, which is required for numerical stability.</div>
+</div>
+
+<div class="qa">
+<h3>Q: What is chi (&#967;)?</h3>
+<p>Chi is the conformal factor:</p>
+<div class="eq">&#967; = det(g)<sup>&minus;1/3</sup></div>
+<p>In flat space, &#967; = 1. Near a black hole singularity, &#967; &rarr; 0.
+The physical metric is recovered as g<sub>ij</sub> = h&#771;<sub>ij</sub> / &#967;.</p>
+<p>Some codes use &#968; (psi) instead, where g<sub>ij</sub> = &#968;<sup>4</sup>
+h&#771;<sub>ij</sub>. The problem is that &#968; &rarr; &infin; at punctures, which
+is numerically troublesome. Chi goes to zero instead, which stays smooth and
+finite everywhere on the grid.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="s3">3. CCZ4 Formulation</h2>
+
+<div class="qa">
+<h3>Q: What is the difference between BSSN and CCZ4? What is Theta?</h3>
+<p>BSSN (the conformal decomposition described above) works, but has a weakness:
+constraint violations, once they appear numerically, just sit there and slowly
+grow. Nothing in the BSSN equations pushes them back toward zero.</p>
+<p>CCZ4 (Alic et al. 2012) adds a new evolved scalar variable
+<strong>&Theta;</strong> and a vector Z<sub>i</sub> that directly encode
+constraint violations:</p>
+<ul>
+  <li>&Theta; &asymp; Hamiltonian constraint violation</li>
+  <li>Z<sub>i</sub> &asymp; momentum constraint violation</li>
+</ul>
+<p>The key innovation: CCZ4 includes damping terms proportional to a parameter
+&#954;<sub>1</sub> that exponentially drive &Theta; and Z<sub>i</sub> back to zero.
+When constraints are violated (as they always are in finite-precision numerics),
+CCZ4 actively cleans them up on a timescale ~1/&#954;<sub>1</sub>.</p>
+<div class="key">CCZ4 is BSSN with built-in constraint damping. It adds a scalar
+&Theta; that tracks constraint violations and exponentially damps them.</div>
+</div>
+
+<div class="qa">
+<h3>Q: What are the constraint equations, and why does violation matter?</h3>
+<p>Einstein's equations split into two types:</p>
+<ul>
+  <li><strong>Evolution equations</strong> &mdash; how g<sub>ij</sub> and
+    K<sub>ij</sub> change in time (integrated with RK4).</li>
+  <li><strong>Constraint equations</strong> &mdash; conditions that must hold
+    on every time slice.</li>
+</ul>
+<p>The <strong>Hamiltonian constraint</strong>:</p>
+<div class="eq">R + K&sup2; &minus; K<sub>ij</sub>K<sup>ij</sup> = 0</div>
+<p>The <strong>momentum constraint</strong>:</p>
+<div class="eq">D<sub>j</sub>K<sup>j</sup><sub>i</sub> &minus; D<sub>i</sub>K = 0</div>
+<p>These are analogous to &nabla;&middot;E = &#961; and &nabla;&middot;B = 0 in
+electromagnetism: they must hold at all times, but you don't evolve them directly.
+If your numerics are perfect, they stay satisfied forever. In practice they drift,
+and <strong>the magnitude of constraint violation is the primary measure of code
+correctness.</strong> Convergence testing checks that violations shrink at the
+expected rate as resolution increases.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="s4">4. Gauge Conditions</h2>
+
+<div class="qa">
+<h3>Q: What gauge conditions does the code use, and why?</h3>
+<p>"Gauge" means the choice of lapse &#945; and shift &#946;<sup>i</sup>, which
+determine how you slice spacetime and how coordinates move.</p>
+<h3>1+log slicing (lapse):</h3>
+<div class="eq">&#8706;<sub>t</sub>&#945; = &minus;2&#945;(K &minus; 2&Theta;)</div>
+<p>This drives the lapse to collapse (&#945; &rarr; ~0.3) near black holes,
+effectively <em>freezing time</em> at the singularity. The name comes from the
+analytic solution &#945; = 1 + log(g) in certain cases.</p>
+<h3>Gamma-driver (shift):</h3>
+<div class="eq">&#8706;<sub>t</sub>&#946;<sup>i</sup> = (3/4) B<sup>i</sup></div>
+<div class="eq">&#8706;<sub>t</sub>B<sup>i</sup> = &#8706;<sub>t</sub>&#915;&#771;<sup>i</sup>
+&minus; &#951; B<sup>i</sup></div>
+<p>This makes coordinates "follow" the black holes as they move, preventing
+coordinate stretching. The damping parameter &#951; controls how quickly the
+shift responds.</p>
+<div class="key">1+log slicing freezes the singularity by collapsing the lapse.
+The Gamma-driver shift lets coordinates track moving black holes.</div>
+</div>
+
+<div class="qa">
+<h3>Q: What is a "moving puncture" and why does gauge choice matter?</h3>
+<p>A <strong>puncture</strong> is a point where the black hole interior's spatial
+infinity is compactified into a single grid point. The metric is singular there
+(&#967; &rarr; 0), but with the right gauge, you can evolve right through it.</p>
+<p>The breakthrough (Campanelli et al. 2005, Baker et al. 2005): with 1+log
+slicing + Gamma-driver shift, the singularity settles into a stable
+<strong>trumpet</strong> geometry. The lapse collapses at the puncture, freezing
+time evolution there. The shift keeps the puncture from drifting off the grid.</p>
+<p>"Moving puncture" means the puncture is free to move across the grid as
+the shift vector pushes it. Before this discovery, groups tried to
+<strong>excise</strong> the black hole interior (cutting a hole in the grid),
+which was fragile and couldn't handle mergers.</p>
+<div class="key">Moving punctures let you evolve through black hole singularities
+by using gauge conditions that freeze the singular point into a stable trumpet slice.</div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="s5">5. Initial Data</h2>
+
+<div class="qa">
+<h3>Q: Why can't you freely specify all 12 variables for initial data?</h3>
+<p>You want to set g<sub>ij</sub> (6 components) and K<sub>ij</sub> (6 components)
+at t = 0. But the Hamiltonian and momentum constraints must hold on the initial
+slice. That gives <strong>4 equations</strong> constraining your
+<strong>12 free functions</strong>.</p>
+<p>So you freely choose 8 components (the "free data") and <strong>solve elliptic
+PDEs</strong> for the remaining 4. This is why the code includes a multigrid
+solver &mdash; it solves those constraint equations on the initial time slice.</p>
+<p>The standard approach (conformal transverse-traceless decomposition): freely
+specify the conformal metric h&#771;<sub>ij</sub> and the traceless-transverse
+part of &#195;<sub>ij</sub>, then solve for &#967; (from the Hamiltonian constraint)
+and a vector potential W<sup>i</sup> (from the momentum constraint).</p>
+</div>
+
+<div class="qa">
+<h3>Q: What is a puncture? What is Bowen-York data?</h3>
+<p><strong>Puncture method</strong> (Brandt &amp; Br&uuml;gmann 1997): Write the
+conformal factor as &#968; = &#968;<sub>BL</sub> + u, where</p>
+<div class="eq">&#968;<sub>BL</sub> = 1 + &Sigma; M<sub>i</sub> / (2r<sub>i</sub>)</div>
+<p>is the analytic Brill-Lindquist piece (encodes the mass of each black hole)
+and u is a smooth correction solved numerically. The equation for u is a single
+elliptic PDE &mdash; this is what the multigrid solver computes.</p>
+<p><strong>Bowen-York data:</strong> An analytic closed-form solution for the
+extrinsic curvature &#195;<sub>ij</sub> that gives black holes with specified
+linear momentum P<sup>i</sup> and spin S<sup>i</sup>. It satisfies the momentum
+constraint exactly (analytically), so you only need to solve the Hamiltonian
+constraint for the conformal factor &mdash; reducing the problem to one elliptic
+PDE instead of four.</p>
+<div class="key">Bowen-York gives an analytic extrinsic curvature for black holes
+with arbitrary momentum and spin. You then solve one elliptic PDE for the conformal
+factor using multigrid.</div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="s6">6. Numerical Methods</h2>
+
+<div class="qa">
+<h3>Q: What does "6th-order finite differences" mean, and why not 2nd order?</h3>
+<p>Finite differences approximate derivatives on a discrete grid. A 2nd-order
+stencil uses 3 grid points and has error proportional to dx&sup2;. A 6th-order
+stencil uses 7 grid points and has error proportional to dx<sup>6</sup>.</p>
+<p>The payoff: when you double resolution (halve dx), 2nd-order error drops by
+4&times;, but 6th-order error drops by <strong>64&times;</strong>. This means
+6th-order achieves the same accuracy at much coarser resolution, saving enormous
+amounts of memory and computation. For 3D grids where cost scales as N&sup3;,
+this is the difference between feasible and impossible.</p>
+</div>
+
+<div class="qa">
+<h3>Q: What is Kreiss-Oliger dissipation and why is it needed?</h3>
+<p>High-order finite differences are accurate but introduce spurious high-frequency
+oscillations (grid-scale noise) that can destabilize the simulation. Kreiss-Oliger
+(KO) dissipation adds a small amount of artificial viscosity that selectively damps
+only the highest-frequency modes &mdash; the ones the grid can't resolve properly.</p>
+<p>The dissipation operator is one order higher than the finite difference scheme
+(7th-order for 6th-order FD), so it doesn't affect the convergence rate of the
+physical solution. The strength is controlled by a parameter &#963; (typically 0.3).
+Too little dissipation and noise grows; too much and you damp the physics.</p>
+</div>
+
+<div class="qa">
+<h3>Q: What does "4th-order convergence" mean and how do you test it?</h3>
+<p>If the code is correct, the error should decrease as a known power of the grid
+spacing: error &prop; dx<sup>p</sup>, where p is the convergence order.</p>
+<p>To test: run the same problem at 3 resolutions (e.g., N = 32, 64, 128). Compute
+a diagnostic like the Hamiltonian constraint violation at each resolution. If the
+code is correct:</p>
+<div class="eq">H(N=32) / H(N=64) &asymp; 2<sup>p</sup></div>
+<p>For p = 4 (4th-order convergence), the coarse-resolution error should be ~16&times;
+larger than the fine-resolution error. In practice, the code achieves convergence
+order ~6.5 for most variables (from the 6th-order stencils), but some operations
+like boundary conditions limit the overall order to ~4 in certain regions.</p>
+<p><strong>This is the single most important test.</strong> Wrong convergence order
+means a code bug. Correct order but wrong magnitude means a physics issue.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="s7">7. AMR &amp; Gravitational Waves</h2>
+
+<div class="qa">
+<h3>Q: Why do binary black hole simulations need adaptive mesh refinement?</h3>
+<p>Binary BH simulations face a severe scale separation problem. Near each puncture
+you need grid spacing dx &lt; 0.1M to resolve the steep gradients in &#967;. But
+gravitational waves must be extracted at r &gt; 100M, requiring a domain hundreds
+of M across.</p>
+<p>A uniform grid covering both scales would need N ~ 2000+ per dimension &mdash;
+that's 8 billion grid points &times; 31 fields &times; 8 bytes &asymp;
+<strong>2 TB of memory</strong>, which is impractical.</p>
+<p>AMR solves this by using fine grids only where needed (near the black holes) and
+coarse grids in the far field. A typical setup might use 6 refinement levels, with
+each level halving the grid spacing. This reduces memory from terabytes to
+tens of gigabytes while maintaining accuracy where it matters.</p>
+</div>
+
+<div class="qa">
+<h3>Q: What is Psi4 (&Psi;<sub>4</sub>) and why do you need it?</h3>
+<p>&Psi;<sub>4</sub> is a complex scalar constructed from the Weyl curvature tensor
+&mdash; it encodes outgoing gravitational radiation. At large distances from the
+source:</p>
+<div class="eq">&Psi;<sub>4</sub> &asymp; d&sup2;h/dt&sup2;</div>
+<p>where h is the gravitational wave strain that detectors like LIGO measure.</p>
+<p>To extract it: decompose &Psi;<sub>4</sub> into spin-weighted spherical harmonics
+Y<sub>&#8467;m</sub> on extraction spheres at various radii. The dominant mode
+(&#8467; = 2, m = &plusmn;2) gives the quadrupolar radiation pattern. The amplitude
+encodes the energy being radiated; the phase encodes the orbital dynamics.</p>
+<p><strong>Without &Psi;<sub>4</sub>, a numerical relativity code is a sandbox.
+With it, it becomes a tool for gravitational wave science.</strong></p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="s8">8. The Full Pipeline</h2>
+
+<p>The complete numerical relativity pipeline, from mathematical formulation to
+physical observables:</p>
+
+<div class="pipeline">
+4D Einstein equations<br>
+&nbsp;&nbsp;&darr; 3+1 decomposition (ADM)<br>
+Spatial metric g<sub>ij</sub> + extrinsic curvature K<sub>ij</sub><br>
+&nbsp;&nbsp;&darr; conformal decomposition (stability)<br>
+&#967;, h&#771;<sub>ij</sub>, K, &#195;<sub>ij</sub>, &#915;&#771;<sup>i</sup><br>
+&nbsp;&nbsp;&darr; add constraint damping (CCZ4)<br>
++ &Theta;, Z<sub>i</sub> with &#954;<sub>1</sub> damping<br>
+&nbsp;&nbsp;&darr; gauge choice<br>
+1+log lapse + Gamma-driver shift (moving punctures)<br>
+&nbsp;&nbsp;&darr; initial data<br>
+Bowen-York &#195;<sub>ij</sub> + multigrid solve for &#967;<br>
+&nbsp;&nbsp;&darr; time evolution<br>
+RK4 + 6th-order finite differences + KO dissipation<br>
+&nbsp;&nbsp;&darr; wave extraction<br>
+&Psi;<sub>4</sub> decomposed into (&#8467;, m) modes &rarr; gravitational waveforms
+</div>
+
+<p style="margin-top: 2em; color: #888; font-size: 0.9em;">
+<strong>Key references:</strong>
+Alic et al. 2012 (arXiv:1106.2254) &mdash; CCZ4 formulation;
+Campanelli et al. 2005 (gr-qc/0511048) &mdash; moving punctures;
+Brandt &amp; Br&uuml;gmann 1997 (gr-qc/9703066) &mdash; puncture method;
+Baumgarte &amp; Shapiro 2010, <em>Numerical Relativity</em>.
+</p>
+
+</body>
+</html>
