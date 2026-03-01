@@ -1,12 +1,15 @@
 /*
  * Lattice -- 3D Numerical Relativity
- * 4th-order Lagrange interpolation at arbitrary (x,y,z) from a grid_t.
+ * 6th-order Lagrange interpolation at arbitrary (x,y,z) from a grid_t.
  *
- * Uses 5-point stencil (same Lagrange basis as prolongation.h).
- * Tensor-product evaluation: 5^3 = 125 source points per interpolation.
+ * Uses 7-point stencil (half-width 3, fits in ghost width 4).
+ * Tensor-product evaluation: 7^3 = 343 source points per interpolation.
+ * Matches the 6th-order spatial accuracy of the FD evolution scheme.
  *
  * Also provides derivative interpolation using the analytically-known
  * derivative of the Lagrange basis polynomials.
+ *
+ * Legacy 5-point (4th-order) basis retained for compatibility.
  *
  * Ref: AthenaK src/mesh/prolongation.hpp (Lagrange basis)
  */
@@ -17,15 +20,87 @@
 #include "../core/grid.h"
 #include <math.h>
 
-#define INTERP_STENCIL 5
-#define INTERP_HALF    2  /* stencil half-width = INTERP_STENCIL / 2 */
+#define INTERP_STENCIL 7
+#define INTERP_HALF    3  /* stencil half-width = INTERP_STENCIL / 2 */
+
+/* Legacy 4th-order constants for callers that need them explicitly */
+#define INTERP_STENCIL_5 5
+#define INTERP_HALF_5    2
+
+/*
+ * 6th-order Lagrange basis values at offset delta from center node.
+ * Nodes at positions {-3, -2, -1, 0, +1, +2, +3}.
+ * L_k(delta) = prod_{j!=k} (delta - n_j) / (n_k - n_j)
+ * Fits in ghost width 4 (half-width 3).
+ */
+static inline void lagrange_basis_7(double delta, double w[INTERP_STENCIL])
+{
+    double d = delta;
+    double dm3 = d + 3.0, dm2 = d + 2.0, dm1 = d + 1.0;
+    double dp1 = d - 1.0, dp2 = d - 2.0, dp3 = d - 3.0;
+
+    /* denom_k = prod_{j!=k} (n_k - n_j), nodes n_k = k - 3 */
+    /* k=0, n=-3: (-1)(-2)(-3)(-4)(-5)(-6) = 720 */
+    w[0] = dm2 * dm1 * d * dp1 * dp2 * dp3 / 720.0;
+    /* k=1, n=-2: (1)(-1)(-2)(-3)(-4)(-5) = -120 */
+    w[1] = dm3 * dm1 * d * dp1 * dp2 * dp3 / (-120.0);
+    /* k=2, n=-1: (2)(1)(-1)(-2)(-3)(-4) = 48 */
+    w[2] = dm3 * dm2 * d * dp1 * dp2 * dp3 / 48.0;
+    /* k=3, n= 0: (3)(2)(1)(-1)(-2)(-3) = -36 */
+    w[3] = dm3 * dm2 * dm1 * dp1 * dp2 * dp3 / (-36.0);
+    /* k=4, n=+1: (4)(3)(2)(1)(-1)(-2) = 48 */
+    w[4] = dm3 * dm2 * dm1 * d * dp2 * dp3 / 48.0;
+    /* k=5, n=+2: (5)(4)(3)(2)(1)(-1) = -120 */
+    w[5] = dm3 * dm2 * dm1 * d * dp1 * dp3 / (-120.0);
+    /* k=6, n=+3: (6)(5)(4)(3)(2)(1) = 720 */
+    w[6] = dm3 * dm2 * dm1 * d * dp1 * dp2 / 720.0;
+}
+
+/*
+ * Derivative of 6th-order Lagrange basis at offset delta.
+ * dL_k/d(delta) = L_k(d) * sum_{m!=k} 1/(d - n_m)
+ *
+ * Uses the identity: dL_k/dd = L_k(d) * sum_{m!=k} 1/(d - n_m).
+ * When d is near a node n_j (j != k), L_k(d) contains factor (d - n_j)
+ * which cancels the 1/(d - n_j) singularity, so compute via the
+ * explicit sum-of-products form for numerical stability.
+ */
+static inline void lagrange_basis_deriv_7(double delta,
+                                           double dw[INTERP_STENCIL])
+{
+    double d = delta;
+    double f[7]; /* f[m] = d - n_m where n_m = m - 3 */
+    for (int m = 0; m < 7; m++)
+        f[m] = d - (m - 3);
+
+    /* Denominators: denom_k = prod_{j!=k} (n_k - n_j) */
+    static const double denom[7] = {
+        720.0, -120.0, 48.0, -36.0, 48.0, -120.0, 720.0
+    };
+
+    /* dL_k/dd = (1/denom_k) * sum_{m!=k} prod_{j!=k,j!=m} f[j] */
+    for (int k = 0; k < 7; k++) {
+        double sum = 0.0;
+        for (int m = 0; m < 7; m++) {
+            if (m == k) continue;
+            double prod = 1.0;
+            for (int j = 0; j < 7; j++) {
+                if (j == k || j == m) continue;
+                prod *= f[j];
+            }
+            sum += prod;
+        }
+        dw[k] = sum / denom[k];
+    }
+}
 
 /*
  * 4th-order Lagrange basis values at offset delta from center node.
  * Nodes at positions {-2, -1, 0, +1, +2}.
  * L_k(delta) = prod_{j!=k} (delta - j) / (k - j)
+ * Retained for compatibility; new code should use lagrange_basis_7.
  */
-static inline void lagrange_basis_5(double delta, double w[INTERP_STENCIL])
+static inline void lagrange_basis_5(double delta, double w[INTERP_STENCIL_5])
 {
     /* Node positions: n[k] = k - 2 for k = 0..4 */
     double d = delta;
@@ -46,9 +121,10 @@ static inline void lagrange_basis_5(double delta, double w[INTERP_STENCIL])
  * dL_k/d(delta), analytically computed.
  * L_k(d) = prod_{j!=k} (d - n_j) / (n_k - n_j)
  * dL_k/dd = sum_{m!=k} [ prod_{j!=k,j!=m} (d - n_j) / (n_k - n_j) ]
+ * Retained for compatibility; new code should use lagrange_basis_deriv_7.
  */
 static inline void lagrange_basis_deriv_5(double delta,
-                                           double dw[INTERP_STENCIL])
+                                           double dw[INTERP_STENCIL_5])
 {
     double d = delta;
     /* Derivative of L_0 at node -2 */
@@ -86,8 +162,8 @@ static inline void lagrange_basis_deriv_5(double delta,
  *    ci = (x - origin) / dx + ghost  where origin = -L/2 + 0.5*dx
  *    (cell-centered: COORD(g, i) = (i - ghost + 0.5)*dx - L/2)
  * 2. Nearest grid point = round(ci), fractional offset delta in [-0.5, 0.5]
- * 3. 5-point Lagrange basis at delta in each direction
- * 4. 3D tensor product sum over 5^3 = 125 points
+ * 3. 7-point Lagrange basis at delta in each direction
+ * 4. 3D tensor product sum over 7^3 = 343 points
  *
  * Returns NAN if the point is too close to the grid boundary for the stencil.
  */
@@ -119,13 +195,13 @@ static inline double interp_field_at(const double *field, const grid_t *g,
         return 0.0 / 0.0;  /* NAN */
     }
 
-    /* Compute 1D Lagrange weights */
+    /* Compute 1D Lagrange weights (6th-order, 7-point) */
     double wx[INTERP_STENCIL], wy[INTERP_STENCIL], wz[INTERP_STENCIL];
-    lagrange_basis_5(dx_frac, wx);
-    lagrange_basis_5(dy_frac, wy);
-    lagrange_basis_5(dz_frac, wz);
+    lagrange_basis_7(dx_frac, wx);
+    lagrange_basis_7(dy_frac, wy);
+    lagrange_basis_7(dz_frac, wz);
 
-    /* 3D tensor product */
+    /* 3D tensor product: 7^3 = 343 source points */
     double val = 0.0;
     for (int sk = 0; sk < INTERP_STENCIL; sk++) {
         int kk = iz - INTERP_HALF + sk;
@@ -179,15 +255,15 @@ static inline void interp_field_deriv_at(const double *field, const grid_t *g,
         return;
     }
 
-    /* Lagrange basis and derivatives */
+    /* 6th-order Lagrange basis and derivatives */
     double wx[INTERP_STENCIL], wy[INTERP_STENCIL], wz[INTERP_STENCIL];
     double dwx[INTERP_STENCIL], dwy[INTERP_STENCIL], dwz[INTERP_STENCIL];
-    lagrange_basis_5(dx_frac, wx);
-    lagrange_basis_5(dy_frac, wy);
-    lagrange_basis_5(dz_frac, wz);
-    lagrange_basis_deriv_5(dx_frac, dwx);
-    lagrange_basis_deriv_5(dy_frac, dwy);
-    lagrange_basis_deriv_5(dz_frac, dwz);
+    lagrange_basis_7(dx_frac, wx);
+    lagrange_basis_7(dy_frac, wy);
+    lagrange_basis_7(dz_frac, wz);
+    lagrange_basis_deriv_7(dx_frac, dwx);
+    lagrange_basis_deriv_7(dy_frac, dwy);
+    lagrange_basis_deriv_7(dz_frac, dwz);
 
     double f = 0.0, dfdx = 0.0, dfdy = 0.0, dfdz = 0.0;
 
@@ -215,7 +291,7 @@ static inline void interp_field_deriv_at(const double *field, const grid_t *g,
 /* ========================================================================
  * Block-aware interpolation for AMR meshes.
  *
- * Same 4th-order Lagrange interpolation as above, but uses an explicit
+ * Same 6th-order Lagrange interpolation as above, but uses an explicit
  * block origin instead of the global -L/2 convention. The coordinate
  * mapping for AMR blocks is:
  *   BLOCK_COORD(blk, dir, i) = origin[dir] + (i - ghost + 0.5) * dx
@@ -259,9 +335,9 @@ static inline double interp_field_at_block(const double *field,
     }
 
     double wx[INTERP_STENCIL], wy[INTERP_STENCIL], wz[INTERP_STENCIL];
-    lagrange_basis_5(dx_frac, wx);
-    lagrange_basis_5(dy_frac, wy);
-    lagrange_basis_5(dz_frac, wz);
+    lagrange_basis_7(dx_frac, wx);
+    lagrange_basis_7(dy_frac, wy);
+    lagrange_basis_7(dz_frac, wz);
 
     double val = 0.0;
     for (int sk = 0; sk < INTERP_STENCIL; sk++) {
@@ -313,12 +389,12 @@ static inline void interp_field_deriv_at_block(const double *field,
 
     double wx[INTERP_STENCIL], wy[INTERP_STENCIL], wz[INTERP_STENCIL];
     double dwx[INTERP_STENCIL], dwy[INTERP_STENCIL], dwz[INTERP_STENCIL];
-    lagrange_basis_5(dx_frac, wx);
-    lagrange_basis_5(dy_frac, wy);
-    lagrange_basis_5(dz_frac, wz);
-    lagrange_basis_deriv_5(dx_frac, dwx);
-    lagrange_basis_deriv_5(dy_frac, dwy);
-    lagrange_basis_deriv_5(dz_frac, dwz);
+    lagrange_basis_7(dx_frac, wx);
+    lagrange_basis_7(dy_frac, wy);
+    lagrange_basis_7(dz_frac, wz);
+    lagrange_basis_deriv_7(dx_frac, dwx);
+    lagrange_basis_deriv_7(dy_frac, dwy);
+    lagrange_basis_deriv_7(dz_frac, dwz);
 
     double f = 0.0, dfdx = 0.0, dfdy = 0.0, dfdz = 0.0;
 
