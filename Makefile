@@ -111,7 +111,7 @@ LDFLAGS = $(BACKEND_LIBS) $(HDF5_LIBS) -lm $(LTO_FLAGS)
 BUILD = build
 
 # Targets
-.PHONY: all debug test test-single-bh test-convergence test-constraints test-head-on test-amr-mesh test-amr-ghost test-amr-prolong test-amr-refine test-amr-evolve test-pack-evolve test-subcycle test-bowen-york test-hispid test-maxwell test-ah test-psi4 test-cce test-inspiral-convergence test-relaxation-amr clean
+.PHONY: all debug test test-single-bh test-convergence test-constraints test-head-on test-amr-mesh test-amr-ghost test-amr-prolong test-amr-refine test-amr-evolve test-pack-evolve test-subcycle test-bowen-york test-hispid test-maxwell test-ah test-psi4 test-cce test-cp-bc test-inspiral-convergence test-relaxation-amr clean
 
 all: $(BUILD)/lattice
 
@@ -290,6 +290,14 @@ $(BUILD)/test_cce_worldtube: tests/test_cce_worldtube.c $(ALL_SRC_BASE) src/diag
 test-cce: $(BUILD)/test_cce_worldtube
 	@echo "=== Running CCE worldtube test ==="
 	$(BUILD)/test_cce_worldtube
+
+$(BUILD)/test_cp_bc: tests/test_cp_bc.c $(ALL_SRC)
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS_OPT) -o $@ tests/test_cp_bc.c $(ALL_SRC) $(LDFLAGS)
+
+test-cp-bc: $(BUILD)/test_cp_bc
+	@echo "=== Running CP-BC test ==="
+	$(BUILD)/test_cp_bc
 
 $(BUILD)/test_inspiral_convergence: tests/test_inspiral_convergence.c $(ALL_SRC)
 	@mkdir -p $(BUILD)

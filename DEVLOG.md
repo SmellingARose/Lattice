@@ -3,6 +3,42 @@
 > **Note:** When adding/removing/renaming files or functions, also update
 > `docs/architecture.html` — the living map of the codebase structure.
 
+## 2026-03-02: Constraint-preserving boundary conditions
+
+Implemented BAM-style CP BCs (arXiv:1212.2901, Hilditch et al.). For constraint
+fields (Theta, K, A_ij, Gamma^i), the boundary RHS uses the outgoing-wave
+equation at correct characteristic speeds instead of the generic Sommerfeld
+formula. Non-constraint fields (chi, h_ij, lapse, shift, B^i, EM) keep
+standard Sommerfeld.
+
+**Formula:** `rhs(f) = -alpha * v_char * s_sign * d_s(f) - alpha * (f - f_asymp) / r`
+
+**Characteristic speeds (BAM):**
+- Theta → 1.0
+- K → sqrt(2/alpha), clamped at alpha=0.01
+- A_ij → 1.0
+- Gamma^s (face normal) → sqrt(3/4)
+- Gamma^A (tangential) → 1.0
+
+**Implementation details:**
+- Header-only `constraint_preserving.h`: `cp_char_speed()` + `cp_rhs()`, both
+  `static inline` with `omp declare target` for GPU.
+- CPU backend: `packed_sommerfeld_point()` gains `face_dir`, `s_sign`, `bc_type`
+  params. Each face loop passes correct direction/sign.
+- GPU backend: same per-field branch in collapse(4) kernel. face_dir/s_sign
+  extracted from existing boundary detection. Inner field loop is warp-coherent
+  (all threads process same field index → uniform branch).
+- `bc_type_t` enum added to `sim_params_t`, default `BC_CONSTRAINT_PRESERVING`.
+- CLI: `--bc sommerfeld|cp`.
+
+**Test results (30/30):**
+- Char speed values: 12 checks, all exact to 1e-14
+- Gamma normal/tangential by face: 9 checks
+- CP RHS formula: 4 hand-computed checks
+- Flat spacetime: Ham=2.5e-14 after 1000 steps with CP BCs
+- Single BH comparison: CP Ham ≤ Sommerfeld at t=25M
+- Lapse clamping: alpha=0 and alpha=1e-6 properly clamped
+
 ## 2026-03-02: CCE accuracy improvements
 
 Three changes based on review against research doc:

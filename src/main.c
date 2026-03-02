@@ -80,6 +80,8 @@ static void print_usage(void)
     fprintf(stderr, "  --amr-levels <int>    Initial data solver levels (default: max-level)\n");
     fprintf(stderr, "\nInitial data:\n");
     fprintf(stderr, "  --hispid               Force HiSpID (high-spin) initial data\n");
+    fprintf(stderr, "\nBoundary conditions:\n");
+    fprintf(stderr, "  --bc sommerfeld|cp     Boundary type (default cp)\n");
     fprintf(stderr, "\nEinstein-Maxwell:\n");
     fprintf(stderr, "  --em                   Enable Einstein-Maxwell coupling\n");
     fprintf(stderr, "  --kappa_em <float>     EM constraint damping (default 0.1)\n");
@@ -265,6 +267,17 @@ int main(int argc, char **argv)
             p.noise.ssl_sigma_t = atof(argv[++a]);
         } else if (strcmp(argv[a], "--ssl_total_mass") == 0 && a + 1 < argc) {
             p.noise.ssl_total_mass = atof(argv[++a]);
+        /* Boundary conditions */
+        } else if (strcmp(argv[a], "--bc") == 0 && a + 1 < argc) {
+            a++;
+            if (strcmp(argv[a], "sommerfeld") == 0) {
+                p.bc_type = BC_SOMMERFELD;
+            } else if (strcmp(argv[a], "cp") == 0) {
+                p.bc_type = BC_CONSTRAINT_PRESERVING;
+            } else {
+                fprintf(stderr, "Error: --bc expects 'sommerfeld' or 'cp'\n");
+                return 1;
+            }
         /* Einstein-Maxwell */
         } else if (strcmp(argv[a], "--em") == 0) {
             p.em_enabled = 1;

@@ -139,6 +139,12 @@ work on AMR meshes.
     meshes: 1 kernel launch. Constants (`nbr_offset`, `restrict_w/wkj`,
     `prolong_w/wkj`) wrapped with `omp declare target` for device access.
   - *Remaining:* Dense output subcycling deferred.
+- **Constraint-preserving BCs:** BAM-style CP BCs replace the RHS of constraint
+  fields (Theta, K, A_ij, Gamma^i) at boundary points with outgoing-wave equations
+  at correct characteristic speeds, while keeping Sommerfeld for metric/gauge fields.
+  Per-field speeds: Theta=1, K=sqrt(2/alpha), A_ij=1, Gamma^s(normal)=sqrt(3/4),
+  Gamma^A(tangential)=1. GPU-optimized: warp-coherent field loop, zero divergence.
+  CLI: `--bc sommerfeld|cp` (default `cp`). Ref: arXiv:1212.2901 (Hilditch et al.).
 - **Position-dependent eta:** `eta(x) = eta_0 / W(x)` where `W = sqrt(chi)` for
   stable unequal-mass binary evolution. Gated behind `position_dependent_eta` flag
   (default 1). Ref: arXiv:1003.0859 (Muller & Brugmann).
@@ -173,8 +179,8 @@ work on AMR meshes.
   faster (4 stages vs 5) but uses 25% more memory. All test allocations updated.
 - **Tests:** Flat spacetime, convergence (order 6.5), Bowen-York (29/29 + N-body),
   HiSpID (26/26), AH finder (13/13), Maxwell (15/15), Psi4 (15/15), CCE (49/49),
-  pack_evolve (8/8), amr_prolong (15/15). N-body smoke tests: 3-BH line, 5-BH pentagon.
-  Total: 31 evolved fields (25 CCZ4 + 6 EM).
+  CP-BC (30/30), pack_evolve (8/8), amr_prolong (15/15). N-body smoke tests:
+  3-BH line, 5-BH pentagon. Total: 31 evolved fields (25 CCZ4 + 6 EM).
 
 Update as milestones are reached.
 
@@ -218,7 +224,8 @@ lattice/
 │   │   ├── psi4.h/c            # Psi4 gravitational wave extraction
 │   │   └── cce_worldtube.h/c   # CCE worldtube HDF5 output (optional, HDF5=on)
 │   ├── boundary/
-│   │   └── sommerfeld.c        # radiative BCs (+block-aware variant)
+│   │   ├── sommerfeld.c        # radiative BCs (+block-aware variant)
+│   │   └── constraint_preserving.h  # CP BCs: characteristic speeds + CP RHS formula
 │   ├── amr/
 │   │   ├── morton.h             # Morton (Z-order) encoding for SFC
 │   │   ├── block.h / block.c   # block_t: single mesh block with metadata
@@ -249,6 +256,7 @@ lattice/
 │   ├── test_maxwell.c       # Einstein-Maxwell tests (15/15)
 │   ├── test_psi4.c          # Psi4 gravitational wave extraction tests (15/15)
 │   ├── test_cce_worldtube.c # CCE worldtube HDF5 output tests (49/49, requires HDF5)
+│   ├── test_cp_bc.c         # Constraint-preserving BC tests (30/30)
 │   ├── test_inspiral_convergence.c  # AMR binary inspiral convergence (3 resolutions)
 │   ├── test_gpu_debug.c       # GPU kernel isolation test (per-kernel sync barriers)
 │   └── convergence.sh          # 3-resolution convergence check
@@ -280,6 +288,7 @@ make test-ah           # Apparent horizon finder (interpolation, Schwarzschild, 
 make test-maxwell      # Einstein-Maxwell (flat EM, plane wave, charged BH, constraints)
 make test-psi4         # Psi4 extraction (GL quadrature, harmonics, modes, flat, Schwarzschild)
 make HDF5=on test-cce  # CCE worldtube HDF5 output (requires libhdf5-dev)
+make test-cp-bc        # Constraint-preserving BCs (speeds, formula, flat, single BH)
 make test-inspiral-convergence  # AMR binary inspiral convergence (long run, ~hours)
 make test-gpu-debug    # GPU kernel isolation test (requires BACKEND=gpu)
 make clean
@@ -398,6 +407,7 @@ constant `GR_SPACEDIM = 3`.
 | `shift_Gamma_coeff` | 0.75 | F in dt(beta^i) = F * B^i |
 | `eta` | 1.0 | Damping in Gamma-driver: dt(B^i) = dt(Gamma^i) - eta * B^i |
 | `rk_method` | `RK_CLASSIC` | Time integrator: `RK_CLASSIC` (4 stages, 4 blocks) or `RK_CK45` (5 stages, 3 blocks) |
+| `bc_type` | `BC_CONSTRAINT_PRESERVING` | Boundary conditions: `BC_SOMMERFELD` (standard radiative) or `BC_CONSTRAINT_PRESERVING` (BAM-style, arXiv:1212.2901) |
 | `amr_levels` | `max_level` | Initial data solver refinement levels (`--amr-levels`). Defaults to `--max-level` so initial data and evolution use the same depth. Each level halves dx near punctures. Override for rare cases where you want finer initial data than evolution can afford. Requires `--rk classic`. |
 
 ### FAS Multigrid Solver Tuning
@@ -494,6 +504,7 @@ design rationale. Every code addition should have a corresponding entry.
 - **arXiv:1903.01036**: Charged puncture initial data (Bozzola & Paschalidis) — **implemented**
 - **arXiv:2505.15912**: BHaHAHA hyperbolic AH flow algorithm — **implemented**
 - **gr-qc/0512169**: AH finder review, expansion formula — **implemented**
+- **arXiv:1212.2901**: Constraint-preserving BCs (Hilditch et al., BAM) — **implemented**
 
 ### Phase 2 References (planned)
 - **arXiv:2104.06978**: Charged binary inspiral

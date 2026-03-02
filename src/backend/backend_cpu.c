@@ -13,6 +13,7 @@
 #include "../evolution/ccz4_rhs.h"
 #include "../evolution/maxwell_rhs.h"
 #include "../boundary/sommerfeld.h"
+#include "../boundary/constraint_preserving.h"
 #include "../core/fields.h"
 #include "../geometry/tensor_utils.h"
 #include "../amr/block.h"
@@ -187,13 +188,23 @@ void backend_compute_rhs_packed(meshblock_pack_t *pack, const sim_params_t *p)
  * CPU: sequential over blocks, no inner OMP (boundary cells are sparse).
  */
 /*
- * Apply Sommerfeld RHS at a single ghost point for packed data.
+ * Apply Sommerfeld/CP-BC RHS at a single ghost point for packed data.
  * Extracted to avoid duplicating the formula in each face loop.
+ *
+ * face_dir: dominant boundary direction (0=x, 1=y, 2=z), used for
+ *           Gamma normal/tangential speed selection in CP mode.
+ * s_sign:   outward normal sign (+1 or -1) along face_dir.
+ * bc_type:  BC_SOMMERFELD or BC_CONSTRAINT_PRESERVING.
+ *
+ * For CP BCs, constraint fields (Theta, K, A_ij, Gamma^i) use the
+ * characteristic-speed formula; all others use standard Sommerfeld.
+ * Ref: arXiv:1212.2901 (Hilditch et al., BAM)
  */
 static inline void packed_sommerfeld_point(
     double *const *rhs_ptrs, const double *const *src_ptrs,
     const grid_t *g, int nf, int i, int j, int k,
-    double x, double y, double z)
+    double x, double y, double z,
+    int face_dir, int s_sign, bc_type_t bc_type)
 {
     int idx = IDX(g, i, j, k);
     int Nt = g->Ntotal;
@@ -206,16 +217,34 @@ static inline void packed_sommerfeld_point(
     int strides[3] = { STRIDE_X, STRIDE_Y(g), STRIDE_Z(g) };
     double loc[3] = { x, y, z };
 
+    /* Read lapse for CP speed computation */
+    double alpha = src_ptrs[FIELD_LAPSE][idx];
+
     for (int field = 0; field < nf; field++) {
-        double sommerfeld = 0.0;
-        for (int dir = 0; dir < 3; dir++) {
-            double d1 = boundary_d1(src_ptrs[field], idx, strides[dir],
-                                    lo_off[dir], hi_off[dir], g->dx);
-            sommerfeld += -d1 * loc[dir] / r;
+        double speed = (bc_type == BC_CONSTRAINT_PRESERVING)
+                       ? cp_char_speed(field, face_dir, alpha) : 0.0;
+
+        if (speed > 0.0) {
+            /* CP-BC: one-sided derivative in the face normal direction */
+            double df_ds = boundary_d1(src_ptrs[field], idx,
+                                       strides[face_dir],
+                                       lo_off[face_dir],
+                                       hi_off[face_dir], g->dx);
+            double f_asym = asymptotic_value(field);
+            rhs_ptrs[field][idx] = cp_rhs(alpha, speed, s_sign, df_ds,
+                                          src_ptrs[field][idx], f_asym, r);
+        } else {
+            /* Standard Sommerfeld */
+            double sommerfeld = 0.0;
+            for (int dir = 0; dir < 3; dir++) {
+                double d1 = boundary_d1(src_ptrs[field], idx, strides[dir],
+                                        lo_off[dir], hi_off[dir], g->dx);
+                sommerfeld += -d1 * loc[dir] / r;
+            }
+            double f_asym = asymptotic_value(field);
+            sommerfeld += (f_asym - src_ptrs[field][idx]) / r;
+            rhs_ptrs[field][idx] = sommerfeld;
         }
-        double f_asym = asymptotic_value(field);
-        sommerfeld += (f_asym - src_ptrs[field][idx]) / r;
-        rhs_ptrs[field][idx] = sommerfeld;
     }
 }
 
@@ -230,12 +259,12 @@ static inline void packed_sommerfeld_point(
  */
 void backend_sommerfeld_packed(meshblock_pack_t *pack, const sim_params_t *p)
 {
-    (void)p;
     int lo = pack->ghost;
     int hi = pack->ghost + pack->N;
     int Nt = pack->Ntotal;
     int nb = pack->n_blocks;
     size_t npts = pack->npts;
+    bc_type_t bc_type = p->bc_type;
 
     #pragma omp parallel for schedule(dynamic)
     for (int b = 0; b < nb; b++) {
@@ -274,59 +303,65 @@ void backend_sommerfeld_packed(meshblock_pack_t *pack, const sim_params_t *p)
         #define BY(jj) (block_oy + ((jj) - GHOST_WIDTH + 0.5) * dx)
         #define BZ(kk) (block_oz + ((kk) - GHOST_WIDTH + 0.5) * dx)
 
-        /* X- face */
+        /* X- face: face_dir=0, s_sign=-1 (outward is -x) */
         if (ob[0])
             for (int k = 0; k < Nt; k++)
                 for (int j = 0; j < Nt; j++)
                     for (int i = 0; i < lo; i++)
                         packed_sommerfeld_point(rhs_ptrs,
                             (const double *const *)src_ptrs, &g_local,
-                            nf, i, j, k, BX(i), BY(j), BZ(k));
+                            nf, i, j, k, BX(i), BY(j), BZ(k),
+                            0, -1, bc_type);
 
-        /* X+ face */
+        /* X+ face: face_dir=0, s_sign=+1 (outward is +x) */
         if (ob[1])
             for (int k = 0; k < Nt; k++)
                 for (int j = 0; j < Nt; j++)
                     for (int i = hi; i < Nt; i++)
                         packed_sommerfeld_point(rhs_ptrs,
                             (const double *const *)src_ptrs, &g_local,
-                            nf, i, j, k, BX(i), BY(j), BZ(k));
+                            nf, i, j, k, BX(i), BY(j), BZ(k),
+                            0, +1, bc_type);
 
-        /* Y- face */
+        /* Y- face: face_dir=1, s_sign=-1 */
         if (ob[2])
             for (int k = 0; k < Nt; k++)
                 for (int j = 0; j < lo; j++)
                     for (int i = 0; i < Nt; i++)
                         packed_sommerfeld_point(rhs_ptrs,
                             (const double *const *)src_ptrs, &g_local,
-                            nf, i, j, k, BX(i), BY(j), BZ(k));
+                            nf, i, j, k, BX(i), BY(j), BZ(k),
+                            1, -1, bc_type);
 
-        /* Y+ face */
+        /* Y+ face: face_dir=1, s_sign=+1 */
         if (ob[3])
             for (int k = 0; k < Nt; k++)
                 for (int j = hi; j < Nt; j++)
                     for (int i = 0; i < Nt; i++)
                         packed_sommerfeld_point(rhs_ptrs,
                             (const double *const *)src_ptrs, &g_local,
-                            nf, i, j, k, BX(i), BY(j), BZ(k));
+                            nf, i, j, k, BX(i), BY(j), BZ(k),
+                            1, +1, bc_type);
 
-        /* Z- face */
+        /* Z- face: face_dir=2, s_sign=-1 */
         if (ob[4])
             for (int k = 0; k < lo; k++)
                 for (int j = 0; j < Nt; j++)
                     for (int i = 0; i < Nt; i++)
                         packed_sommerfeld_point(rhs_ptrs,
                             (const double *const *)src_ptrs, &g_local,
-                            nf, i, j, k, BX(i), BY(j), BZ(k));
+                            nf, i, j, k, BX(i), BY(j), BZ(k),
+                            2, -1, bc_type);
 
-        /* Z+ face */
+        /* Z+ face: face_dir=2, s_sign=+1 */
         if (ob[5])
             for (int k = hi; k < Nt; k++)
                 for (int j = 0; j < Nt; j++)
                     for (int i = 0; i < Nt; i++)
                         packed_sommerfeld_point(rhs_ptrs,
                             (const double *const *)src_ptrs, &g_local,
-                            nf, i, j, k, BX(i), BY(j), BZ(k));
+                            nf, i, j, k, BX(i), BY(j), BZ(k),
+                            2, +1, bc_type);
 
         #undef BX
         #undef BY

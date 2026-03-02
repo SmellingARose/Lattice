@@ -17,6 +17,13 @@ typedef enum {
     RK_CK45      /* Carpenter-Kennedy 2N low-storage RK4 (3 blocks, 5 RHS evals) */
 } rk_method_t;
 
+/* Boundary condition type */
+typedef enum {
+    BC_SOMMERFELD = 0,            /* Standard Sommerfeld radiative BCs for all fields */
+    BC_CONSTRAINT_PRESERVING = 1  /* CP BCs for constraint fields, Sommerfeld for rest.
+                                   * Ref: arXiv:1212.2901 (Hilditch et al., BAM) */
+} bc_type_t;
+
 /* CCZ4 constraint damping parameters */
 typedef struct {
     double kappa1;       /* constraint damping (Theta + Z_i), default 0.1   */
@@ -105,6 +112,8 @@ typedef struct {
 
     int    em_enabled;    /* Einstein-Maxwell coupling (default 0)  */
     double kappa_em;      /* EM constraint damping (default 0.1)    */
+
+    bc_type_t bc_type;    /* BC_SOMMERFELD or BC_CONSTRAINT_PRESERVING */
 } sim_params_t;
 
 /* Default parameter initialization */
@@ -165,6 +174,10 @@ static inline sim_params_t default_params(void)
     /* Einstein-Maxwell defaults (disabled — vacuum CCZ4 by default) */
     p.em_enabled = 0;
     p.kappa_em   = 0.1;
+
+    /* Boundary conditions: CP by default (better constraint preservation,
+     * negligible overhead). Ref: arXiv:1212.2901 */
+    p.bc_type = BC_CONSTRAINT_PRESERVING;
 
     return p;
 }

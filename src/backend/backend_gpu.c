@@ -18,6 +18,7 @@
 #include "../evolution/ccz4_rhs.h"
 #include "../evolution/maxwell_rhs.h"
 #include "../boundary/sommerfeld.h"
+#include "../boundary/constraint_preserving.h"
 #include "../core/fields.h"
 #include "../geometry/tensor_utils.h"
 #include "../amr/block.h"
@@ -250,18 +251,22 @@ void backend_compute_rhs_packed(meshblock_pack_t *pack, const sim_params_t *p)
 /* ---- Batched Sommerfeld BCs ---- */
 
 /*
- * Apply Sommerfeld BCs to RHS for all blocks in one GPU launch.
+ * Apply Sommerfeld/CP BCs to RHS for all blocks in one GPU launch.
  *
  * collapse(4) over (block, k, j, i). Each thread checks if its point
- * is a boundary ghost cell and applies the Sommerfeld condition.
+ * is a boundary ghost cell and applies the Sommerfeld or CP-BC formula.
  * Interior and inter-block ghost cells are skipped.
+ *
+ * CP BCs use per-field characteristic speeds from cp_char_speed().
+ * The inner field loop is uniform across a warp (all threads process the
+ * same field index), so the CP vs Sommerfeld branch is warp-coherent.
  *
  * Calls asymptotic_value() and boundary_d1() which are declared with
  * omp declare target in sommerfeld.h/c.
+ * Ref: arXiv:1212.2901 (Hilditch et al., BAM)
  */
 void backend_sommerfeld_packed(meshblock_pack_t *pack, const sim_params_t *p)
 {
-    (void)p;
     int lo = pack->ghost;
     int hi = pack->ghost + pack->N;
     int Nt = pack->Ntotal;
@@ -274,6 +279,7 @@ void backend_sommerfeld_packed(meshblock_pack_t *pack, const sim_params_t *p)
     double *dx_arr = pack->dx_per_block;
     int *ob_all = pack->on_boundary;
     int nf = pack->n_fields;
+    int use_cp = (p->bc_type == BC_CONSTRAINT_PRESERVING);
 
     #pragma omp target teams distribute parallel for collapse(4)
     for (int b = 0; b < nb; b++) {
@@ -298,6 +304,16 @@ void backend_sommerfeld_packed(meshblock_pack_t *pack, const sim_params_t *p)
 
                     if (!near_boundary) continue;
 
+                    /* Determine dominant face direction and outward sign.
+                     * Priority: X, Y, Z (edge/corner points use first match). */
+                    int face_dir = 0, s_sign = 0;
+                    if      (i < lo  && ob[0]) { face_dir = 0; s_sign = -1; }
+                    else if (i >= hi && ob[1]) { face_dir = 0; s_sign = +1; }
+                    else if (j < lo  && ob[2]) { face_dir = 1; s_sign = -1; }
+                    else if (j >= hi && ob[3]) { face_dir = 1; s_sign = +1; }
+                    else if (k < lo  && ob[4]) { face_dir = 2; s_sign = -1; }
+                    else if (k >= hi && ob[5]) { face_dir = 2; s_sign = +1; }
+
                     /* Flat index within block grid */
                     int idx = k * Nt * Nt + j * Nt + i;
 
@@ -314,25 +330,45 @@ void backend_sommerfeld_packed(meshblock_pack_t *pack, const sim_params_t *p)
                     int strides[3] = { 1, Nt, Nt*Nt };
                     double loc[3] = { x, y, z };
 
-                    /* Apply Sommerfeld to each field.
-                     * Skip EM fields when disabled (saves 6/31 iterations). */
+                    /* Read lapse for CP speed computation */
+                    size_t lapse_base = (size_t)FIELD_LAPSE * nb * npts
+                                      + (size_t)b * npts;
+                    double alpha = data[lapse_base + idx];
+
+                    /* Apply Sommerfeld/CP to each field.
+                     * Skip EM fields when disabled (saves 6/31 iterations).
+                     * Inner field loop: warp-coherent (all threads process
+                     * same field), so CP vs Sommerfeld branch is uniform. */
                     for (int field = 0; field < nf; field++) {
                         size_t base = (size_t)field * nb * npts
                                     + (size_t)b * npts;
                         const double *src_f = data + base;
                         double *rhs_f = rhs_data + base;
 
-                        double sommerfeld = 0.0;
-                        for (int dir = 0; dir < 3; dir++) {
-                            double d1 = boundary_d1(
-                                src_f, idx, strides[dir],
-                                lo_off[dir], hi_off[dir], dx);
-                            sommerfeld += -d1 * loc[dir] / r;
-                        }
+                        double speed = use_cp
+                            ? cp_char_speed(field, face_dir, alpha) : 0.0;
 
-                        double f_asym = asymptotic_value(field);
-                        sommerfeld += (f_asym - src_f[idx]) / r;
-                        rhs_f[idx] = sommerfeld;
+                        if (speed > 0.0) {
+                            /* CP-BC: one-sided derivative along face normal */
+                            double df_ds = boundary_d1(
+                                src_f, idx, strides[face_dir],
+                                lo_off[face_dir], hi_off[face_dir], dx);
+                            double f_asym = asymptotic_value(field);
+                            rhs_f[idx] = cp_rhs(alpha, speed, s_sign, df_ds,
+                                                src_f[idx], f_asym, r);
+                        } else {
+                            /* Standard Sommerfeld */
+                            double sommerfeld = 0.0;
+                            for (int dir = 0; dir < 3; dir++) {
+                                double d1 = boundary_d1(
+                                    src_f, idx, strides[dir],
+                                    lo_off[dir], hi_off[dir], dx);
+                                sommerfeld += -d1 * loc[dir] / r;
+                            }
+                            double f_asym = asymptotic_value(field);
+                            sommerfeld += (f_asym - src_f[idx]) / r;
+                            rhs_f[idx] = sommerfeld;
+                        }
                     }
                 }
             }

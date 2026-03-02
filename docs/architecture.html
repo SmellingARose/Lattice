@@ -215,7 +215,7 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
   <span class="fn">rk4_step</span>() ----&gt; evolve ---&gt; ...          |       |     for each point (i,j,k):
                                              |       |       <span class="fn">ccz4_rhs_point</span>()    <span class="comment">// FD stencils, Ricci, gauge</span>
                                              |       |       <span class="fn">maxwell_rhs_point</span>() <span class="comment">// if --em enabled</span>
-                                             |       +--&gt; <span class="fn">apply_sommerfeld</span>()   <span class="comment">// radiative BCs</span>
+                                             |       +--&gt; <span class="fn">apply_sommerfeld</span>()   <span class="comment">// radiative/CP BCs</span>
                                              |       +--&gt; <span class="fn">ck45_update</span>()        <span class="comment">// field update</span>
                                              |     |
                                              |     +--&gt; <span class="fn">enforce_algebraic</span>() <span class="comment">// det(h)=1, tr(A)=0</span>
@@ -355,11 +355,14 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 <!-- ========================================== -->
 <h2 id="mod-boundary">Module: boundary/</h2>
 
-<p>Sommerfeld radiative boundary conditions: <code>df/dt = -(x^i/r) d_i f + (f_asym - f)/r</code>. Applied to RHS in ghost zones, using 2nd-order one-sided stencils near boundaries. Asymptotic values: chi=1, h_ii=1, lapse=1, everything else 0. Block-aware variant applies only to domain-boundary faces (interior block boundaries are handled by ghost exchange).</p>
+<p>Sommerfeld radiative boundary conditions: <code>df/dt = -(x^i/r) d_i f + (f_asym - f)/r</code>. Applied to RHS in ghost zones, using 4th-order one-sided stencils near boundaries. Asymptotic values: chi=1, h_ii=1, lapse=1, everything else 0. Block-aware variant applies only to domain-boundary faces (interior block boundaries are handled by ghost exchange).</p>
+
+<p>Constraint-preserving BCs (BAM approach, arXiv:1212.2901): for constraint fields (Theta, K, A_ij, Gamma^i), replaces Sommerfeld with <code>rhs = -alpha * v_char * s_sign * d_s(f) - alpha * (f - f_asymp) / r</code> using per-field characteristic speeds: Theta=1, K=sqrt(2/alpha), A_ij=1, Gamma normal=sqrt(3/4), Gamma tangential=1. Enabled by default (<code>--bc cp</code>), falls back to pure Sommerfeld with <code>--bc sommerfeld</code>. GPU-optimized: warp-coherent field loop, zero divergence.</p>
 
 <table class="file-table">
 <tr><th>File</th><th>Purpose</th></tr>
 <tr><td><code>sommerfeld.c</code></td><td><code>apply_sommerfeld()</code> (single-grid) and <code>apply_sommerfeld_block()</code> (AMR). Face-only ghost slab iteration (~5x fewer iterations than full-grid scan). Extracted <code>sommerfeld_point()</code> helper. GPU-annotated.</td></tr>
+<tr><td><code>constraint_preserving.h</code></td><td>Header-only: <code>cp_char_speed()</code> (per-field characteristic speed lookup) and <code>cp_rhs()</code> (CP boundary formula). Both <code>static inline</code> with <code>omp declare target</code>.</td></tr>
 </table>
 
 <!-- ========================================== -->
