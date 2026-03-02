@@ -65,6 +65,23 @@ void ghost_exchange_multilevel(mesh_t *m);
 void ghost_exchange_multilevel_all(mesh_t *m);
 
 /*
+ * Same-level ghost exchange for ALL blocks at a specific level.
+ * Only exchanges between blocks at the same level — no cross-level
+ * interpolation. For use between Gauss-Seidel colors in multigrid
+ * smoothing, where CF boundary values are held fixed as Dirichlet BCs.
+ * Ref: AMReX MLMG, Chombo AMRMultiGrid — same-level only between sweeps.
+ */
+void ghost_exchange_same_level_all(mesh_t *m, int level);
+
+/*
+ * Fill coarse-fine boundary ghost zones on blocks at a specific level
+ * by interpolation from level-1 data (coarse-buffer protocol).
+ * Called ONCE before smoothing begins at a level, not between colors.
+ * Ref: AMReX MLMG — CF boundary = fixed Dirichlet from coarse level.
+ */
+void ghost_fill_cf_boundary(mesh_t *m, int level);
+
+/*
  * Fill fine-level ghost zones from time-interpolated coarse neighbors.
  * For each fine leaf at `fine_level`, finds coarser neighbors, interpolates
  * their fields between t_old and t_new using frac = (t_fine - t_old)/dt_coarse,

@@ -193,6 +193,7 @@ static void umg_sweep_1field(mg_level_amr_t *lev)
 
     for (int color = 0; color < 8; color++) {
         int c0 = color & 1, c1 = (color >> 1) & 1, c2 = (color >> 2) & 1;
+        #pragma omp parallel for schedule(static)
         for (int k = gw + c2; k < gw + N; k += 2)
             for (int j = gw + c1; j < gw + N; j += 2)
                 for (int i = gw + c0; i < gw + N; i += 2) {
@@ -228,6 +229,7 @@ static void umg_sweep_4field(mg_level_amr_t *lev)
 
     for (int color = 0; color < 8; color++) {
         int c0 = color & 1, c1 = (color >> 1) & 1, c2 = (color >> 2) & 1;
+        #pragma omp parallel for schedule(static)
         for (int k = gw + c2; k < gw + N; k += 2)
             for (int j = gw + c1; j < gw + N; j += 2)
                 for (int i = gw + c0; i < gw + N; i += 2) {
@@ -282,6 +284,7 @@ static void umg_compute_operator(mg_level_amr_t *lev, int four_field)
     int sx = 1, sy = Nt, sz = Nt * Nt;
     int strides[3] = { sx, sy, sz };
 
+    #pragma omp parallel for schedule(static)
     for (int k = gw; k < gw + N; k++)
         for (int j = gw; j < gw + N; j++)
             for (int i = gw; i < gw + N; i++) {
@@ -988,36 +991,56 @@ static void smooth_block_4field(block_t *blk, int color)
             }
 }
 
-/* Ghost exchange for solver fields.
- *
- * Uses ghost_exchange_all_blocks() which includes non-leaf blocks.
- * The composite V-cycle operates on ALL blocks at each level (not just
- * leaves), so non-leaf blocks need their ghost zones filled from
- * same-level neighbors.  Without this, multi-root meshes diverge because
- * non-leaf blocks' ghost zones contain stale data, corrupting the FD
- * operator evaluation and tau correction.
- *
- * Uses ghost_exchange_multilevel_all() to correctly handle cross-level
- * ghost zones at AMR refinement boundaries via the coarse-buffer protocol.
- * Direct memcpy between different-level neighbors (ghost_exchange_all_blocks)
- * copies data at wrong physical resolution, causing V-cycle divergence.
- *
- * After exchange, re-apply solver BCs on all blocks to ensure
- * domain-boundary ghost zones are zero (Phase 4 prolongation may
- * overwrite zero Dirichlet BCs with non-zero interpolated values). */
-static void solver_ghost_exchange(mesh_t *m, int four_field)
-{
-    ghost_exchange_multilevel_all(m);
+/* Forward declarations for solver ghost exchange infrastructure */
+static void apply_bcs_level(mesh_t *m, int level, int four_field);
 
-    /* Re-apply zero-Dirichlet BCs on domain-boundary blocks at all levels */
-    for (int b = 0; b < m->num_blocks; b++) {
-        block_t *blk = m->blocks[b];
-        if (!blk) continue;
-        amr_apply_bc_block(blk, four_field);
+/* Full ghost exchange for solver fields at ALL levels.
+ * Used for initial setup (before FMG) and residual computation where
+ * all ghost zones everywhere must be valid. */
+static void solver_ghost_exchange_all(mesh_t *m, int four_field)
+{
+    for (int L = 0; L <= m->max_level; L++) {
+        ghost_exchange_same_level_all(m, L);
+        ghost_fill_cf_boundary(m, L);
+        apply_bcs_level(m, L, four_field);
     }
 }
 
-/* Smooth all leaf blocks at a given AMR level */
+/* Same-level ghost exchange + solver BCs for a single AMR level.
+ *
+ * Between Gauss-Seidel colors, only same-level exchange is needed.
+ * Coarse-fine boundary ghosts are treated as fixed Dirichlet BCs
+ * (set once before smoothing begins, not updated between colors).
+ *
+ * Ref: AMReX MLMG — only same-level exchange between relaxation sweeps.
+ * Ref: Chombo AMRMultiGrid — CF boundary = fixed Dirichlet during smooth. */
+static void solver_same_level_exchange(mesh_t *m, int level, int four_field)
+{
+    ghost_exchange_same_level_all(m, level);
+    apply_bcs_level(m, level, four_field);
+}
+
+/* Full ghost exchange for solver: same-level + CF boundary fill + BCs.
+ * Used before operator evaluation (residual, tau correction) where
+ * ALL ghost zones must be accurate, including CF boundaries.
+ *
+ * Ref: AMReX MLMG — full ghost fill before residual computation. */
+static void solver_full_exchange(mesh_t *m, int level, int four_field)
+{
+    ghost_exchange_same_level_all(m, level);
+    ghost_fill_cf_boundary(m, level);
+    apply_bcs_level(m, level, four_field);
+}
+
+/* Smooth all blocks at a given AMR level.
+ *
+ * CF boundary ghost zones are filled ONCE before this function is called
+ * (by solver_full_exchange or ghost_fill_cf_boundary) and then held fixed
+ * as Dirichlet BCs. Between GS colors, only same-level exchange propagates
+ * newly smoothed values between same-level neighbors.
+ *
+ * Ref: AMReX MLMG, Chombo AMRMultiGrid, Afivo octree-mg —
+ *      CF boundary = fixed Dirichlet during relaxation sweeps. */
 static void smooth_level(mesh_t *m, int level, int four_field)
 {
     for (int color = 0; color < 8; color++) {
@@ -1030,8 +1053,8 @@ static void smooth_level(mesh_t *m, int level, int four_field)
             else
                 smooth_block_1field(blk, color);
         }
-        /* Ghost exchange after each color to propagate boundary values */
-        solver_ghost_exchange(m, four_field);
+        /* Same-level exchange only — CF ghosts held fixed as Dirichlet */
+        solver_same_level_exchange(m, level, four_field);
     }
 }
 
@@ -1461,12 +1484,16 @@ static void composite_vcycle(mg_amr_t *mg, int amr_level)
         return;
     }
 
-    /* Pre-smooth */
+    /* Fill CF boundary ghosts from coarse level (fixed Dirichlet for smooth).
+     * Ref: AMReX MLMG — interpCFGhosts before relaxation at each level. */
+    solver_full_exchange(m, amr_level, mg->four_field);
+
+    /* Pre-smooth (CF ghosts held fixed; only same-level exchange between colors) */
     for (int s = 0; s < MG_NU_PRE; s++)
         smooth_level(m, amr_level, mg->four_field);
 
-    /* Compute residual */
-    solver_ghost_exchange(m, mg->four_field);
+    /* Full exchange before operator evaluation (need accurate CF ghosts) */
+    solver_full_exchange(m, amr_level, mg->four_field);
     compute_operator_level(m, amr_level, mg->four_field);
     compute_residual_level(m, amr_level, mg->four_field);
 
@@ -1509,8 +1536,9 @@ static void composite_vcycle(mg_amr_t *mg, int amr_level)
      * block's ghost zones must be set explicitly. */
     apply_bcs_level(m, amr_level - 1, mg->four_field);
 
-    /* Tau correction: compute L on restricted solution, add to rhs */
-    solver_ghost_exchange(m, mg->four_field);
+    /* Tau correction: compute L on restricted solution, add to rhs.
+     * Full exchange at coarse level — need accurate ghosts for L(u). */
+    solver_full_exchange(m, amr_level - 1, mg->four_field);
     compute_operator_level(m, amr_level - 1, mg->four_field);
     apply_tau_correction(m, amr_level - 1, mg->four_field);
 
@@ -1524,10 +1552,12 @@ static void composite_vcycle(mg_amr_t *mg, int amr_level)
     /* Prolongate correction back to fine */
     prolongate_correction_amr(m, amr_level - 1, mg->four_field);
 
-    /* Ghost exchange after prolongation */
-    solver_ghost_exchange(m, mg->four_field);
+    /* Full exchange after prolongation — refresh CF ghosts from (now improved)
+     * coarse solution before post-smoothing.
+     * Ref: AMReX MLMG — interpCFGhosts after prolongation, before post-smooth. */
+    solver_full_exchange(m, amr_level, mg->four_field);
 
-    /* Post-smooth */
+    /* Post-smooth (CF ghosts held fixed; only same-level exchange between colors) */
     for (int s = 0; s < MG_NU_POST; s++)
         smooth_level(m, amr_level, mg->four_field);
 }
@@ -1610,7 +1640,7 @@ static void composite_fmg(mg_amr_t *mg)
         }
 
         /* Ghost exchange + BCs */
-        solver_ghost_exchange(mg->mesh, mg->four_field);
+        solver_ghost_exchange_all(mg->mesh, mg->four_field);
 
         /* One composite V-cycle to polish */
         composite_vcycle(mg, L);
@@ -1625,7 +1655,7 @@ static double amr_residual_norm(mg_amr_t *mg)
     mesh_t *m = mg->mesh;
     int finest = m->max_level;
 
-    solver_ghost_exchange(m, mg->four_field);
+    solver_ghost_exchange_all(m, mg->four_field);
     compute_operator_level(m, finest, mg->four_field);
 
     double sum_psi = 0.0, sum_V = 0.0;
@@ -1818,7 +1848,7 @@ double relaxation_solve_amr(grid_t *g, int n_bh, const puncture_data_t *bhs,
     }
 
     /* Ghost exchange so backgrounds are in ghost zones too */
-    solver_ghost_exchange(m, 0);
+    solver_ghost_exchange_all(m, 0);
 
     /* Run composite FMG */
     if (verbose) printf("[AMR-MG] Running composite FMG...\n");
@@ -1960,7 +1990,7 @@ double relaxation_solve_coupled_amr(grid_t *g, int n_bh,
         memset(bg->rhs[SOL_V3], 0, bg->npoints * sizeof(double));
     }
 
-    solver_ghost_exchange(m, 1);
+    solver_ghost_exchange_all(m, 1);
 
     if (verbose) printf("[AMR-MG] Running composite FMG (4-field)...\n");
     composite_fmg(&mg);
@@ -2165,7 +2195,7 @@ double relaxation_solve_amr_mesh(mesh_t *m, int n_bh, const puncture_data_t *bhs
                blk->grid->npoints * sizeof(double));
     }
 
-    solver_ghost_exchange(m, 0);
+    solver_ghost_exchange_all(m, 0);
 
     /* Run composite FMG */
     if (verbose) printf("[AMR-MG-mesh] Running composite FMG...\n");
@@ -2273,7 +2303,7 @@ double relaxation_solve_coupled_amr_mesh(mesh_t *m, int n_bh,
         memset(g->rhs[SOL_V3], 0, g->npoints * sizeof(double));
     }
 
-    solver_ghost_exchange(m, 1);
+    solver_ghost_exchange_all(m, 1);
 
     if (verbose) printf("[AMR-MG-mesh] Running composite FMG (4-field)...\n");
     composite_fmg(&mg);

@@ -2336,3 +2336,63 @@ compute_inverse_sym, compute_christoffel (tensor_utils.h), fd_d1/d2/d2_mixed
 PHE (Perturbative Hyperboloidal Extraction) — post-processing tool that
 propagates Psi4 modes to null infinity via RWZ on hyperboloidal slices.
 ~470 lines, pure C17, no external dependencies. Unblocked by Psi4.
+
+---
+
+## AMR Composite Multigrid: V-Cycle Fix + OMP Parallelization
+
+### Bug: Cross-level ghost exchange in multigrid solver
+
+**Root cause:** `solver_ghost_exchange()` called `ghost_exchange_all_blocks()`,
+which does direct `memcpy` between blocks regardless of AMR level. When a fine
+block (level L) has a coarser neighbor (level L-1), data is copied at wrong
+physical resolution — the coarser block covers 2x the physical extent with the
+same cell count. This corrupts FD stencils near refinement boundaries.
+
+**Symptom:** V-cycle divergence on multi-root AMR meshes.
+- 3 AMR levels: 2x growth per V-cycle (fast divergence)
+- 5 AMR levels: 0.85 factor per V-cycle (very slow convergence, 159 V-cycles)
+
+The 5-level case converged slowly because more intermediate levels each
+contribute less cross-level error, and the smoother partially compensates.
+
+### Fix: Correct CF boundary protocol (AMReX/Chombo pattern)
+
+Based on AMReX MLMG, Chombo AMRMultiGrid, Athena++ MG (Tomida & Stone 2023):
+
+1. **CF ghost zones = fixed Dirichlet from coarse level**, set ONCE before
+   smoothing begins at each level, held fixed during all 8 GS colors.
+2. **Between GS colors: same-level exchange only** — no cross-level interpolation.
+3. **Before operator evaluation: full exchange** (same-level + CF fill + BCs).
+
+New ghost exchange functions:
+- `ghost_exchange_same_level_all(m, level)` — same-level only at one level
+- `ghost_fill_cf_boundary(m, level)` — CF boundary fill from level-1 data
+- `ghost_exchange_multilevel_all(m)` — full coarse-buffer protocol for all blocks
+
+New solver exchange functions:
+- `solver_same_level_exchange(m, level)` — between GS colors
+- `solver_full_exchange(m, level)` — before operator evaluation
+- `solver_ghost_exchange_all(m)` — all levels for setup/residual
+
+**Verified:** BY tests 33/33 pass, convergence factor ~0.24 (excellent).
+N-body tests (3-BH, 5-BH) converge correctly.
+
+### OMP parallelization
+
+Added `#pragma omp parallel for` to:
+- `umg_sweep_1field` / `umg_sweep_4field` k-loops (uniform MG smoothers)
+- `umg_compute_operator` k-loop (uniform MG operator evaluation)
+- `mesh_constraint_l2` / `mesh_momentum_l2` block loops (constraint diagnostics)
+- `restrict_level_to_parents` block loop (AMR restriction)
+- `ghost_fill_from_coarser` Pass 1 (coarse_buf restriction)
+- `ghost_exchange_same_level_all` / `ghost_fill_cf_boundary` block loops
+
+All are embarrassingly parallel (each block/k-slice writes to independent memory).
+
+### References
+
+- AMReX MLMG: CF boundary as fixed Dirichlet, same-level exchange between sweeps
+- Chombo AMRMultiGrid: `mgRelax` + `homogeneousCFInterp`
+- Athena++ MG (Tomida & Stone 2023): same pattern
+- Afivo octree-mg: ghost cells from parent at CF boundaries

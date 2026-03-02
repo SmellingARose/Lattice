@@ -568,6 +568,7 @@ void ghost_fill_from_coarser(mesh_t *m, int fine_level, double frac)
      * After this pass, every coarse_buf at fine_level has valid interior data.
      * Must complete before Pass 2 so same-level neighbor exchanges read
      * restricted (not stale) coarse_buf data. */
+    #pragma omp parallel for schedule(dynamic)
     for (int bid = 0; bid < m->num_blocks; bid++) {
         block_t *b = m->blocks[bid];
         if (!b || !b->is_leaf || b->loc.level != fine_level) continue;
@@ -867,6 +868,115 @@ void ghost_exchange_multilevel_all(mesh_t *m)
     for (int bid = 0; bid < m->num_blocks; bid++) {
         block_t *b = m->blocks[bid];
         if (!b || b->loc.level == 0) continue;
+        prolongate_from_own_coarse_buf(b);
+    }
+}
+
+/*
+ * Same-level ghost exchange for ALL blocks at a specific level.
+ * Only exchanges between blocks at the same level — no cross-level
+ * interpolation. Used between Gauss-Seidel colors in multigrid
+ * smoothing where CF boundary ghosts are held fixed as Dirichlet BCs.
+ *
+ * Ref: AMReX MLMG — only same-level exchange between relaxation sweeps.
+ * Ref: Chombo AMRMultiGrid — CF boundary treated as fixed Dirichlet.
+ */
+void ghost_exchange_same_level_all(mesh_t *m, int level)
+{
+    #pragma omp parallel for schedule(dynamic)
+    for (int bid = 0; bid < m->num_blocks; bid++) {
+        block_t *b = m->blocks[bid];
+        if (!b || b->loc.level != level) continue;
+
+        for (int n = 0; n < NUM_NEIGHBORS; n++) {
+            int nbr_id = b->neighbor_ids[n];
+            if (nbr_id < 0) continue;
+
+            block_t *nbr = m->blocks[nbr_id];
+            if (!nbr || nbr->loc.level != level) continue;
+
+            exchange_neighbor(b, nbr,
+                              nbr_offset[n][0],
+                              nbr_offset[n][1],
+                              nbr_offset[n][2],
+                              0);
+        }
+    }
+}
+
+/*
+ * Fill coarse-fine boundary ghost zones on blocks at a specific level
+ * by interpolation from level-1 data (coarse-buffer protocol).
+ *
+ * For blocks at `level` with coarser neighbors (level-1):
+ *   Phase 2: Restrict fine interior → own coarse_buf
+ *   Phase 3: Fill coarse_buf ghosts from same-level bufs + coarse grids
+ *   Phase 3.5: Extrapolate coarse_buf boundary ghosts
+ *   Phase 4: Prolongate coarse_buf → fine ghost zones
+ *
+ * Called ONCE before smoothing begins at a level, not between colors.
+ * The interpolated ghost values act as fixed Dirichlet BCs during smoothing.
+ *
+ * Ref: AMReX MLMG — CF boundary filled once, held fixed during relaxation.
+ * Ref: Chombo AMRMultiGrid — interpCFGhosts called before each level solve.
+ */
+void ghost_fill_cf_boundary(mesh_t *m, int level)
+{
+    if (level <= 0) return;  /* level 0 has no coarser level */
+
+    /* Phase 2: Restrict blocks at this level → own coarse_buf */
+    #pragma omp parallel for schedule(dynamic)
+    for (int bid = 0; bid < m->num_blocks; bid++) {
+        block_t *b = m->blocks[bid];
+        if (!b || b->loc.level != level) continue;
+        restrict_to_coarse_buf(b);
+    }
+
+    /* Phase 3: Fill coarse_buf ghost zones from same-level bufs + coarse */
+    #pragma omp parallel for schedule(dynamic)
+    for (int bid = 0; bid < m->num_blocks; bid++) {
+        block_t *b = m->blocks[bid];
+        if (!b || b->loc.level != level) continue;
+        if (!b->coarse_buf) continue;
+
+        for (int n = 0; n < NUM_NEIGHBORS; n++) {
+            int ox = nbr_offset[n][0];
+            int oy = nbr_offset[n][1];
+            int oz = nbr_offset[n][2];
+            int nlev = b->nblevel[oz + 1][oy + 1][ox + 1];
+
+            if (nlev == b->loc.level) {
+                int nbr_id = b->neighbor_ids[n];
+                if (nbr_id < 0) continue;
+                block_t *nbr = m->blocks[nbr_id];
+                if (!nbr || !nbr->coarse_buf) continue;
+                exchange_grid_pair(b->coarse_buf, nbr->coarse_buf,
+                                   ox, oy, oz);
+            } else if (nlev >= 0 && nlev == b->loc.level - 1) {
+                int nbr_id = b->neighbor_ids[n];
+                if (nbr_id < 0) continue;
+                block_t *nbr = m->blocks[nbr_id];
+                if (!nbr || !nbr->grid) continue;
+                copy_from_coarse_grid(b->coarse_buf, b->origin,
+                                      nbr->grid, nbr->origin,
+                                      ox, oy, oz);
+            }
+        }
+    }
+
+    /* Phase 3.5: Extrapolate coarse_buf boundary ghosts */
+    #pragma omp parallel for schedule(dynamic)
+    for (int bid = 0; bid < m->num_blocks; bid++) {
+        block_t *b = m->blocks[bid];
+        if (!b || b->loc.level != level) continue;
+        fill_coarse_buf_boundary(b);
+    }
+
+    /* Phase 4: Prolongate coarse_buf → fine ghost zones */
+    #pragma omp parallel for schedule(dynamic)
+    for (int bid = 0; bid < m->num_blocks; bid++) {
+        block_t *b = m->blocks[bid];
+        if (!b || b->loc.level != level) continue;
         prolongate_from_own_coarse_buf(b);
     }
 }

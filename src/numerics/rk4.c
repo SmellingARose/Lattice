@@ -67,6 +67,7 @@ static const double CK_B[5] = {
  */
 static void restrict_level_to_parents(mesh_t *m, int level)
 {
+    #pragma omp parallel for schedule(dynamic)
     for (int bid = 0; bid < m->num_blocks; bid++) {
         block_t *b = m->blocks[bid];
         if (!b || b->loc.level != level - 1 || b->is_leaf) continue;

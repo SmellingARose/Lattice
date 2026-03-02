@@ -339,6 +339,7 @@ double mesh_constraint_l2(const struct mesh_s *m)
     double sum = 0.0;
     int count = 0;
 
+    #pragma omp parallel for schedule(dynamic) reduction(+:sum,count)
     for (int bid = 0; bid < m->num_blocks; bid++) {
         block_t *b = m->blocks[bid];
         if (!b || !b->is_leaf) continue;
@@ -370,6 +371,7 @@ double mesh_momentum_l2(const struct mesh_s *m)
     double sum = 0.0;
     int count = 0;
 
+    #pragma omp parallel for schedule(dynamic) reduction(+:sum,count)
     for (int bid = 0; bid < m->num_blocks; bid++) {
         block_t *b = m->blocks[bid];
         if (!b || !b->is_leaf) continue;

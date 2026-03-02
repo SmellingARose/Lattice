@@ -676,6 +676,14 @@ Level 0: everywhere (dx ~ M/2)     — outer domain + boundary</code></pre>
 
 <p><strong>All-blocks variant (<code>ghost_exchange_all_blocks</code>):</strong> Like <code>ghost_exchange()</code> but includes non-leaf blocks in the same-level 26-neighbor exchange. Required by the composite multigrid solver (<code>relaxation_amr.c</code>), where the FAS V-cycle operates on all blocks at each level &mdash; not just leaves. Without this, non-leaf ghost zones contain stale data, corrupting FD operator evaluations and tau corrections.</p>
 
+<p><strong>Solver-specific ghost exchange (AMReX/Chombo pattern):</strong> The composite multigrid solver uses three specialized exchange modes instead of a single full multilevel exchange:</p>
+<ul>
+  <li><code>ghost_exchange_same_level_all(m, level)</code> &mdash; Same-level 26-neighbor exchange for ALL blocks at a given level. No cross-level interpolation. Used <em>between Gauss-Seidel colors</em> in the smoother.</li>
+  <li><code>ghost_fill_cf_boundary(m, level)</code> &mdash; Fills coarse-fine boundary ghost zones by interpolation from level-1 data (coarse-buffer protocol: restrict &rarr; fill coarse_buf ghosts &rarr; extrapolate &rarr; prolongate). Called ONCE before smoothing begins at a level. CF ghosts are held fixed as Dirichlet BCs during all 8 GS colors.</li>
+  <li><code>ghost_exchange_multilevel_all(m)</code> &mdash; Full coarse-buffer protocol for ALL blocks (not just leaves). Used for setup and residual computation.</li>
+</ul>
+<p>This pattern follows AMReX MLMG, Chombo AMRMultiGrid, and Athena++ MG (Tomida &amp; Stone 2023): CF boundaries are fixed Dirichlet from the coarse level, not re-interpolated between smoother sweeps.</p>
+
 <h3>Subcycling</h3>
 <p>Berger-Oliger subcycling: fine levels take 2x more timesteps at half the dt of their parent level. After the fine level completes its sub-steps, data is restricted back to the coarse level. This respects the CFL condition at each level without wasting work on coarse regions.</p>
 

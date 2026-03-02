@@ -162,7 +162,11 @@ work on AMR meshes.
     computation and division in `enforce_algebraic` (both CPU and GPU).
   - *OMP-parallelized mesh ghost exchange:* `#pragma omp parallel for` on
     block loops in `ghost_exchange()`, `ghost_exchange_all_blocks()`,
-    `ghost_exchange_multilevel()` (all 5 phases), `fill_coarse_buf_ghosts()`.
+    `ghost_exchange_multilevel()` (all 5 phases), `fill_coarse_buf_ghosts()`,
+    `ghost_exchange_same_level_all()`, `ghost_fill_cf_boundary()`,
+    `ghost_fill_from_coarser()` Pass 1, `restrict_level_to_parents()`,
+    `mesh_constraint_l2()`, `mesh_momentum_l2()`, `umg_sweep_1field()`,
+    `umg_sweep_4field()`, `umg_compute_operator()`.
 - **Constraint-preserving BCs:** BAM-style CP BCs replace the RHS of constraint
   fields (Theta, K, A_ij, Gamma^i) at boundary points with outgoing-wave equations
   at correct characteristic speeds, while keeping Sommerfeld for metric/gauge fields.
