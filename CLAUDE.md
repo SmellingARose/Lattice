@@ -110,7 +110,7 @@ work on AMR meshes.
   integer sub_step in subcycling (fixes floating-point frac drift), Ricci/raise_all
   symmetry exploitation (6 vs 9 components), Sommerfeld asymptotic array lookup,
   Levi-Civita curl unrolling, hoisted advection sign.
-- **Tier 3 optimizations (in progress, 6/7 complete):**
+- **Tier 3 optimizations (all complete, 7/7):**
   - *Manual CSE in `ccz4_rhs_point`:* Pre-compute `K - 2*Theta` (used 6×),
     `A_mixed[k][j] = A[i][k] * h_UU[k][j]` (eliminates inner `ll` loop in A²
     trace and RHS_A). Pure arithmetic — same math, fewer FLOPs.
@@ -138,7 +138,31 @@ work on AMR meshes.
     extrapolation sweeps, prolongation). Zero PCIe DMA during time steps. Uniform
     meshes: 1 kernel launch. Constants (`nbr_offset`, `restrict_w/wkj`,
     `prolong_w/wkj`) in HIP `__constant__` memory for device access.
-  - *Remaining:* Dense output subcycling deferred.
+  - *Precomputed `inv_dx`:* `grid_t` stores `inv_dx = 1.0/dx`. All FD stencil
+    functions (`fd_d1`, `fd_d2`, `fd_d1_d2`, `fd_d2_mixed`, `fd_adv`, `fd_ko`)
+    take `inv_dx` and multiply instead of dividing by `dx`. Eliminates ~20
+    divisions per grid point per RHS evaluation.
+  - Dense output subcycling deferred.
+- **Tier 4 optimizations (GPU, all complete):**
+  - *Compact Sommerfeld kernel:* Boundary-only block ID list eliminates 70-90%
+    of idle threads in typical AMR meshes.
+  - *Fused RK4 kernels:* `backend_rk4_stage_packed` (accum + axpy in 1 kernel)
+    and `backend_rk4_final_packed` (accum + copy + apply in 1 kernel). Saves
+    3 kernel launches + 3 rhs buffer reads per RK4 step.
+  - *Shared memory block metadata:* `dx_arr[b]` loaded into `__shared__` once
+    per GPU block in RHS kernel. Saves 63 redundant global loads per block.
+  - *Lazy host copy:* `backend_unmap_pack()` (free only) vs
+    `backend_unmap_pack_sync()` (sync + free). Future: skip sync when host
+    data not needed.
+  - *HIP streams:* Persistent `hipStream_t` for all kernel launches. Enables
+    non-blocking launches and potential host/device overlap.
+  - *KO dissipation branch reduction:* Precomputed per-field sigma array
+    eliminates 25+ branches per point in hot field loop.
+  - *Unit-determinant inverse:* `compute_inverse_sym_unit_det()` skips det
+    computation and division in `enforce_algebraic` (both CPU and GPU).
+  - *OMP-parallelized mesh ghost exchange:* `#pragma omp parallel for` on
+    block loops in `ghost_exchange()`, `ghost_exchange_all_blocks()`,
+    `ghost_exchange_multilevel()` (all 5 phases), `fill_coarse_buf_ghosts()`.
 - **Constraint-preserving BCs:** BAM-style CP BCs replace the RHS of constraint
   fields (Theta, K, A_ij, Gamma^i) at boundary points with outgoing-wave equations
   at correct characteristic speeds, while keeping Sommerfeld for metric/gauge fields.
@@ -174,10 +198,14 @@ work on AMR meshes.
   unconditionally, matching `rk4.c`). Packed RHS kernel `g_local.n_fields` was 0
   (memset default), disabling KO dissipation in all AMR runs; fixed in both backends.
   Subcycling frac drift: replaced floating-point `floor(t/dt)` computation with
-  integer `sub_step` parameter (latent bug in long-duration runs).
+  integer `sub_step` parameter (latent bug in long-duration runs). AMR composite
+  multigrid solver: uninitialized `rhs` arrays on mesh blocks (`posix_memalign` does
+  not zero memory). Caused V-cycle divergence (2x/cycle) with 3 AMR levels, or very
+  slow convergence (0.85/cycle, 159 V-cycles) with 5 levels. Fixed by zeroing `rhs`
+  and `fields` in all 4 solver entry points.
 - **Default integrator:** Changed from CK45 to classic RK4 (`RK_CLASSIC`). Classic is
   faster (4 stages vs 5) but uses 25% more memory. All test allocations updated.
-- **Tests:** Flat spacetime, convergence (order 6.5), Bowen-York (29/29 + N-body),
+- **Tests:** Flat spacetime, convergence (order 6.5), Bowen-York (33/33 + N-body),
   HiSpID (26/26), AH finder (13/13), Maxwell (15/15), Psi4 (15/15), CCE (49/49),
   CP-BC (30/30), pack_evolve (8/8), amr_prolong (15/15), binary inspiral (full
   system validation: BY+AMR+CCZ4+Psi4+AH+constraints). N-body smoke tests:
@@ -243,16 +271,20 @@ lattice/
 ├── tests/
 │   ├── test_flat.c             # flat spacetime stability
 │   ├── test_single_bh.c        # single puncture evolution
-│   ├── test_gauge_wave.c       # gauge wave propagation
+│   ├── test_convergence.c      # 3-resolution convergence (order 6.5)
+│   ├── test_constraints.c      # Hamiltonian + momentum constraint tests
 │   ├── test_amr_mesh.c         # AMR mesh creation + Morton ordering
 │   ├── test_amr_ghost.c        # ghost exchange + multi-block evolution
 │   ├── test_amr_prolong.c     # prolongation + noise reduction
+│   ├── test_amr_refine.c     # oct-tree refinement + multi-level ghost
+│   ├── test_amr_evolve.c     # AMR evolution integration (8/8)
+│   ├── test_amr_accuracy.c   # AMR accuracy validation
 │   ├── test_head_on.c          # head-on binary collision
 │   ├── test_head_on_output.txt # saved test output (merger diagnostics)
-│   ├── test_amr_refine.c     # oct-tree refinement + multi-level ghost
 │   ├── test_pack_evolve.c    # packed batch kernel validation
 │   ├── test_subcycle.c       # Berger-Oliger subcycling validation
 │   ├── test_bowen_york.c    # Bowen-York initial data (A_ij + solver + evolution)
+│   ├── test_relaxation_amr.c # AMR composite multigrid solver tests
 │   ├── test_hispid.c        # HiSpID high-spin initial data (QI Kerr + coupled solver)
 │   ├── test_ah_finder.c     # Apparent horizon finder tests (13/13)
 │   ├── test_maxwell.c       # Einstein-Maxwell tests (15/15)

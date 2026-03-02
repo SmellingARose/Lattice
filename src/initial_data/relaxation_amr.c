@@ -187,6 +187,7 @@ static void umg_sweep_1field(mg_level_amr_t *lev)
 {
     int gw = lev->ghost, N = lev->N, Nt = lev->Ntotal;
     double dx = lev->dx, dx2 = dx * dx;
+    double inv_dx = 1.0 / dx;
     int sx = 1, sy = Nt, sz = Nt * Nt;
     double J_lap = 3.0 * FD_D2_CENTER_WEIGHT / dx2;
 
@@ -198,9 +199,9 @@ static void umg_sweep_1field(mg_level_amr_t *lev)
                     int idx = k * sz + j * sy + i;
                     double psi_tot = lev->psi_BL[idx] + lev->psi[idx];
                     if (psi_tot < 0.1) psi_tot = 0.1;
-                    double lap = fd_d2(lev->psi, idx, sx, dx)
-                               + fd_d2(lev->psi, idx, sy, dx)
-                               + fd_d2(lev->psi, idx, sz, dx);
+                    double lap = fd_d2(lev->psi, idx, sx, inv_dx)
+                               + fd_d2(lev->psi, idx, sy, inv_dx)
+                               + fd_d2(lev->psi, idx, sz, inv_dx);
                     double p2 = psi_tot * psi_tot;
                     double p4 = p2 * p2;
                     double p7 = p4 * p2 * psi_tot;
@@ -219,6 +220,7 @@ static void umg_sweep_4field(mg_level_amr_t *lev)
 {
     int gw = lev->ghost, N = lev->N, Nt = lev->Ntotal;
     double dx = lev->dx, dx2 = dx * dx;
+    double inv_dx = 1.0 / dx;
     int sx = 1, sy = Nt, sz = Nt * Nt;
     int strides[3] = { sx, sy, sz };
     double J_lap = 3.0 * FD_D2_CENTER_WEIGHT / dx2;
@@ -232,9 +234,9 @@ static void umg_sweep_4field(mg_level_amr_t *lev)
                     int idx = k * sz + j * sy + i;
                     double psi_tot = lev->psi_BL[idx] + lev->psi[idx];
                     if (psi_tot < 0.1) psi_tot = 0.1;
-                    double lap_psi = fd_d2(lev->psi, idx, sx, dx)
-                                   + fd_d2(lev->psi, idx, sy, dx)
-                                   + fd_d2(lev->psi, idx, sz, dx);
+                    double lap_psi = fd_d2(lev->psi, idx, sx, inv_dx)
+                                   + fd_d2(lev->psi, idx, sy, inv_dx)
+                                   + fd_d2(lev->psi, idx, sz, inv_dx);
                     double p2 = psi_tot * psi_tot;
                     double p4 = p2 * p2;
                     double p7 = p4 * p2 * psi_tot;
@@ -247,18 +249,18 @@ static void umg_sweep_4field(mg_level_amr_t *lev)
                     lev->psi[idx] -= res_psi / (J_lap + dS_psi);
 
                     for (int d = 0; d < 3; d++) {
-                        double lap_V = fd_d2(lev->V[d], idx, sx, dx)
-                                     + fd_d2(lev->V[d], idx, sy, dx)
-                                     + fd_d2(lev->V[d], idx, sz, dx);
+                        double lap_V = fd_d2(lev->V[d], idx, sx, inv_dx)
+                                     + fd_d2(lev->V[d], idx, sy, inv_dx)
+                                     + fd_d2(lev->V[d], idx, sz, inv_dx);
                         double d_divV = 0.0;
                         for (int e = 0; e < 3; e++) {
                             if (e == d)
                                 d_divV += fd_d2(lev->V[e], idx,
-                                                strides[e], dx);
+                                                strides[e], inv_dx);
                             else
                                 d_divV += fd_d2_mixed(lev->V[e], idx,
                                                       strides[d],
-                                                      strides[e], dx);
+                                                      strides[e], inv_dx);
                         }
                         double res_V = lap_V + d_divV / 3.0
                                      + lev->S_M[d][idx] - lev->f_V[d][idx];
@@ -276,6 +278,7 @@ static void umg_compute_operator(mg_level_amr_t *lev, int four_field)
 {
     int gw = lev->ghost, N = lev->N, Nt = lev->Ntotal;
     double dx = lev->dx;
+    double inv_dx = 1.0 / dx;
     int sx = 1, sy = Nt, sz = Nt * Nt;
     int strides[3] = { sx, sy, sz };
 
@@ -285,9 +288,9 @@ static void umg_compute_operator(mg_level_amr_t *lev, int four_field)
                 int idx = k * sz + j * sy + i;
                 double psi_tot = lev->psi_BL[idx] + lev->psi[idx];
                 if (psi_tot < 0.1) psi_tot = 0.1;
-                double lap = fd_d2(lev->psi, idx, sx, dx)
-                           + fd_d2(lev->psi, idx, sy, dx)
-                           + fd_d2(lev->psi, idx, sz, dx);
+                double lap = fd_d2(lev->psi, idx, sx, inv_dx)
+                           + fd_d2(lev->psi, idx, sy, inv_dx)
+                           + fd_d2(lev->psi, idx, sz, inv_dx);
                 double p2 = psi_tot * psi_tot;
                 double p4 = p2 * p2;
                 double p7 = p4 * p2 * psi_tot;
@@ -300,18 +303,18 @@ static void umg_compute_operator(mg_level_amr_t *lev, int four_field)
 
                 if (four_field) {
                     for (int d = 0; d < 3; d++) {
-                        double lap_V = fd_d2(lev->V[d], idx, sx, dx)
-                                     + fd_d2(lev->V[d], idx, sy, dx)
-                                     + fd_d2(lev->V[d], idx, sz, dx);
+                        double lap_V = fd_d2(lev->V[d], idx, sx, inv_dx)
+                                     + fd_d2(lev->V[d], idx, sy, inv_dx)
+                                     + fd_d2(lev->V[d], idx, sz, inv_dx);
                         double d_divV = 0.0;
                         for (int e = 0; e < 3; e++) {
                             if (e == d)
                                 d_divV += fd_d2(lev->V[e], idx,
-                                                strides[e], dx);
+                                                strides[e], inv_dx);
                             else
                                 d_divV += fd_d2_mixed(lev->V[e], idx,
                                                       strides[d],
-                                                      strides[e], dx);
+                                                      strides[e], inv_dx);
                         }
                         lev->L_V[d][idx] = lap_V + d_divV / 3.0
                                          + lev->S_M[d][idx];
@@ -574,6 +577,7 @@ static void umg_precompute_bg_4field(mg_level_amr_t *lev, int n_bh,
     int Nt = lev->Ntotal;
     int gw = lev->ghost;
     double dx = lev->dx;
+    double inv_dx = 1.0 / dx;
     size_t np = lev->npoints;
     static const int sym_map[3][3] = {{0,1,2},{1,3,4},{2,4,5}};
 
@@ -627,7 +631,7 @@ static void umg_precompute_bg_4field(mg_level_amr_t *lev, int n_bh,
                     for (int a = 0; a < 3; a++)
                         for (int b = a; b < 3; b++) {
                             double val = fd_d1(h_bg[sym_map[a][b]], idx,
-                                               strides[dir], dx);
+                                               strides[dir], inv_dx);
                             d1_h[a][b][dir] = val;
                             d1_h[b][a][dir] = val;
                         }
@@ -637,7 +641,7 @@ static void umg_precompute_bg_4field(mg_level_amr_t *lev, int n_bh,
                     for (int a = 0; a < 3; a++)
                         for (int b = a; b < 3; b++) {
                             double val = fd_d2(h_bg[sym_map[a][b]], idx,
-                                               strides[dir], dx);
+                                               strides[dir], inv_dx);
                             d2_h[a][b][dir][dir] = val;
                             d2_h[b][a][dir][dir] = val;
                         }
@@ -647,7 +651,7 @@ static void umg_precompute_bg_4field(mg_level_amr_t *lev, int n_bh,
                             for (int b = a; b < 3; b++) {
                                 double val = fd_d2_mixed(
                                     h_bg[sym_map[a][b]], idx,
-                                    strides[d1], strides[d2], dx);
+                                    strides[d1], strides[d2], inv_dx);
                                 d2_h[a][b][d1][d2] = val;
                                 d2_h[a][b][d2][d1] = val;
                                 d2_h[b][a][d1][d2] = val;
@@ -688,7 +692,7 @@ static void umg_precompute_bg_4field(mg_level_amr_t *lev, int n_bh,
                     double div_A = 0.0;
                     for (int e = 0; e < 3; e++)
                         div_A += fd_d1(A_bg[sym_map[d][e]], idx,
-                                       strides[e], dx);
+                                       strides[e], inv_dx);
                     lev->S_M[d][idx] = -div_A;
                 }
             }
@@ -760,7 +764,7 @@ static void amr_precompute_bg_4field_block(block_t *blk, int n_bh,
     grid_t *g = blk->grid;
     int Nt = g->Ntotal;
     int gw = g->ghost;
-    double dx = g->dx;
+    double inv_dx = g->inv_dx;
     size_t np = g->npoints;
     static const int s_map[3][3] = {{0,1,2},{1,3,4},{2,4,5}};
 
@@ -815,7 +819,7 @@ static void amr_precompute_bg_4field_block(block_t *blk, int n_bh,
                     for (int a = 0; a < 3; a++)
                         for (int b = a; b < 3; b++) {
                             double val = fd_d1(h_bg[s_map[a][b]], idx,
-                                               strides[dir], dx);
+                                               strides[dir], inv_dx);
                             d1_h[a][b][dir] = val;
                             d1_h[b][a][dir] = val;
                         }
@@ -825,7 +829,7 @@ static void amr_precompute_bg_4field_block(block_t *blk, int n_bh,
                     for (int a = 0; a < 3; a++)
                         for (int b = a; b < 3; b++) {
                             double val = fd_d2(h_bg[s_map[a][b]], idx,
-                                               strides[dir], dx);
+                                               strides[dir], inv_dx);
                             d2_h[a][b][dir][dir] = val;
                             d2_h[b][a][dir][dir] = val;
                         }
@@ -835,7 +839,7 @@ static void amr_precompute_bg_4field_block(block_t *blk, int n_bh,
                             for (int b = a; b < 3; b++) {
                                 double val = fd_d2_mixed(
                                     h_bg[s_map[a][b]], idx,
-                                    strides[d1], strides[d2], dx);
+                                    strides[d1], strides[d2], inv_dx);
                                 d2_h[a][b][d1][d2] = val;
                                 d2_h[a][b][d2][d1] = val;
                                 d2_h[b][a][d1][d2] = val;
@@ -876,7 +880,7 @@ static void amr_precompute_bg_4field_block(block_t *blk, int n_bh,
                     double div_A = 0.0;
                     for (int e = 0; e < 3; e++)
                         div_A += fd_d1(A_bg[s_map[d][e]], idx,
-                                       strides[e], dx);
+                                       strides[e], inv_dx);
                     g->fields[BG_SM1 + d][idx] = -div_A;
                 }
             }
@@ -893,6 +897,7 @@ static void smooth_block_1field(block_t *blk, int color)
     grid_t *g = blk->grid;
     int gw = g->ghost, N = g->N, Nt = g->Ntotal;
     double dx = g->dx, dx2 = dx * dx;
+    double inv_dx = g->inv_dx;
     int sx = 1, sy = Nt, sz = Nt * Nt;
     double J_lap = 3.0 * FD_D2_CENTER_WEIGHT / dx2;
     int c0 = color & 1, c1 = (color >> 1) & 1, c2 = (color >> 2) & 1;
@@ -908,9 +913,9 @@ static void smooth_block_1field(block_t *blk, int color)
                 int idx = k * sz + j * sy + i;
                 double psi_tot = psi_BL[idx] + psi[idx];
                 if (psi_tot < 0.1) psi_tot = 0.1;
-                double lap = fd_d2(psi, idx, sx, dx)
-                           + fd_d2(psi, idx, sy, dx)
-                           + fd_d2(psi, idx, sz, dx);
+                double lap = fd_d2(psi, idx, sx, inv_dx)
+                           + fd_d2(psi, idx, sy, inv_dx)
+                           + fd_d2(psi, idx, sz, inv_dx);
                 double p2 = psi_tot * psi_tot;
                 double p4 = p2 * p2;
                 double p7 = p4 * p2 * psi_tot;
@@ -928,6 +933,7 @@ static void smooth_block_4field(block_t *blk, int color)
     grid_t *g = blk->grid;
     int gw = g->ghost, N = g->N, Nt = g->Ntotal;
     double dx = g->dx, dx2 = dx * dx;
+    double inv_dx = g->inv_dx;
     int sx = 1, sy = Nt, sz = Nt * Nt;
     int strides[3] = { sx, sy, sz };
     double J_lap = 3.0 * FD_D2_CENTER_WEIGHT / dx2;
@@ -949,9 +955,9 @@ static void smooth_block_4field(block_t *blk, int color)
                 int idx = k * sz + j * sy + i;
                 double psi_tot = psi_BL[idx] + psi[idx];
                 if (psi_tot < 0.1) psi_tot = 0.1;
-                double lap_psi = fd_d2(psi, idx, sx, dx)
-                               + fd_d2(psi, idx, sy, dx)
-                               + fd_d2(psi, idx, sz, dx);
+                double lap_psi = fd_d2(psi, idx, sx, inv_dx)
+                               + fd_d2(psi, idx, sy, inv_dx)
+                               + fd_d2(psi, idx, sz, inv_dx);
                 double p2 = psi_tot * psi_tot;
                 double p4 = p2 * p2;
                 double p7 = p4 * p2 * psi_tot;
@@ -964,16 +970,16 @@ static void smooth_block_4field(block_t *blk, int color)
                 psi[idx] -= res_psi / (J_lap + dS_psi);
 
                 for (int d = 0; d < 3; d++) {
-                    double lap_V = fd_d2(V[d], idx, sx, dx)
-                                 + fd_d2(V[d], idx, sy, dx)
-                                 + fd_d2(V[d], idx, sz, dx);
+                    double lap_V = fd_d2(V[d], idx, sx, inv_dx)
+                                 + fd_d2(V[d], idx, sy, inv_dx)
+                                 + fd_d2(V[d], idx, sz, inv_dx);
                     double d_divV = 0.0;
                     for (int e = 0; e < 3; e++) {
                         if (e == d)
-                            d_divV += fd_d2(V[e], idx, strides[e], dx);
+                            d_divV += fd_d2(V[e], idx, strides[e], inv_dx);
                         else
                             d_divV += fd_d2_mixed(V[e], idx,
-                                                  strides[d], strides[e], dx);
+                                                  strides[d], strides[e], inv_dx);
                     }
                     double res_V = lap_V + d_divV / 3.0
                                  + S_M[d][idx] - f_V[d][idx];
@@ -1036,7 +1042,7 @@ static void compute_operator_level(mesh_t *m, int level, int four_field)
         if (!blk || blk->loc.level != level) continue;
         grid_t *g = blk->grid;
         int gw = g->ghost, N = g->N, Nt = g->Ntotal;
-        double dx = g->dx;
+        double inv_dx = g->inv_dx;
         int sx = 1, sy = Nt, sz = Nt * Nt;
         int strides[3] = { sx, sy, sz };
 
@@ -1051,9 +1057,9 @@ static void compute_operator_level(mesh_t *m, int level, int four_field)
                     int idx = k * sz + j * sy + i;
                     double psi_tot = psi_BL[idx] + psi[idx];
                     if (psi_tot < 0.1) psi_tot = 0.1;
-                    double lap = fd_d2(psi, idx, sx, dx)
-                               + fd_d2(psi, idx, sy, dx)
-                               + fd_d2(psi, idx, sz, dx);
+                    double lap = fd_d2(psi, idx, sx, inv_dx)
+                               + fd_d2(psi, idx, sy, inv_dx)
+                               + fd_d2(psi, idx, sz, inv_dx);
                     double p2 = psi_tot * psi_tot;
                     double p4 = p2 * p2;
                     double p7 = p4 * p2 * psi_tot;
@@ -1069,18 +1075,18 @@ static void compute_operator_level(mesh_t *m, int level, int four_field)
                                          g->fields[SOL_V2],
                                          g->fields[SOL_V3] };
                         for (int d = 0; d < 3; d++) {
-                            double lap_V = fd_d2(V[d], idx, sx, dx)
-                                         + fd_d2(V[d], idx, sy, dx)
-                                         + fd_d2(V[d], idx, sz, dx);
+                            double lap_V = fd_d2(V[d], idx, sx, inv_dx)
+                                         + fd_d2(V[d], idx, sy, inv_dx)
+                                         + fd_d2(V[d], idx, sz, inv_dx);
                             double d_divV = 0.0;
                             for (int e = 0; e < 3; e++) {
                                 if (e == d)
                                     d_divV += fd_d2(V[e], idx,
-                                                    strides[e], dx);
+                                                    strides[e], inv_dx);
                                 else
                                     d_divV += fd_d2_mixed(V[e], idx,
                                                           strides[d],
-                                                          strides[e], dx);
+                                                          strides[e], inv_dx);
                             }
                             g->accum[SOL_V1 + d][idx] = lap_V + d_divV / 3.0
                                 + g->fields[BG_SM1 + d][idx];
@@ -1797,6 +1803,18 @@ double relaxation_solve_amr(grid_t *g, int n_bh, const puncture_data_t *bhs,
         amr_precompute_bg_1field_block(blk, n_bh, bhs);
     }
 
+    /* Zero solver solution and RHS on all blocks.
+     * posix_memalign does not zero memory, so rhs contains garbage.
+     * The finest-level equation is L(u) = 0, so rhs must be 0. */
+    for (int b = 0; b < m->num_blocks; b++) {
+        block_t *blk = m->blocks[b];
+        if (!blk) continue;
+        memset(blk->grid->fields[SOL_PSI], 0,
+               blk->grid->npoints * sizeof(double));
+        memset(blk->grid->rhs[SOL_PSI], 0,
+               blk->grid->npoints * sizeof(double));
+    }
+
     /* Ghost exchange so backgrounds are in ghost zones too */
     solver_ghost_exchange(m, 0);
 
@@ -1826,7 +1844,7 @@ double relaxation_solve_amr(grid_t *g, int n_bh, const puncture_data_t *bhs,
      * artifacts at refinement boundaries (discontinuities in FD stencils),
      * worsening apparent constraint quality.  For AMR evolution meshes,
      * each block should receive data directly from its corresponding
-     * solver level — that path is in set_bowen_york_amr() (TODO). */
+     * solver level — that path is in set_bowen_york_mesh() (TODO). */
     double *psi_full = calloc(g->npoints, sizeof(double));
 
     /* Copy level-0 data (fills everything including ghost zones) */
@@ -1921,6 +1939,23 @@ double relaxation_solve_coupled_amr(grid_t *g, int n_bh,
         block_t *blk = m->blocks[b];
         if (!blk) continue;
         amr_precompute_bg_4field_block(blk, n_bh, bhs);
+    }
+
+    /* Zero solver solution and RHS on all blocks.
+     * posix_memalign does not zero memory, so rhs contains garbage.
+     * The finest-level equation is L(u) = 0, so rhs must be 0. */
+    for (int b = 0; b < m->num_blocks; b++) {
+        block_t *blk = m->blocks[b];
+        if (!blk) continue;
+        grid_t *bg = blk->grid;
+        memset(bg->fields[SOL_PSI], 0, bg->npoints * sizeof(double));
+        memset(bg->fields[SOL_V1], 0, bg->npoints * sizeof(double));
+        memset(bg->fields[SOL_V2], 0, bg->npoints * sizeof(double));
+        memset(bg->fields[SOL_V3], 0, bg->npoints * sizeof(double));
+        memset(bg->rhs[SOL_PSI], 0, bg->npoints * sizeof(double));
+        memset(bg->rhs[SOL_V1], 0, bg->npoints * sizeof(double));
+        memset(bg->rhs[SOL_V2], 0, bg->npoints * sizeof(double));
+        memset(bg->rhs[SOL_V3], 0, bg->npoints * sizeof(double));
     }
 
     solver_ghost_exchange(m, 1);
@@ -2115,11 +2150,16 @@ double relaxation_solve_amr_mesh(mesh_t *m, int n_bh, const puncture_data_t *bhs
         amr_precompute_bg_1field_block(blk, n_bh, bhs);
     }
 
-    /* Zero solver solution on all blocks */
+    /* Zero solver solution and RHS on all blocks.
+     * posix_memalign does not zero memory, so rhs contains garbage.
+     * The finest-level equation is L(u) = 0, so rhs must be 0.
+     * Coarser-level rhs is set by tau correction during V-cycles. */
     for (int b = 0; b < m->num_blocks; b++) {
         block_t *blk = m->blocks[b];
         if (!blk) continue;
         memset(blk->grid->fields[SOL_PSI], 0,
+               blk->grid->npoints * sizeof(double));
+        memset(blk->grid->rhs[SOL_PSI], 0,
                blk->grid->npoints * sizeof(double));
     }
 
@@ -2214,7 +2254,9 @@ double relaxation_solve_coupled_amr_mesh(mesh_t *m, int n_bh,
         amr_precompute_bg_4field_block(blk, n_bh, bhs);
     }
 
-    /* Zero solver solution on all blocks */
+    /* Zero solver solution and RHS on all blocks.
+     * posix_memalign does not zero memory, so rhs contains garbage.
+     * The finest-level equation is L(u) = 0, so rhs must be 0. */
     for (int b = 0; b < m->num_blocks; b++) {
         block_t *blk = m->blocks[b];
         if (!blk) continue;
@@ -2223,6 +2265,10 @@ double relaxation_solve_coupled_amr_mesh(mesh_t *m, int n_bh,
         memset(g->fields[SOL_V1], 0, g->npoints * sizeof(double));
         memset(g->fields[SOL_V2], 0, g->npoints * sizeof(double));
         memset(g->fields[SOL_V3], 0, g->npoints * sizeof(double));
+        memset(g->rhs[SOL_PSI], 0, g->npoints * sizeof(double));
+        memset(g->rhs[SOL_V1], 0, g->npoints * sizeof(double));
+        memset(g->rhs[SOL_V2], 0, g->npoints * sizeof(double));
+        memset(g->rhs[SOL_V3], 0, g->npoints * sizeof(double));
     }
 
     solver_ghost_exchange(m, 1);

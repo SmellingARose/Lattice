@@ -172,7 +172,7 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 
 <div class="banner">
   <strong>Living document.</strong> This is the single architecture reference for the Lattice codebase. Updated whenever structure changes &mdash; see CLAUDE.md.<br>
-  <strong>Last updated:</strong> 2026-02-25 &nbsp;|&nbsp; <strong>Status:</strong> Phase 2 complete, Phase 3 in progress (Tier 1+2+3 optimizations, N-body validated, persistent packs).
+  <strong>Last updated:</strong> 2026-03-02 &nbsp;|&nbsp; <strong>Status:</strong> Phase 2 complete, Phase 3 in progress (Tier 1+2+3 optimizations, N-body validated, persistent packs, binary inspiral validated).
 </div>
 
 <!-- ========================================== -->
@@ -286,7 +286,7 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 
 <table class="file-table">
 <tr><th>File</th><th>Purpose</th></tr>
-<tr><td><code>grid.h / grid.c</code></td><td><code>grid_t</code> struct with <code>int n_fields</code> for conditional field allocation. <code>grid_alloc_ex(N, L, method, n_fields)</code> allocates only active fields; <code>grid_alloc()</code> is a static inline wrapper defaulting to <code>NUM_FIELDS</code>. Page-aligned (4096-byte), <code>IDX(g,i,j,k)</code> indexing macro, <code>COORD(g,i)</code> for physical coordinates. N padded to next multiple of 16.</td></tr>
+<tr><td><code>grid.h / grid.c</code></td><td><code>grid_t</code> struct with <code>int n_fields</code> for conditional field allocation, <code>double inv_dx</code> precomputed inverse grid spacing (1.0/dx). <code>grid_alloc_ex(N, L, method, n_fields)</code> allocates only active fields; <code>grid_alloc()</code> is a static inline wrapper defaulting to <code>NUM_FIELDS</code>. Page-aligned (4096-byte), <code>IDX(g,i,j,k)</code> indexing macro, <code>COORD(g,i)</code> for physical coordinates. N padded to next multiple of 16.</td></tr>
 <tr><td><code>fields.h</code></td><td>Field enum (<code>FIELD_CHI</code> through <code>FIELD_BM3</code>), symmetric tensor index table, loop macros (<code>FOR1</code>...<code>FOR4</code>), Kronecker delta. <code>COMPILED_NUM_FIELDS</code> macro (25 or 31 based on <code>-DLATTICE_EM_ENABLED</code>) for constant loop bounds.</td></tr>
 <tr><td><code>params.h</code></td><td><code>sim_params_t</code> with CCZ4 params (kappa1/2/3), gauge params (eta, lapse_coeff, <code>position_dependent_eta</code>), AMR params, noise reduction params. <code>default_params()</code> inline.</td></tr>
 <tr><td><code>device.h</code></td><td><code>LATTICE_DEVICE</code> macro (<code>__host__ __device__</code> for HIP, empty for CPU), <code>EXTERN_C_BEGIN/END</code> for C++ linkage, <code>restrict</code> → <code>__restrict__</code> compat.</td></tr>
@@ -312,7 +312,7 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 
 <table class="file-table">
 <tr><th>File</th><th>Purpose</th></tr>
-<tr><td><code>finite_diff.h</code></td><td>Header-only 6th-order FD operators: centered 1st/2nd, fused 1st+2nd (<code>fd_d1_d2()</code>), mixed 2nd, upwind advection, KO dissipation. GPU-annotated. Compile-time <code>FD_ORDER</code> selects 4th or 6th order.</td></tr>
+<tr><td><code>finite_diff.h</code></td><td>Header-only 6th-order FD operators: <code>fd_d1(inv_dx)</code>, <code>fd_d2(inv_dx)</code>, fused <code>fd_d1_d2(inv_dx)</code>, mixed 2nd, upwind advection, KO dissipation. All take precomputed inverse grid spacing <code>inv_dx = 1.0/dx</code> instead of <code>dx</code>. GPU-annotated. Compile-time <code>FD_ORDER</code> selects 4th or 6th order.</td></tr>
 <tr><td><code>rk4.c</code></td><td>Single-grid stepper (<code>rk4_step</code>) and AMR mesh stepper (<code>rk4_step_mesh</code>). Packed batch: all leaf blocks in one kernel per operation. Persistent per-level packs (<code>mesh_t.leaf_pack</code>, <code>level_packs[]</code>) cached across steps; <code>packs_dirty</code> flag triggers rebuild on regrid. Data-only sync (<code>sync_to/from_blocks</code>) replaces full load/store cycle. Flattened update loops (single OMP region over all fields). Subcycling uses integer <code>sub_step</code> for drift-free temporal interpolation. Also <code>enforce_algebraic()</code>.</td></tr>
 <tr><td><code>interpolate.h</code></td><td>6th-order off-grid Lagrange interpolation (7-point stencil, half-width 3). Used by AH finder and CCE worldtube extraction for field access at non-grid points. Legacy 5-point (4th-order) basis retained.</td></tr>
 </table>
@@ -324,7 +324,7 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 
 <table class="file-table">
 <tr><th>File</th><th>Purpose</th></tr>
-<tr><td><code>tensor_utils.h</code></td><td>Header-only: <code>compute_inverse_sym</code>, <code>compute_christoffel</code>, <code>compute_trace</code>, <code>raise_all_2</code>, <code>make_trace_free</code>, <code>fast_inv_cbrt</code>, dot products.</td></tr>
+<tr><td><code>tensor_utils.h</code></td><td>Header-only: <code>compute_inverse_sym</code>, <code>compute_inverse_sym_unit_det</code> (cofactor inverse for unit-determinant matrices), <code>compute_christoffel</code>, <code>compute_trace</code>, <code>raise_all_2</code>, <code>make_trace_free</code>, <code>fast_inv_cbrt</code>, dot products.</td></tr>
 </table>
 
 <!-- ========================================== -->
@@ -335,9 +335,9 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 <table class="file-table">
 <tr><th>File</th><th>Purpose</th></tr>
 <tr><td><code>puncture.c</code></td><td>Brill-Lindquist multi-puncture (up to 32 BHs at rest). Block-aware variant for AMR.</td></tr>
-<tr><td><code>bowen_york.h/c</code></td><td>Bowen-York extrinsic curvature A_ij for linear momentum + spin. CCZ4 field conversion pipeline. Mesh-level API (<code>set_bowen_york_mesh</code>) solves directly on evolution blocks.</td></tr>
+<tr><td><code>bowen_york.h/c</code></td><td>Bowen-York extrinsic curvature A_ij for linear momentum + spin. CCZ4 field conversion pipeline. Mesh-level API (<code>set_bowen_york_mesh</code>) solves directly on evolution blocks. After leaf-block CCZ4 conversion, restricts data from fine to coarse (max_level down to 1) so non-leaf parent blocks have valid CCZ4 fields &mdash; required because <code>ghost_fill_from_coarser()</code> reads non-leaf data during subcycled evolution.</td></tr>
 <tr><td><code>relaxation.h/c</code></td><td>FAS multigrid constraint solver. 1-field (BY) and 4-field coupled (HiSpID). Full Multigrid cycle + Newton-Gauss-Seidel smoothing, 8-color GPU-compatible. O(N^3) to discretization accuracy.</td></tr>
-<tr><td><code>relaxation_amr.h/c</code></td><td>AMR composite multigrid: FAS V-cycles on AMR block levels + uniform MG hierarchy below level 0. <code>refine_mesh_near_punctures()</code> shared utility. Mesh-level solvers borrow the evolution mesh (no copy).</td></tr>
+<tr><td><code>relaxation_amr.h/c</code></td><td>AMR composite multigrid: FAS V-cycles on AMR block levels + uniform MG hierarchy below level 0. <code>refine_mesh_near_punctures()</code> uses AABB-point distance for correct refinement targeting on large blocks. <code>solver_ghost_exchange()</code> wraps <code>ghost_exchange_all_blocks()</code> with solver BC re-application. Composite V-cycle zeros rhs on childless blocks before tau correction to prevent stale accumulation. Mesh-level solvers borrow the evolution mesh (no copy).</td></tr>
 <tr><td><code>kerr_quasi_isotropic.h/c</code></td><td>Quasi-isotropic Kerr metric for HiSpID high-spin initial data. Conformal factor and conformal metric from analytic Kerr solution.</td></tr>
 </table>
 
@@ -362,7 +362,7 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 
 <table class="file-table">
 <tr><th>File</th><th>Purpose</th></tr>
-<tr><td><code>sommerfeld.c</code></td><td><code>apply_sommerfeld()</code> (single-grid) and <code>apply_sommerfeld_block()</code> (AMR). Face-only ghost slab iteration (~5x fewer iterations than full-grid scan). Extracted <code>sommerfeld_point()</code> helper. GPU-annotated.</td></tr>
+<tr><td><code>sommerfeld.h/c</code></td><td><code>apply_sommerfeld()</code> (single-grid) and <code>apply_sommerfeld_block()</code> (AMR). Face-only ghost slab iteration (~5x fewer iterations than full-grid scan). <code>boundary_d1()</code> helper takes <code>inv_dx</code> instead of <code>dx</code>. Extracted <code>sommerfeld_point()</code> helper. GPU-annotated.</td></tr>
 <tr><td><code>constraint_preserving.h</code></td><td>Header-only: <code>cp_char_speed()</code> (per-field characteristic speed lookup) and <code>cp_rhs()</code> (CP boundary formula). Both <code>static inline</code> with <code>LATTICE_DEVICE</code>.</td></tr>
 </table>
 
@@ -375,7 +375,7 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 <tr><th>File</th><th>Purpose</th></tr>
 <tr><td><code>block.h/c</code></td><td><code>block_t</code>: grid_t + coarse_buf + logical location + 26 neighbors + tree links. <code>block_alloc()</code> takes <code>n_fields</code> for conditional allocation.</td></tr>
 <tr><td><code>mesh.h/c</code></td><td><code>mesh_t</code> with <code>int n_fields</code>: block collection, Morton sort, neighbor finding via hash table (O(1) lookup). Pre-allocated <code>ghost_scratch</code> buffer for temporal interpolation. Persistent pack cache: <code>leaf_pack</code>, <code>level_packs[MAX_AMR_LEVELS]</code>, <code>packs_dirty</code> flag. <code>mesh_create_ex()</code> takes <code>n_fields</code>; <code>mesh_create()</code> is a backward-compatible wrapper.</td></tr>
-<tr><td><code>ghost_exchange.h/c</code></td><td>5-phase coarse-buffer multilevel ghost exchange (AthenaK pattern).</td></tr>
+<tr><td><code>ghost_exchange.h/c</code></td><td>5-phase coarse-buffer multilevel ghost exchange (AthenaK pattern). Also provides <code>ghost_exchange_all_blocks()</code> which includes non-leaf blocks in the same-level 26-neighbor exchange &mdash; required by the composite multigrid solver where V-cycles operate on all blocks, not just leaves.</td></tr>
 <tr><td><code>prolongation.h/c</code></td><td>6th-order cell-centered Lagrange interpolation (coarse to fine). 7-point 1D stencil, 3D tensor product. Pre-computed <code>prolong_wkj[4][7][7]</code> weight products for 4 octant combos.</td></tr>
 <tr><td><code>restriction.h/c</code></td><td>6th-order Lagrange cell-average restriction (fine to coarse). 6-point symmetric stencil: w = {-17/11520, 97/3840, 2743/5760, ...}. Pre-computed <code>restrict_wkj[6][6]</code> weight products.</td></tr>
 <tr><td><code>criterion.h/c</code></td><td>Chi-gradient refinement criterion with hysteresis: (dx/chi^2)|grad(chi)|.</td></tr>
@@ -391,9 +391,9 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 
 <table class="file-table">
 <tr><th>File</th><th>Purpose</th></tr>
-<tr><td><code>backend.h</code></td><td>Abstract interface: RHS, Sommerfeld, CK45 update, ghost exchange, enforce_algebraic, map/unmap, copy, zero.</td></tr>
-<tr><td><code>backend_cpu.c</code></td><td>OpenMP threads. Packed: flattened (block, k, j) iteration, inner i-loop for SIMD. Ghost exchange directly on pack buffers. <code>backend_enforce_algebraic_packed()</code> for batched det(h)=1, tr(A)=0.</td></tr>
-<tr><td><code>backend_hip.cpp</code></td><td>HIP GPU (AMD + NVIDIA). 15 explicit kernels with <code>hipLaunchKernelGGL</code>. Packed: 4D decomposition over (block, k, j, i). ~5.3 KB stack per thread (16 KB limit set in <code>backend_init</code>). <code>backend_enforce_algebraic_packed()</code> runs on device (no host sync). Device-side ghost exchange: 7 GPU kernel launches, zero PCIe DMA. Constant memory for lookup tables (~2.7 KB).</td></tr>
+<tr><td><code>backend.h</code></td><td>Abstract interface: RHS, Sommerfeld, CK45 update, ghost exchange, enforce_algebraic, map/unmap, copy, zero. Fused RK4 kernels: <code>backend_rk4_stage_packed()</code> (accum + axpy in one kernel), <code>backend_rk4_final_packed()</code> (final update, replaces 3 separate ops), <code>backend_unmap_pack_sync()</code> (sync+free variant).</td></tr>
+<tr><td><code>backend_cpu.c</code></td><td>OpenMP threads. Packed: flattened (block, k, j) iteration, inner i-loop for SIMD. Ghost exchange directly on pack buffers. <code>backend_enforce_algebraic_packed()</code> for batched det(h)=1, tr(A)=0. Fused RK4 operations: <code>backend_rk4_stage_packed()</code>, <code>backend_rk4_final_packed()</code>.</td></tr>
+<tr><td><code>backend_hip.cpp</code></td><td>HIP GPU (AMD + NVIDIA). Explicit kernels with <code>hipLaunchKernelGGL</code>. Packed: 4D decomposition over (block, k, j, i). ~5.3 KB stack per thread (16 KB limit set in <code>backend_init</code>). <code>backend_enforce_algebraic_packed()</code> runs on device (no host sync). Device-side ghost exchange: 7 GPU kernel launches, zero PCIe DMA. Fused RK4: <code>backend_rk4_stage_packed()</code>, <code>backend_rk4_final_packed()</code>. Constant memory for lookup tables (~2.7 KB).</td></tr>
 </table>
 
 <!-- ========================================== -->
@@ -568,7 +568,9 @@ Level 4 block near BH:  dx=0.0625, criterion = 0.08 → STOP   (< 0.1)</code></p
 {
     // 1. Restrict fine block data to half-resolution temp grid
     grid_t *coarse = grid_alloc(b->grid->N / 2, b->grid->L, p->rk_method);
-    restrict_all(b->grid, coarse);
+    for (int f = 0; f < b->grid->n_fields; f++) {
+        restrict_field(b->grid, f, coarse, f);
+    }
 
     // 2. Compute RHS on the coarse grid
     compute_rhs(coarse, p);   // one extra evaluation
@@ -576,7 +578,9 @@ Level 4 block near BH:  dx=0.0625, criterion = 0.08 → STOP   (< 0.1)</code></p
     // 3. Compute RHS on the fine grid (already done during evolution)
     //    Restrict the fine RHS to the coarse grid
     grid_t *fine_rhs_restricted = grid_alloc(b->grid->N / 2, ...);
-    restrict_all(b->rhs, fine_rhs_restricted);
+    for (int f = 0; f < b->grid->n_fields; f++) {
+        restrict_field(b->rhs, f, fine_rhs_restricted, f);
+    }
 
     // 4. Compare: tau = |RHS_coarse - RHS_fine_restricted|
     double max_tau = 0.0;
@@ -668,7 +672,9 @@ Level 0: everywhere (dx ~ M/2)     — outer domain + boundary</code></pre>
   GPU: all 7 kernels run on device, zero PCIe DMA.
   CPU: OpenMP parallel for on host memory.</div>
 
-<p><strong>Cross-level ghost fill (<code>ghost_fill_from_coarser</code>):</strong> Used during subcycling to fill fine-level ghost zones from time-interpolated coarser data. Split into two passes to avoid ordering bugs: Pass 1 restricts <em>all</em> fine blocks into their coarse_bufs; Pass 2 exchanges coarse_buf ghosts, extrapolates boundaries, and prolongates. This ensures same-level neighbor coarse_bufs are always valid when read.</p>
+<p><strong>Cross-level ghost fill (<code>ghost_fill_from_coarser</code>):</strong> Used during subcycling to fill fine-level ghost zones from time-interpolated coarser data. Split into two passes to avoid ordering bugs: Pass 1 restricts <em>all</em> fine blocks into their coarse_bufs; Pass 2 exchanges coarse_buf ghosts, extrapolates boundaries, and prolongates. This ensures same-level neighbor coarse_bufs are always valid when read. Note: this function reads non-leaf parent block data, so all non-leaf blocks must have valid field values (see <code>set_bowen_york_mesh</code> restriction step).</p>
+
+<p><strong>All-blocks variant (<code>ghost_exchange_all_blocks</code>):</strong> Like <code>ghost_exchange()</code> but includes non-leaf blocks in the same-level 26-neighbor exchange. Required by the composite multigrid solver (<code>relaxation_amr.c</code>), where the FAS V-cycle operates on all blocks at each level &mdash; not just leaves. Without this, non-leaf ghost zones contain stale data, corrupting FD operator evaluations and tau corrections.</p>
 
 <h3>Subcycling</h3>
 <p>Berger-Oliger subcycling: fine levels take 2x more timesteps at half the dt of their parent level. After the fine level completes its sub-steps, data is restricted back to the coarse level. This respects the CFL condition at each level without wasting work on coarse regions.</p>
@@ -734,7 +740,7 @@ Level 0: everywhere (dx ~ M/2)     — outer domain + boundary</code></pre>
 <details>
 <summary>Why solve initial data on the evolution mesh?</summary>
 <div class="detail-body">
-<p>In AMR mode, the constraint solver operates directly on the evolution mesh's blocks via <code>set_bowen_york_mesh()</code>. This gives exact discrete operator consistency &mdash; the same <code>fd_d2()</code> stencils, ghost zones, and grid points used by the evolution code. No interpolation from a separate solver grid, so no interpolation error. At t=0, evolution blocks have 100 idle array slots (25 fields &times; 4 arrays); the solver needs only 22 slots.</p>
+<p>In AMR mode, the constraint solver operates directly on the evolution mesh's blocks via <code>set_bowen_york_mesh()</code>. This gives exact discrete operator consistency &mdash; the same <code>fd_d2()</code> stencils, ghost zones, and grid points used by the evolution code. No interpolation from a separate solver grid, so no interpolation error. At t=0, evolution blocks have 100 idle array slots (25 fields &times; 4 arrays); the solver needs only 22 slots. After converting leaf blocks to CCZ4 fields, a restriction pass (fine to coarse, max_level down to 1) fills non-leaf parent blocks with valid data &mdash; required because <code>ghost_fill_from_coarser()</code> reads non-leaf blocks during subcycled evolution.</p>
 <p>Refinement depth defaults to <code>--max-level</code>, so initial data and evolution use the same AMR depth automatically. Override with <code>--amr-levels</code> for the rare case where you want finer initial data than evolution can maintain. Each level halves <code>dx</code> near punctures &mdash; e.g., <code>--max-level 3</code> on a base grid with dx=2M gives dx=0.25M near the BH. The solver does real work at the fine resolution, so constraint quality scales with <code>dx_fine</code>, not <code>dx_base</code>. Benchmarked at 218,000x better near-field constraint quality vs solving at base resolution and copying to refined blocks.</p>
 <p>Requires <code>--rk classic</code> (accum arrays needed by the solver). Follows the Athena++ MG approach (Tomida &amp; Stone 2023) and avoids the operator mismatch documented by Alic et al. (arXiv:0912.2920) when using external solvers like TwoPunctures on FD grids.</p>
 </div>
@@ -805,10 +811,13 @@ make clean              # rm -rf build/</code></pre>
 <tr><td><code>make test-amr-prolong</code></td><td>Prolongation convergence, restriction, CAKO, CAHD, SSL (15 tests)</td><td><span class="badge badge-green">Passing</span></td></tr>
 <tr><td><code>make test-amr-refine</code></td><td>Oct-tree refine/coarsen, 2:1 constraint, multilevel ghost (72 tests)</td><td><span class="badge badge-green">Passing</span></td></tr>
 <tr><td><code>make test-subcycle</code></td><td>Berger-Oliger subcycling validation</td><td><span class="badge badge-green">Passing</span></td></tr>
-<tr><td><code>make test-bowen-york</code></td><td>Bowen-York A_ij, multigrid solver, evolution (29 tests)</td><td><span class="badge badge-green">Passing</span></td></tr>
+<tr><td><code>make test-bowen-york</code></td><td>Bowen-York A_ij, multigrid solver, evolution, N-body (33 tests)</td><td><span class="badge badge-green">Passing</span></td></tr>
 <tr><td><code>make test-hispid</code></td><td>HiSpID high-spin initial data, coupled solver (26 tests)</td><td><span class="badge badge-green">Passing</span></td></tr>
 <tr><td><code>make test-ah</code></td><td>Apparent horizon finder: interpolation, Schwarzschild, diagnostics (13 tests)</td><td><span class="badge badge-green">Passing</span></td></tr>
 <tr><td><code>make test-maxwell</code></td><td>Einstein-Maxwell: flat EM, plane wave, charged BH, constraints (15 tests)</td><td><span class="badge badge-green">Passing</span></td></tr>
+<tr><td><code>make test-psi4</code></td><td>Psi4 gravitational wave extraction: quadrature, harmonics, modes (15 tests)</td><td><span class="badge badge-green">Passing</span></td></tr>
+<tr><td><code>make test-cp-bc</code></td><td>Constraint-preserving BCs: char speeds, formula, flat, single BH (30 tests)</td><td><span class="badge badge-green">Passing</span></td></tr>
+<tr><td><code>make test-inspiral</code></td><td>Binary inspiral full system validation: BY+AMR+CCZ4+Psi4+AH+constraints (10 subsystems)</td><td><span class="badge badge-green">Passing</span></td></tr>
 <tr><td><code>make test-inspiral-convergence</code></td><td>AMR binary inspiral convergence at 3 resolutions (long run)</td><td><span class="badge badge-green">Passing</span></td></tr>
 </table>
 

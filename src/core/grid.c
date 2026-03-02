@@ -41,6 +41,7 @@ grid_t *grid_alloc_ex(int N, double L, rk_method_t method, int n_fields)
     g->Ntotal = N_padded + 2 * GHOST_WIDTH;
     g->L      = L;
     g->dx     = L / N_padded;
+    g->inv_dx = 1.0 / g->dx;
     g->npoints = (size_t)g->Ntotal * g->Ntotal * g->Ntotal;
     g->n_fields = n_fields;
 

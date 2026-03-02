@@ -74,9 +74,6 @@ static inline double restrict_cell(const double *src, const grid_t *fg,
 void restrict_field(const grid_t *fine_g, int fine_field,
                     grid_t *coarse_g, int coarse_field);
 
-/* Restrict all NUM_FIELDS from fine grid to coarse grid. */
-void restrict_all(const grid_t *fine_g, grid_t *coarse_g);
-
 /* Restrict fine block interior → block's own coarse_buf interior (6th-order).
  * Block-local operation: no cross-block memory access.
  * Ref: AthenaK coarse-buffer architecture */

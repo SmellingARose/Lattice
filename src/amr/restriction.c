@@ -86,13 +86,6 @@ void restrict_field(const grid_t *fine_g, int ff,
     }
 }
 
-void restrict_all(const grid_t *fine_g, grid_t *coarse_g)
-{
-    for (int f = 0; f < fine_g->n_fields; f++) {
-        restrict_field(fine_g, f, coarse_g, f);
-    }
-}
-
 void restrict_to_coarse_buf(struct block_s *b)
 {
     if (!b || !b->coarse_buf) return;

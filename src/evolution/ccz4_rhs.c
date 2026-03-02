@@ -110,7 +110,7 @@ static inline void ccz4_load_and_differentiate(
     const int sx = STRIDE_X;
     const int sy = STRIDE_Y(g);
     const int sz = STRIDE_Z(g);
-    const double dx = g->dx;
+    const double inv_dx = g->inv_dx;
     const int strides[3] = { sx, sy, sz };
 
     /* ---- Load fields ---- */
@@ -133,24 +133,24 @@ static inline void ccz4_load_and_differentiate(
     /* ---- Fused d1 + diagonal d2 derivatives ---- */
     FOR1(dir) {
         int s = strides[dir];
-        fd_d1_d2(src[FIELD_CHI],   idx, s, dx, &d->d1_chi[dir],   &d->d2_chi[dir][dir]);
-        fd_d1_d2(src[FIELD_LAPSE], idx, s, dx, &d->d1_lapse[dir], &d->d2_lapse[dir][dir]);
+        fd_d1_d2(src[FIELD_CHI],   idx, s, inv_dx, &d->d1_chi[dir],   &d->d2_chi[dir][dir]);
+        fd_d1_d2(src[FIELD_LAPSE], idx, s, inv_dx, &d->d1_lapse[dir], &d->d2_lapse[dir][dir]);
         FOR2(a, b) {
-            fd_d1_d2(src[h_idx[a][b]], idx, s, dx,
+            fd_d1_d2(src[h_idx[a][b]], idx, s, inv_dx,
                      &d->d1_h[a][b][dir], &d->d2_h[a][b][dir][dir]);
         }
         FOR1(a) {
-            fd_d1_d2(src[FIELD_SHIFT1 + a], idx, s, dx,
+            fd_d1_d2(src[FIELD_SHIFT1 + a], idx, s, inv_dx,
                      &d->d1_shift[a][dir], &d->d2_shift[a][dir][dir]);
         }
         /* d1-only fields */
-        d->d1_K[dir]     = fd_d1(src[FIELD_K],     idx, s, dx);
-        d->d1_Theta[dir] = fd_d1(src[FIELD_THETA], idx, s, dx);
+        d->d1_K[dir]     = fd_d1(src[FIELD_K],     idx, s, inv_dx);
+        d->d1_Theta[dir] = fd_d1(src[FIELD_THETA], idx, s, inv_dx);
         FOR2(a, b) {
-            d->d1_A[a][b][dir] = fd_d1(src[A_idx[a][b]], idx, s, dx);
+            d->d1_A[a][b][dir] = fd_d1(src[A_idx[a][b]], idx, s, inv_dx);
         }
         FOR1(a) {
-            d->d1_Gamma[a][dir] = fd_d1(src[FIELD_GAMMA1 + a], idx, s, dx);
+            d->d1_Gamma[a][dir] = fd_d1(src[FIELD_GAMMA1 + a], idx, s, inv_dx);
         }
     }
 
@@ -158,16 +158,16 @@ static inline void ccz4_load_and_differentiate(
     for (int dir1 = 0; dir1 < 3; dir1++) {
         for (int dir2 = 0; dir2 < dir1; dir2++) {
             int s1 = strides[dir1], s2 = strides[dir2];
-            d->d2_chi[dir1][dir2]   = fd_d2_mixed(src[FIELD_CHI],   idx, s1, s2, dx);
+            d->d2_chi[dir1][dir2]   = fd_d2_mixed(src[FIELD_CHI],   idx, s1, s2, inv_dx);
             d->d2_chi[dir2][dir1]   = d->d2_chi[dir1][dir2];
-            d->d2_lapse[dir1][dir2] = fd_d2_mixed(src[FIELD_LAPSE], idx, s1, s2, dx);
+            d->d2_lapse[dir1][dir2] = fd_d2_mixed(src[FIELD_LAPSE], idx, s1, s2, inv_dx);
             d->d2_lapse[dir2][dir1] = d->d2_lapse[dir1][dir2];
             FOR2(a, b) {
-                d->d2_h[a][b][dir1][dir2] = fd_d2_mixed(src[h_idx[a][b]], idx, s1, s2, dx);
+                d->d2_h[a][b][dir1][dir2] = fd_d2_mixed(src[h_idx[a][b]], idx, s1, s2, inv_dx);
                 d->d2_h[a][b][dir2][dir1] = d->d2_h[a][b][dir1][dir2];
             }
             FOR1(a) {
-                d->d2_shift[a][dir1][dir2] = fd_d2_mixed(src[FIELD_SHIFT1 + a], idx, s1, s2, dx);
+                d->d2_shift[a][dir1][dir2] = fd_d2_mixed(src[FIELD_SHIFT1 + a], idx, s1, s2, inv_dx);
                 d->d2_shift[a][dir2][dir1] = d->d2_shift[a][dir1][dir2];
             }
         }
@@ -184,18 +184,18 @@ static inline void ccz4_load_and_differentiate(
         /* Hoist sign check: all fields share the same beta per direction. */
         double (*fd)(const double *, int, int, double) =
             (beta > 0.0) ? fd_adv_up : fd_adv_down;
-        d->advec_chi   += beta * fd(src[FIELD_CHI],   idx, s, dx);
-        d->advec_K     += beta * fd(src[FIELD_K],     idx, s, dx);
-        d->advec_Theta += beta * fd(src[FIELD_THETA], idx, s, dx);
-        d->advec_lapse += beta * fd(src[FIELD_LAPSE], idx, s, dx);
+        d->advec_chi   += beta * fd(src[FIELD_CHI],   idx, s, inv_dx);
+        d->advec_K     += beta * fd(src[FIELD_K],     idx, s, inv_dx);
+        d->advec_Theta += beta * fd(src[FIELD_THETA], idx, s, inv_dx);
+        d->advec_lapse += beta * fd(src[FIELD_LAPSE], idx, s, inv_dx);
         FOR2(a, b) {
-            d->advec_h[a][b] += beta * fd(src[h_idx[a][b]], idx, s, dx);
-            d->advec_A[a][b] += beta * fd(src[A_idx[a][b]], idx, s, dx);
+            d->advec_h[a][b] += beta * fd(src[h_idx[a][b]], idx, s, inv_dx);
+            d->advec_A[a][b] += beta * fd(src[A_idx[a][b]], idx, s, inv_dx);
         }
         FOR1(a) {
-            d->advec_Gamma[a] += beta * fd(src[FIELD_GAMMA1 + a], idx, s, dx);
-            d->advec_shift[a] += beta * fd(src[FIELD_SHIFT1 + a], idx, s, dx);
-            d->advec_B[a]     += beta * fd(src[FIELD_B1 + a],     idx, s, dx);
+            d->advec_Gamma[a] += beta * fd(src[FIELD_GAMMA1 + a], idx, s, inv_dx);
+            d->advec_shift[a] += beta * fd(src[FIELD_SHIFT1 + a], idx, s, inv_dx);
+            d->advec_B[a]     += beta * fd(src[FIELD_B1 + a],     idx, s, inv_dx);
         }
     }
 }

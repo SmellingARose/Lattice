@@ -70,6 +70,13 @@ static const double h_extrap_c[4][3] = {
 };
 
 /* ========================================================================
+ * Persistent HIP stream (2E optimization)
+ * Non-blocking launches, potential host/device overlap.
+ * ======================================================================== */
+
+static hipStream_t gpu_stream;
+
+/* ========================================================================
  * Device pointer tracking
  * Stores device pointers for the currently mapped pack.
  * ======================================================================== */
@@ -81,6 +88,9 @@ typedef struct {
     double *coarse_data;
     int *coarse_neighbor_table;
     sim_params_t *params;
+    /* Compact Sommerfeld: only boundary blocks (2A optimization) */
+    int *boundary_block_ids;
+    int n_boundary;
     /* Sizes for cleanup */
     size_t total;
     int nb;
@@ -101,6 +111,9 @@ void backend_init(void)
 {
     /* Set stack size for RHS kernel (~5.3 KB per thread) */
     HIP_CHECK(hipDeviceSetLimit(hipLimitStackSize, 16384));
+
+    /* Create persistent stream for non-blocking kernel launches */
+    HIP_CHECK(hipStreamCreate(&gpu_stream));
 
     /* Load constant memory */
     HIP_CHECK(hipMemcpyToSymbol(HIP_SYMBOL(d_nbr_offset), nbr_offset,
@@ -126,7 +139,7 @@ void backend_init(void)
 extern "C"
 void backend_cleanup(void)
 {
-    /* Nothing to clean up — device state freed by unmap */
+    hipStreamDestroy(gpu_stream);
 }
 
 /* ========================================================================
@@ -197,13 +210,65 @@ void backend_map_pack(meshblock_pack_t *pack, const sim_params_t *p)
     /* Simulation parameters (read-only) */
     d_ptrs.params = (sim_params_t *)hip_alloc_copy(p, sizeof(sim_params_t));
 
+    /* Build compact boundary block ID list (2A optimization).
+     * Only blocks with at least one on_boundary face need Sommerfeld. */
+    {
+        int *h_bids = (int *)malloc(nb * sizeof(int));
+        int n_bdy = 0;
+        for (int b = 0; b < nb; b++) {
+            int has = 0;
+            for (int face = 0; face < 6; face++)
+                has |= pack->on_boundary[b * 6 + face];
+            if (has) h_bids[n_bdy++] = b;
+        }
+        d_ptrs.n_boundary = n_bdy;
+        d_ptrs.boundary_block_ids = NULL;
+        if (n_bdy > 0) {
+            d_ptrs.boundary_block_ids = (int *)hip_alloc_copy(
+                h_bids, n_bdy * sizeof(int));
+        }
+        free(h_bids);
+    }
+
     d_ptrs_valid = 1;
+}
+
+/* Free all device memory (shared by unmap and unmap_sync) */
+static void hip_free_device_ptrs(void)
+{
+    hipFree(d_ptrs.data);
+    hipFree(d_ptrs.rhs);
+    hipFree(d_ptrs.scratch);
+    if (d_ptrs.accum) hipFree(d_ptrs.accum);
+    hipFree(d_ptrs.origins);
+    hipFree(d_ptrs.dx_per_block);
+    hipFree(d_ptrs.on_boundary);
+    hipFree(d_ptrs.levels);
+    hipFree(d_ptrs.neighbor_table);
+    hipFree(d_ptrs.refined_map);
+    hipFree(d_ptrs.nblevel_table);
+    if (d_ptrs.coarse_data) hipFree(d_ptrs.coarse_data);
+    if (d_ptrs.coarse_neighbor_table) hipFree(d_ptrs.coarse_neighbor_table);
+    if (d_ptrs.boundary_block_ids) hipFree(d_ptrs.boundary_block_ids);
+    hipFree(d_ptrs.params);
+    d_ptrs_valid = 0;
 }
 
 extern "C"
 void backend_unmap_pack(meshblock_pack_t *pack)
 {
+    (void)pack;
     if (!d_ptrs_valid) return;
+    HIP_CHECK(hipStreamSynchronize(gpu_stream));
+    hip_free_device_ptrs();
+}
+
+extern "C"
+void backend_unmap_pack_sync(meshblock_pack_t *pack)
+{
+    if (!d_ptrs_valid) return;
+
+    HIP_CHECK(hipStreamSynchronize(gpu_stream));
 
     size_t total_bytes = d_ptrs.total * sizeof(double);
 
@@ -226,23 +291,7 @@ void backend_unmap_pack(meshblock_pack_t *pack)
                   hipMemcpyDeviceToHost));
     }
 
-    /* Free all device memory */
-    hipFree(d_ptrs.data);
-    hipFree(d_ptrs.rhs);
-    hipFree(d_ptrs.scratch);
-    if (d_ptrs.accum) hipFree(d_ptrs.accum);
-    hipFree(d_ptrs.origins);
-    hipFree(d_ptrs.dx_per_block);
-    hipFree(d_ptrs.on_boundary);
-    hipFree(d_ptrs.levels);
-    hipFree(d_ptrs.neighbor_table);
-    hipFree(d_ptrs.refined_map);
-    hipFree(d_ptrs.nblevel_table);
-    if (d_ptrs.coarse_data) hipFree(d_ptrs.coarse_data);
-    if (d_ptrs.coarse_neighbor_table) hipFree(d_ptrs.coarse_neighbor_table);
-    hipFree(d_ptrs.params);
-
-    d_ptrs_valid = 0;
+    hip_free_device_ptrs();
 }
 
 /* ========================================================================
@@ -272,7 +321,7 @@ void backend_zero_packed(meshblock_pack_t *pack, int which)
 
     int block_size = 256;
     int grid_size = (int)((total + block_size - 1) / block_size);
-    hipLaunchKernelGGL(hip_zero_packed, grid_size, block_size, 0, 0,
+    hipLaunchKernelGGL(hip_zero_packed, grid_size, block_size, 0, gpu_stream,
                        d_buf, total);
 }
 
@@ -287,13 +336,21 @@ __global__ void hip_compute_rhs(double *data, double *rhs_data,
                                  int total_threads, int inner,
                                  int lo)
 {
+    /* Shared memory: load dx once per GPU block (2C optimization).
+     * All 64 threads in a GPU block share the same mesh block b,
+     * so only thread 0 loads dx_arr[b]. Saves 63 global loads. */
+    __shared__ double s_dx;
+
     int tid = blockIdx.x * blockDim.x + threadIdx.x;
     if (tid >= total_threads) return;
+
+    int b = tid / (inner * inner * inner);
+    if (threadIdx.x == 0) s_dx = dx_arr[b];
+    __syncthreads();
 
     int i = lo + (tid % inner);
     int j = lo + ((tid / inner) % inner);
     int k = lo + ((tid / (inner * inner)) % inner);
-    int b = tid / (inner * inner * inner);
 
     /* Build per-field pointer arrays on stack */
     double *rhs_ptrs[NUM_FIELDS];
@@ -312,7 +369,8 @@ __global__ void hip_compute_rhs(double *data, double *rhs_data,
     g_local.Ntotal   = Ntotal;
     g_local.npoints  = npts;
     g_local.n_fields = nf;
-    g_local.dx       = dx_arr[b];
+    g_local.dx       = s_dx;
+    g_local.inv_dx   = 1.0 / s_dx;
 
 #ifdef LATTICE_EM_ENABLED
     if (params->em_enabled)
@@ -337,7 +395,7 @@ void backend_compute_rhs_packed(meshblock_pack_t *pack, const sim_params_t *p)
     int block_size = 64;  /* Smaller block for high-register RHS kernel */
     int grid_size = (total_threads + block_size - 1) / block_size;
 
-    hipLaunchKernelGGL(hip_compute_rhs, grid_size, block_size, 0, 0,
+    hipLaunchKernelGGL(hip_compute_rhs, grid_size, block_size, 0, gpu_stream,
                        d_ptrs.data, d_ptrs.rhs, d_ptrs.dx_per_block,
                        d_ptrs.params,
                        nb, pack->npts, pack->n_fields,
@@ -352,6 +410,7 @@ void backend_compute_rhs_packed(meshblock_pack_t *pack, const sim_params_t *p)
 __global__ void hip_sommerfeld(double *data, double *rhs_data,
                                 double *origins, double *dx_arr,
                                 int *ob_all, sim_params_t *params,
+                                int *boundary_block_ids,
                                 int nb, size_t npts, int nf,
                                 int Nt, int ghost, int lo, int hi,
                                 int total_threads, int use_cp)
@@ -362,7 +421,7 @@ __global__ void hip_sommerfeld(double *data, double *rhs_data,
     int i = tid % Nt;
     int j = (tid / Nt) % Nt;
     int k = (tid / (Nt * Nt)) % Nt;
-    int b = tid / (Nt * Nt * Nt);
+    int b = boundary_block_ids[tid / (Nt * Nt * Nt)];
 
     /* Skip interior points */
     if (i >= lo && i < hi && j >= lo && j < hi && k >= lo && k < hi)
@@ -391,6 +450,7 @@ __global__ void hip_sommerfeld(double *data, double *rhs_data,
 
     int idx = k * Nt * Nt + j * Nt + i;
     double dx = dx_arr[b];
+    double inv_dx = 1.0 / dx;
     double x = origins[b*3+0] + (i - ghost + 0.5) * dx;
     double y = origins[b*3+1] + (j - ghost + 0.5) * dx;
     double z = origins[b*3+2] + (k - ghost + 0.5) * dx;
@@ -415,7 +475,7 @@ __global__ void hip_sommerfeld(double *data, double *rhs_data,
 
         if (speed > 0.0) {
             double df_ds = boundary_d1(src_f, idx, strides[face_dir],
-                                        lo_off[face_dir], hi_off[face_dir], dx);
+                                        lo_off[face_dir], hi_off[face_dir], inv_dx);
             double f_asym = asymptotic_value(field);
             rhs_f[idx] = cp_rhs(alpha, speed, s_sign, df_ds,
                                 src_f[idx], f_asym, r);
@@ -423,7 +483,7 @@ __global__ void hip_sommerfeld(double *data, double *rhs_data,
             double sommerfeld = 0.0;
             for (int dir = 0; dir < 3; dir++) {
                 double d1 = boundary_d1(src_f, idx, strides[dir],
-                                         lo_off[dir], hi_off[dir], dx);
+                                         lo_off[dir], hi_off[dir], inv_dx);
                 sommerfeld += -d1 * loc[dir] / r;
             }
             double f_asym = asymptotic_value(field);
@@ -436,20 +496,25 @@ __global__ void hip_sommerfeld(double *data, double *rhs_data,
 extern "C"
 void backend_sommerfeld_packed(meshblock_pack_t *pack, const sim_params_t *p)
 {
+    /* Compact Sommerfeld (2A optimization): launch only boundary blocks.
+     * Typical AMR meshes: 70-90% of blocks are interior (no boundary faces).
+     * Launching n_boundary instead of nb eliminates idle threads. */
+    if (d_ptrs.n_boundary == 0) return;
+
     int lo = pack->ghost;
     int hi = pack->ghost + pack->N;
     int Nt = pack->Ntotal;
     int nb = pack->n_blocks;
-    int total_threads = nb * Nt * Nt * Nt;
+    int total_threads = d_ptrs.n_boundary * Nt * Nt * Nt;
     int use_cp = (p->bc_type == BC_CONSTRAINT_PRESERVING);
 
     int block_size = 256;
     int grid_size = (total_threads + block_size - 1) / block_size;
 
-    hipLaunchKernelGGL(hip_sommerfeld, grid_size, block_size, 0, 0,
+    hipLaunchKernelGGL(hip_sommerfeld, grid_size, block_size, 0, gpu_stream,
                        d_ptrs.data, d_ptrs.rhs, d_ptrs.origins,
                        d_ptrs.dx_per_block, d_ptrs.on_boundary,
-                       d_ptrs.params,
+                       d_ptrs.params, d_ptrs.boundary_block_ids,
                        nb, pack->npts, pack->n_fields,
                        Nt, pack->ghost, lo, hi,
                        total_threads, use_cp);
@@ -479,7 +544,7 @@ void backend_update_ck45_packed(meshblock_pack_t *pack,
     int block_size = 256;
     int grid_size = (int)((total + block_size - 1) / block_size);
 
-    hipLaunchKernelGGL(hip_update_ck45, grid_size, block_size, 0, 0,
+    hipLaunchKernelGGL(hip_update_ck45, grid_size, block_size, 0, gpu_stream,
                        d_ptrs.data, d_ptrs.scratch, d_ptrs.rhs,
                        A_s, B_s, dt, total);
 }
@@ -516,7 +581,7 @@ void backend_copy_packed(meshblock_pack_t *pack, int dst, int src)
 
     int block_size = 256;
     int grid_size = (int)((total + block_size - 1) / block_size);
-    hipLaunchKernelGGL(hip_copy, grid_size, block_size, 0, 0,
+    hipLaunchKernelGGL(hip_copy, grid_size, block_size, 0, gpu_stream,
                        dst_buf, src_buf, total);
 }
 
@@ -541,7 +606,7 @@ void backend_accum_add_packed(meshblock_pack_t *pack, double weight, double dt)
 
     int block_size = 256;
     int grid_size = (int)((total + block_size - 1) / block_size);
-    hipLaunchKernelGGL(hip_accum_add, grid_size, block_size, 0, 0,
+    hipLaunchKernelGGL(hip_accum_add, grid_size, block_size, 0, gpu_stream,
                        d_ptrs.accum, d_ptrs.rhs, coeff, total);
 }
 
@@ -564,7 +629,7 @@ void backend_axpy_packed(meshblock_pack_t *pack, double alpha, double dt)
 
     int block_size = 256;
     int grid_size = (int)((total + block_size - 1) / block_size);
-    hipLaunchKernelGGL(hip_axpy, grid_size, block_size, 0, 0,
+    hipLaunchKernelGGL(hip_axpy, grid_size, block_size, 0, gpu_stream,
                        d_ptrs.data, d_ptrs.scratch, d_ptrs.rhs, coeff, total);
 }
 
@@ -588,8 +653,72 @@ void backend_apply_accum_packed(meshblock_pack_t *pack)
 
     int block_size = 256;
     int grid_size = (int)((total + block_size - 1) / block_size);
-    hipLaunchKernelGGL(hip_apply_accum, grid_size, block_size, 0, 0,
+    hipLaunchKernelGGL(hip_apply_accum, grid_size, block_size, 0, gpu_stream,
                        d_ptrs.data, d_ptrs.accum, total);
+}
+
+/* ========================================================================
+ * Kernel 8a: Fused RK4 stage update (2B optimization)
+ * accum += w*dt*rhs;  data = scratch + a*dt*rhs
+ * Replaces separate accum_add + axpy, saves 1 kernel launch + 1 rhs read.
+ * ======================================================================== */
+
+__global__ void hip_rk4_stage(double *data_buf, const double *scratch_buf,
+                               double *accum_buf, const double *rhs_buf,
+                               double w_dt, double a_dt, size_t total)
+{
+    size_t tid = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
+    if (tid >= total) return;
+    double r = rhs_buf[tid];
+    accum_buf[tid] += w_dt * r;
+    data_buf[tid]   = scratch_buf[tid] + a_dt * r;
+}
+
+extern "C"
+void backend_rk4_stage_packed(meshblock_pack_t *pack,
+                               double weight, double alpha, double dt)
+{
+    if (!d_ptrs.accum) return;
+
+    size_t total = (size_t)pack->n_fields * pack->n_blocks * pack->npts;
+    double w_dt = weight * dt;
+    double a_dt = alpha * dt;
+
+    int block_size = 256;
+    int grid_size = (int)((total + block_size - 1) / block_size);
+    hipLaunchKernelGGL(hip_rk4_stage, grid_size, block_size, 0, gpu_stream,
+                       d_ptrs.data, d_ptrs.scratch, d_ptrs.accum, d_ptrs.rhs,
+                       w_dt, a_dt, total);
+}
+
+/* ========================================================================
+ * Kernel 8b: Fused RK4 final update (2B optimization)
+ * data = scratch + accum + w*dt*rhs
+ * Replaces accum_add + copy + apply_accum, saves 2 kernel launches.
+ * ======================================================================== */
+
+__global__ void hip_rk4_final(double *data_buf, const double *scratch_buf,
+                               const double *accum_buf, const double *rhs_buf,
+                               double w_dt, size_t total)
+{
+    size_t tid = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
+    if (tid >= total) return;
+    data_buf[tid] = scratch_buf[tid] + accum_buf[tid] + w_dt * rhs_buf[tid];
+}
+
+extern "C"
+void backend_rk4_final_packed(meshblock_pack_t *pack, double weight, double dt)
+{
+    if (!d_ptrs.accum) return;
+
+    size_t total = (size_t)pack->n_fields * pack->n_blocks * pack->npts;
+    double w_dt = weight * dt;
+
+    int block_size = 256;
+    int grid_size = (int)((total + block_size - 1) / block_size);
+    hipLaunchKernelGGL(hip_rk4_final, grid_size, block_size, 0, gpu_stream,
+                       d_ptrs.data, d_ptrs.scratch, d_ptrs.accum, d_ptrs.rhs,
+                       w_dt, total);
 }
 
 /* ========================================================================
@@ -1001,7 +1130,7 @@ void backend_ghost_exchange_packed(meshblock_pack_t *pack)
         int total = nb * NUM_NEIGHBORS;
         int bs = 256;
         int gs = (total + bs - 1) / bs;
-        hipLaunchKernelGGL(hip_ghost_same_level, gs, bs, 0, 0,
+        hipLaunchKernelGGL(hip_ghost_same_level, gs, bs, 0, gpu_stream,
                            d_ptrs.data, d_ptrs.neighbor_table, d_ptrs.levels,
                            nb, ghost, N, Nt, npts, nf);
     }
@@ -1018,7 +1147,7 @@ void backend_ghost_exchange_packed(meshblock_pack_t *pack)
         int total = nb * nf * N_c * N_c;
         int bs = 256;
         int gs = (total + bs - 1) / bs;
-        hipLaunchKernelGGL(hip_ghost_restrict, gs, bs, 0, 0,
+        hipLaunchKernelGGL(hip_ghost_restrict, gs, bs, 0, gpu_stream,
                            d_ptrs.data, d_ptrs.coarse_data,
                            d_ptrs.refined_map,
                            nb, ghost, Nt, ghost_c, N_c, Nt_c,
@@ -1030,7 +1159,7 @@ void backend_ghost_exchange_packed(meshblock_pack_t *pack)
         int total = nb * NUM_NEIGHBORS;
         int bs = 256;
         int gs = (total + bs - 1) / bs;
-        hipLaunchKernelGGL(hip_ghost_coarse_fill, gs, bs, 0, 0,
+        hipLaunchKernelGGL(hip_ghost_coarse_fill, gs, bs, 0, gpu_stream,
                            d_ptrs.data, d_ptrs.coarse_data,
                            d_ptrs.refined_map, d_ptrs.levels,
                            d_ptrs.nblevel_table, d_ptrs.neighbor_table,
@@ -1046,7 +1175,7 @@ void backend_ghost_exchange_packed(meshblock_pack_t *pack)
         int bs = 256;
         int gs = (total + bs - 1) / bs;
         for (int dim = 0; dim < 3; dim++) {
-            hipLaunchKernelGGL(hip_ghost_extrap, gs, bs, 0, 0,
+            hipLaunchKernelGGL(hip_ghost_extrap, gs, bs, 0, gpu_stream,
                                d_ptrs.coarse_data, d_ptrs.refined_map,
                                d_ptrs.nblevel_table,
                                nb, ghost, N_c, Nt_c, cnpts, nf, dim);
@@ -1058,7 +1187,7 @@ void backend_ghost_exchange_packed(meshblock_pack_t *pack)
         int total = nb * Nt * Nt * Nt;
         int bs = 256;
         int gs = (total + bs - 1) / bs;
-        hipLaunchKernelGGL(hip_ghost_prolong, gs, bs, 0, 0,
+        hipLaunchKernelGGL(hip_ghost_prolong, gs, bs, 0, gpu_stream,
                            d_ptrs.data, d_ptrs.coarse_data,
                            d_ptrs.refined_map, d_ptrs.levels,
                            d_ptrs.nblevel_table,
@@ -1115,7 +1244,7 @@ __global__ void hip_enforce_algebraic(double *data, int Nt, int nb,
 
     /* Enforce tr(A) = 0 */
     double h_UU[3][3];
-    compute_inverse_sym(h_loc, h_UU);
+    compute_inverse_sym_unit_det(h_loc, h_UU);
 
     double A_loc[3][3];
     A_loc[0][0] = FP(FIELD_A11)[idx];
@@ -1156,6 +1285,6 @@ void backend_enforce_algebraic_packed(meshblock_pack_t *pack)
 
     int block_size = 256;
     int grid_size = (total_threads + block_size - 1) / block_size;
-    hipLaunchKernelGGL(hip_enforce_algebraic, grid_size, block_size, 0, 0,
+    hipLaunchKernelGGL(hip_enforce_algebraic, grid_size, block_size, 0, gpu_stream,
                        d_ptrs.data, Nt, nb, npts, total_threads);
 }

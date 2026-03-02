@@ -24,6 +24,7 @@ typedef struct {
     int    ghost;      /* ghost zone width = GHOST_WIDTH              */
     int    Ntotal;     /* N + 2*ghost, padded so N is multiple of 16  */
     double dx;         /* grid spacing                                */
+    double inv_dx;     /* 1.0 / dx (precomputed for FD stencils)      */
     double L;          /* physical domain size                        */
     size_t npoints;    /* Ntotal^3, total points including ghosts     */
     int    n_fields;   /* active fields (<= NUM_FIELDS)               */

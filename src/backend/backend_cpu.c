@@ -47,6 +47,12 @@ void backend_unmap_pack(meshblock_pack_t *pack)
     /* CPU: data already in host memory, nothing to unmap */
 }
 
+void backend_unmap_pack_sync(meshblock_pack_t *pack)
+{
+    (void)pack;
+    /* CPU: data already in host memory, nothing to sync */
+}
+
 /* ---- Helper: select pack buffer by index ---- */
 
 /*
@@ -149,6 +155,7 @@ void backend_compute_rhs_packed(meshblock_pack_t *pack, const sim_params_t *p)
                     rhs_ptrs[f] = pack->rhs  + base;
                 }
                 g_local.dx = pack->dx_per_block[b];
+                g_local.inv_dx = 1.0 / pack->dx_per_block[b];
                 last_b = b;
             }
 
@@ -229,7 +236,7 @@ static inline void packed_sommerfeld_point(
             double df_ds = boundary_d1(src_ptrs[field], idx,
                                        strides[face_dir],
                                        lo_off[face_dir],
-                                       hi_off[face_dir], g->dx);
+                                       hi_off[face_dir], g->inv_dx);
             double f_asym = asymptotic_value(field);
             rhs_ptrs[field][idx] = cp_rhs(alpha, speed, s_sign, df_ds,
                                           src_ptrs[field][idx], f_asym, r);
@@ -238,7 +245,7 @@ static inline void packed_sommerfeld_point(
             double sommerfeld = 0.0;
             for (int dir = 0; dir < 3; dir++) {
                 double d1 = boundary_d1(src_ptrs[field], idx, strides[dir],
-                                        lo_off[dir], hi_off[dir], g->dx);
+                                        lo_off[dir], hi_off[dir], g->inv_dx);
                 sommerfeld += -d1 * loc[dir] / r;
             }
             double f_asym = asymptotic_value(field);
@@ -294,6 +301,7 @@ void backend_sommerfeld_packed(meshblock_pack_t *pack, const sim_params_t *p)
         g_local.ghost   = pack->ghost;
         g_local.Ntotal  = pack->Ntotal;
         g_local.dx      = dx;
+        g_local.inv_dx  = 1.0 / dx;
         g_local.npoints = npts;
 
         int nf = pack->n_fields;
@@ -464,6 +472,54 @@ void backend_apply_accum_packed(meshblock_pack_t *pack)
     #pragma omp parallel for schedule(static)
     for (size_t i = 0; i < total; i++)
         data[i] += accum[i];
+}
+
+/*
+ * Fused RK4 stage update (stages 1-3):
+ *   accum[i] += weight * dt * rhs[i]
+ *   data[i]   = scratch[i] + alpha * dt * rhs[i]
+ * Saves 1 pass over rhs[] compared to separate accum_add + axpy.
+ */
+void backend_rk4_stage_packed(meshblock_pack_t *pack,
+                               double weight, double alpha, double dt)
+{
+    if (!pack->accum) return;
+
+    size_t total = (size_t)pack->n_fields * pack->n_blocks * pack->npts;
+    double *data    = pack->data;
+    double *accum   = pack->accum;
+    const double *scratch = pack->scratch;
+    const double *rhs     = pack->rhs;
+    double w_dt = weight * dt;
+    double a_dt = alpha * dt;
+
+    #pragma omp parallel for schedule(static)
+    for (size_t i = 0; i < total; i++) {
+        double r = rhs[i];
+        accum[i] += w_dt * r;
+        data[i]   = scratch[i] + a_dt * r;
+    }
+}
+
+/*
+ * Fused RK4 final update (stage 4):
+ *   data[i] = scratch[i] + accum[i] + weight * dt * rhs[i]
+ * Replaces accum_add + copy + apply_accum (3 passes → 1).
+ */
+void backend_rk4_final_packed(meshblock_pack_t *pack, double weight, double dt)
+{
+    if (!pack->accum) return;
+
+    size_t total = (size_t)pack->n_fields * pack->n_blocks * pack->npts;
+    double *data    = pack->data;
+    const double *accum   = pack->accum;
+    const double *scratch = pack->scratch;
+    const double *rhs     = pack->rhs;
+    double w_dt = weight * dt;
+
+    #pragma omp parallel for schedule(static)
+    for (size_t i = 0; i < total; i++)
+        data[i] = scratch[i] + accum[i] + w_dt * rhs[i];
 }
 
 /* ========================================================================
@@ -1058,9 +1114,10 @@ void backend_enforce_algebraic_packed(meshblock_pack_t *pack)
             FIELD_PTR(FIELD_H23)[idx] = h_loc[1][2];
             FIELD_PTR(FIELD_H33)[idx] = h_loc[2][2];
 
-            /* Enforce tr(A) = 0 */
+            /* Enforce tr(A) = 0. Use unit-det inverse since det(h)=1
+             * was just enforced above — saves det computation + division. */
             double h_UU[3][3];
-            compute_inverse_sym(h_loc, h_UU);
+            compute_inverse_sym_unit_det(h_loc, h_UU);
 
             double A_loc[3][3];
             A_loc[0][0] = FIELD_PTR(FIELD_A11)[idx];

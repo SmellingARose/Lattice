@@ -250,7 +250,7 @@ static void psi4_compute(const double *const *fields, const grid_t *g,
 {
     const int idx = IDX(g, ii, jj, kk);
     const int strides[3] = { STRIDE_X, STRIDE_Y(g), STRIDE_Z(g) };
-    const double dx = g->dx;
+    const double inv_dx = g->inv_dx;
 
     /* --- Load fields --- */
     double chi = fields[FIELD_CHI][idx];
@@ -277,17 +277,17 @@ static void psi4_compute(const double *const *fields, const grid_t *g,
 
     FOR1(dir) {
         int s = strides[dir];
-        fd_d1_d2(fields[FIELD_CHI], idx, s, dx, &d1_chi[dir], &d2_chi_diag[dir]);
-        fd_d1_d2(fields[FIELD_K], idx, s, dx, &d1_K[dir], &(double){0}); /* d2_K not needed */
+        fd_d1_d2(fields[FIELD_CHI], idx, s, inv_dx, &d1_chi[dir], &d2_chi_diag[dir]);
+        fd_d1_d2(fields[FIELD_K], idx, s, inv_dx, &d1_K[dir], &(double){0}); /* d2_K not needed */
         FOR2(a, b) {
             if (b < a) {
                 d1_h[a][b][dir] = d1_h[b][a][dir];
                 d2_h_diag[a][b][dir] = d2_h_diag[b][a][dir];
                 d1_A[a][b][dir] = d1_A[b][a][dir];
             } else {
-                fd_d1_d2(fields[h_idx[a][b]], idx, s, dx,
+                fd_d1_d2(fields[h_idx[a][b]], idx, s, inv_dx,
                          &d1_h[a][b][dir], &d2_h_diag[a][b][dir]);
-                d1_A[a][b][dir] = fd_d1(fields[A_idx[a][b]], idx, s, dx);
+                d1_A[a][b][dir] = fd_d1(fields[A_idx[a][b]], idx, s, inv_dx);
             }
         }
     }
@@ -302,11 +302,11 @@ static void psi4_compute(const double *const *fields, const grid_t *g,
     for (int d1 = 0; d1 < 3; d1++) {
         for (int d2 = d1 + 1; d2 < 3; d2++) {
             int s1 = strides[d1], s2 = strides[d2];
-            d2_chi[d1][d2] = fd_d2_mixed(fields[FIELD_CHI], idx, s1, s2, dx);
+            d2_chi[d1][d2] = fd_d2_mixed(fields[FIELD_CHI], idx, s1, s2, inv_dx);
             d2_chi[d2][d1] = d2_chi[d1][d2];
             for (int a = 0; a < 3; a++) {
                 for (int b = a; b < 3; b++) {
-                    d2_h[a][b][d1][d2] = fd_d2_mixed(fields[h_idx[a][b]], idx, s1, s2, dx);
+                    d2_h[a][b][d1][d2] = fd_d2_mixed(fields[h_idx[a][b]], idx, s1, s2, inv_dx);
                     d2_h[a][b][d2][d1] = d2_h[a][b][d1][d2];
                     d2_h[b][a][d1][d2] = d2_h[a][b][d1][d2];
                     d2_h[b][a][d2][d1] = d2_h[a][b][d1][d2];
@@ -321,7 +321,7 @@ static void psi4_compute(const double *const *fields, const grid_t *g,
                         fields[FIELD_GAMMA3][idx] };
     FOR1(dir) {
         int s = strides[dir];
-        FOR1(a) d1_Gamma[a][dir] = fd_d1(fields[FIELD_GAMMA1 + a], idx, s, dx);
+        FOR1(a) d1_Gamma[a][dir] = fd_d1(fields[FIELD_GAMMA1 + a], idx, s, inv_dx);
     }
 
     /* --- Conformal geometry --- */

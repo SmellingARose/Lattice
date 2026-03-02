@@ -3,6 +3,127 @@
 > **Note:** When adding/removing/renaming files or functions, also update
 > `docs/architecture.html` — the living map of the codebase structure.
 
+## 2026-03-02: Fix uninitialized rhs in AMR composite multigrid solver
+
+**Bug:** All 4 AMR multigrid solver entry points (`relaxation_solve_amr`,
+`relaxation_solve_coupled_amr`, `relaxation_solve_amr_mesh`,
+`relaxation_solve_coupled_amr_mesh`) had uninitialized `rhs` arrays on mesh
+blocks. `posix_memalign` (used by `grid_alloc_ex`) does NOT zero memory.
+The finest-level equation is L(u) = 0, so `rhs` must be 0, but it contained
+garbage.
+
+**Symptoms:** With 3 AMR levels, V-cycles diverged (2x growth per cycle).
+With 5 levels, the smoother partially masked the garbage (0.85/cycle convergence
+— very slow but not divergent), leading to 159 V-cycles in the binary inspiral
+test. Root cause of the inspiral blowup at t=5.5M.
+
+**Fix:** Added `memset(rhs[SOL_*], 0, ...)` in all 4 solver init paths in
+`src/initial_data/relaxation_amr.c`. Also zeroes `fields[SOL_*]` for safety.
+
+**Also:** Updated `test_binary_inspiral.c` parameters for a viable inspiral:
+L=64 (was 20), N_ROOT=3 (was 2), N_BLOCK=32 (was 16), MAX_LEVEL=3 (was 5),
+PSI4_RADIUS=20 (was 8), disabled SSL.
+
+## 2026-03-02: Optimization pass (CPU + GPU + dead code)
+
+Comprehensive optimization pass covering CPU, GPU, and code cleanup.
+
+**CPU optimizations:**
+- Precomputed `inv_dx` in `grid_t`: all FD stencil functions now multiply by
+  `inv_dx` instead of dividing by `dx`. Eliminates ~20 divisions per grid point
+  per RHS evaluation. Touched 12+ source files.
+- KO dissipation branch reduction: precomputed per-field `sigma_arr[]` eliminates
+  25+ branches per point in the hot field loop.
+- Unit-determinant metric inverse: `compute_inverse_sym_unit_det()` skips det
+  computation and division in `enforce_algebraic` (saves ~6 multiplies + 1
+  division per point). Used in both CPU and GPU backends after det=1 enforcement.
+- OMP-parallelized mesh-level ghost exchange: added `#pragma omp parallel for`
+  to block loops in `ghost_exchange()`, `ghost_exchange_all_blocks()`,
+  `ghost_exchange_multilevel()` (phases 2-4), and `fill_coarse_buf_ghosts()`.
+
+**GPU optimizations:**
+- Compact Sommerfeld kernel: boundary-only block ID list (`boundary_block_ids[]`)
+  built during `backend_map_pack`. Sommerfeld launches `n_boundary * Nt^3` threads
+  instead of `nb * Nt^3`, eliminating 70-90% of idle threads.
+- Fused RK4 kernels: `hip_rk4_stage` (accum += w*dt*rhs; data = scratch + a*dt*rhs)
+  replaces separate accum_add + axpy. `hip_rk4_final` (data = scratch + accum +
+  w*dt*rhs) replaces accum_add + copy + apply_accum. Saves 3 kernel launches per
+  RK4 step.
+- Shared memory block metadata: `dx_arr[b]` loaded into `__shared__` once per GPU
+  block in RHS kernel. Saves 63 redundant global loads per block (block_size=64).
+- Lazy host copy: split `backend_unmap_pack` into no-sync (free only) and sync
+  (copy + free) variants. All current call sites use sync; no-sync enables future
+  optimization when host data isn't needed.
+- HIP streams: persistent `hipStream_t` for all kernel launches. Non-blocking
+  launches enable potential host/device overlap.
+
+**Dead code removed:**
+- `block_reset_interp()` (block.h/c) — unused since interpolation refactor
+- `restrict_all()` (restriction.h/c) — superseded by per-level restriction
+- `ghost_exchange_array()` (ghost_exchange.h/c) — superseded by packed ghost exchange
+
+**Verification:** `make` zero warnings, convergence order 6.56/6.25 (unchanged),
+all test suites pass (flat, convergence, amr_evolve, maxwell, bowen_york, hispid,
+ah, psi4, cp_bc).
+
+## 2026-03-02: Binary inspiral upgraded to MAX_LEVEL=5
+
+Upgraded the binary inspiral test to MAX_LEVEL=5: dx_fine = 0.020M (beating
+Brugmann et al. 2008's dx ~ 0.024M). Mesh: 584 blocks, 512 leaves. Running
+via nohup as `inspiral_lev5.log`, expected to take several hours.
+
+This was enabled by fixing three AMR composite multigrid bugs (below) that
+caused the solver to diverge and evolution to blow up at step 5.
+
+## 2026-03-02: Three AMR composite multigrid bug fixes
+
+Three bugs in the AMR composite multigrid solver and initial data pipeline
+were causing solver divergence and early evolution blowup on multi-level meshes.
+All fixed in commit 32298e8.
+
+**Bug #1: Non-leaf ghost zones in multigrid solver.** `ghost_exchange()` skips
+non-leaf blocks (it only processes leaves). But the composite AMR V-cycle
+operates on ALL blocks at each level — non-leaf parents participate in
+restriction, tau correction, and smoothing. Their ghost zones contained stale
+data, corrupting FD operator evaluations.
+
+*Fix:* Added `ghost_exchange_all_blocks()` to `src/amr/ghost_exchange.c/.h`.
+This variant includes non-leaf blocks in the same-level 26-neighbor exchange.
+Used by `solver_ghost_exchange()` in `relaxation_amr.c`, which wraps it with
+solver BC re-application.
+
+**Bug #2: Leaf block RHS accumulation in V-cycle.** In `composite_vcycle()`
+(relaxation_amr.c), `apply_tau_correction()` adds L(u) to rhs for all blocks
+at the coarser level. But `restrict_to_coarser_amr()` only overwrites rhs on
+blocks that have fine children. Leaf blocks (childless at the target level)
+were never reset — their rhs accumulated stale L(u) terms across V-cycles,
+causing monotonic divergence.
+
+*Fix:* Zero rhs on childless blocks before tau correction. After tau, they get
+rhs = 0 + L(u) = L(u), the correct FAS target (delta = 0, no correction needed
+since no fine-level residual exists for these blocks).
+
+**Bug #3: Non-leaf blocks have garbage after CCZ4 conversion.**
+`set_bowen_york_mesh()` only converts leaf blocks from solver variables to CCZ4
+fields. Non-leaf parents retained solver garbage (residuals, operator values).
+During subcycled evolution, `ghost_fill_from_coarser()` reads non-leaf block
+data to fill fine-level ghost zones — junk data caused the evolution to blow
+up at step 5.
+
+*Fix:* Added a restriction loop (fine-to-coarse, max_level down to 1) in
+`set_bowen_york_mesh()` after CCZ4 conversion. Each non-leaf parent gets valid
+data restricted from its children. Followed by `ghost_exchange_all_blocks()` +
+`ghost_exchange_multilevel()` to fill all ghost zones.
+
+**Also fixed:** `refine_mesh_near_punctures()` AABB distance check — was using
+block-center-to-puncture distance, now uses minimum distance from puncture to
+block bounding box. The old check failed for large blocks where `r_refine` was
+smaller than the block half-diagonal.
+
+**Results:** AMR composite multigrid solver now converges monotonically:
+4.3e-4 to 9.8e-13 in 68 V-cycles. Binary inspiral evolution runs stably (no
+more step-5 blowup). All existing tests pass (BY 33/33, all others green).
+
 ## 2026-03-02: Binary inspiral system validation test
 
 Added `tests/test_binary_inspiral.c` — a comprehensive integration test that

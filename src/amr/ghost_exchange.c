@@ -168,6 +168,7 @@ static void exchange_grid_pair(grid_t *dg, const grid_t *sg,
  */
 static void exchange_same_level(mesh_t *m, int level)
 {
+    #pragma omp parallel for schedule(dynamic)
     for (int bid = 0; bid < m->num_blocks; bid++) {
         block_t *b = m->blocks[bid];
         if (!b || !b->is_leaf || b->loc.level != level) continue;
@@ -254,6 +255,7 @@ static void copy_from_coarse_grid(grid_t *dst, const double *dst_origin,
  */
 static void fill_coarse_buf_ghosts(mesh_t *m)
 {
+    #pragma omp parallel for schedule(dynamic)
     for (int bid = 0; bid < m->num_blocks; bid++) {
         block_t *b = m->blocks[bid];
         if (!b || !b->is_leaf || b->loc.level == 0) continue;
@@ -663,6 +665,7 @@ void ghost_fill_from_coarser(mesh_t *m, int fine_level, double frac)
 void ghost_exchange(mesh_t *m)
 {
     /* Loop over all leaf blocks */
+    #pragma omp parallel for schedule(dynamic)
     for (int bid = 0; bid < m->num_blocks; bid++) {
         block_t *b = m->blocks[bid];
         if (!b || !b->is_leaf) continue;
@@ -690,6 +693,7 @@ void ghost_exchange_all_blocks(mesh_t *m)
      * operates on ALL blocks at each level, not just leaves.
      * Without this, non-leaf blocks' ghost zones are never filled,
      * causing FD operator evaluations to read stale data. */
+    #pragma omp parallel for schedule(dynamic)
     for (int bid = 0; bid < m->num_blocks; bid++) {
         block_t *b = m->blocks[bid];
         if (!b) continue;
@@ -705,27 +709,6 @@ void ghost_exchange_all_blocks(mesh_t *m)
                               nbr_offset[n][1],
                               nbr_offset[n][2],
                               0);
-        }
-    }
-}
-
-void ghost_exchange_array(mesh_t *m, int src_field)
-{
-    for (int bid = 0; bid < m->num_blocks; bid++) {
-        block_t *b = m->blocks[bid];
-        if (!b || !b->is_leaf) continue;
-
-        for (int n = 0; n < NUM_NEIGHBORS; n++) {
-            int nbr_id = b->neighbor_ids[n];
-            if (nbr_id < 0) continue;
-
-            block_t *nbr = m->blocks[nbr_id];
-            if (!nbr) continue;
-            exchange_neighbor(b, nbr,
-                              nbr_offset[n][0],
-                              nbr_offset[n][1],
-                              nbr_offset[n][2],
-                              src_field);
         }
     }
 }
@@ -760,6 +743,7 @@ void ghost_exchange_multilevel(mesh_t *m)
         exchange_same_level(m, L);
 
     /* Phase 2: Restrict fine → own coarse_buf */
+    #pragma omp parallel for schedule(dynamic)
     for (int bid = 0; bid < m->num_blocks; bid++) {
         block_t *b = m->blocks[bid];
         if (!b || !b->is_leaf || b->loc.level == 0) continue;
@@ -771,6 +755,7 @@ void ghost_exchange_multilevel(mesh_t *m)
 
     /* Phase 3.5: Fill coarse_buf boundary ghost cells by extrapolation.
      * Ref: AthenaK ApplyPhysicalBoundariesOnCoarseLevel */
+    #pragma omp parallel for schedule(dynamic)
     for (int bid = 0; bid < m->num_blocks; bid++) {
         block_t *b = m->blocks[bid];
         if (!b || !b->is_leaf || b->loc.level == 0) continue;
@@ -778,6 +763,7 @@ void ghost_exchange_multilevel(mesh_t *m)
     }
 
     /* Phase 4: Prolongate coarse_buf → fine ghost zones */
+    #pragma omp parallel for schedule(dynamic)
     for (int bid = 0; bid < m->num_blocks; bid++) {
         block_t *b = m->blocks[bid];
         if (!b || !b->is_leaf || b->loc.level == 0) continue;

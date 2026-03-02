@@ -160,9 +160,6 @@ void block_free_fields_old(block_t *b);
  */
 void block_save_old(block_t *b);
 
-/* Reset interp_order to 0 (e.g. after regridding). */
-void block_reset_interp(block_t *b);
-
 /*
  * Save RHS (k1) into rhs_old for temporal interpolation.
  * Called after RK4 Stage 1 RHS evaluation with beginning-of-step data.

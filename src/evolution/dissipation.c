@@ -39,7 +39,7 @@ void add_ko_dissipation(double ** restrict rhs,
     int sx = STRIDE_X;
     int sy = STRIDE_Y(g);
     int sz = STRIDE_Z(g);
-    double dx = g->dx;
+    double inv_dx = g->inv_dx;
 
     /* CAKO scaling factor: W = sqrt(chi), suppresses near punctures.
      * When disabled, W = 1 (no effect).
@@ -50,23 +50,23 @@ void add_ko_dissipation(double ** restrict rhs,
         W = sqrt(fmax(chi, 1.0e-10));
     }
 
-    /* Skip EM fields when EM is disabled (saves 6/31 field iterations) */
+    /* Precompute per-field effective sigma to eliminate branches in hot loop.
+     * Hoists gauge/physical sigma selection and W scaling out of the field loop. */
     int nf = g->n_fields;
+    double sigma_arr[NUM_FIELDS];
+    if (p->noise.use_per_field_sigma) {
+        for (int f = 0; f < nf; f++)
+            sigma_arr[f] = W * (is_gauge_field(f) ? p->noise.sigma_gauge
+                                                   : p->noise.sigma_phys);
+    } else {
+        double sigma_W = W * p->sigma;
+        for (int f = 0; f < nf; f++)
+            sigma_arr[f] = sigma_W;
+    }
+
     for (int f = 0; f < nf; f++) {
-        /* Per-field sigma: gauge fields get stronger dissipation.
-         * When disabled, all fields use p->sigma (existing behavior). */
-        double sigma_f;
-        if (p->noise.use_per_field_sigma) {
-            sigma_f = is_gauge_field(f) ? p->noise.sigma_gauge
-                                        : p->noise.sigma_phys;
-        } else {
-            sigma_f = p->sigma;
-        }
-
-        double sigma_eff = W * sigma_f;
-
-        rhs[f][idx] += sigma_eff * (fd_ko(src[f], idx, sx, dx)
-                                  + fd_ko(src[f], idx, sy, dx)
-                                  + fd_ko(src[f], idx, sz, dx));
+        rhs[f][idx] += sigma_arr[f] * (fd_ko(src[f], idx, sx, inv_dx)
+                                     + fd_ko(src[f], idx, sy, inv_dx)
+                                     + fd_ko(src[f], idx, sz, inv_dx));
     }
 }

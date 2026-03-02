@@ -67,6 +67,28 @@ static inline void compute_inverse_sym(const double h[3][3],
 }
 
 /*
+ * Inverse of symmetric 3x3 matrix with unit determinant (det = 1).
+ * Skips determinant computation and division — just the cofactor matrix.
+ * ~6 multiplies + 1 division cheaper than compute_inverse_sym().
+ * Use ONLY after det(h) = 1 has been algebraically enforced.
+ */
+LATTICE_DEVICE
+static inline void compute_inverse_sym_unit_det(const double h[3][3],
+                                                 double h_UU[3][3])
+{
+    h_UU[0][0] = h[1][1] * h[2][2] - h[1][2] * h[1][2];
+    h_UU[0][1] = h[0][2] * h[1][2] - h[0][1] * h[2][2];
+    h_UU[0][2] = h[0][1] * h[1][2] - h[0][2] * h[1][1];
+    h_UU[1][1] = h[0][0] * h[2][2] - h[0][2] * h[0][2];
+    h_UU[1][2] = h[0][1] * h[0][2] - h[0][0] * h[1][2];
+    h_UU[2][2] = h[0][0] * h[1][1] - h[0][1] * h[0][1];
+
+    h_UU[1][0] = h_UU[0][1];
+    h_UU[2][0] = h_UU[0][2];
+    h_UU[2][1] = h_UU[1][2];
+}
+
+/*
  * Trace of A_{ij} with inverse metric: tr = h^{ij} A_{ij}
  * Ref: GRChombo TensorAlgebra.hpp:165-171
  */

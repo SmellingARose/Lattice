@@ -197,6 +197,7 @@ static void mg_precompute_bg_4field(mg_level_t *lev, int n_bh,
     int Nt = lev->Ntotal;
     int gw = lev->ghost;
     double dx = lev->dx;
+    double inv_dx = 1.0 / dx;
     size_t np = lev->npoints;
 
     double *h_bg[6], *A_bg[6];
@@ -266,7 +267,7 @@ static void mg_precompute_bg_4field(mg_level_t *lev, int n_bh,
                     for (int a = 0; a < 3; a++)
                         for (int b = a; b < 3; b++) {
                             double val = fd_d1(h_bg[sym_map[a][b]], idx,
-                                               strides[dir], dx);
+                                               strides[dir], inv_dx);
                             d1_h[a][b][dir] = val;
                             d1_h[b][a][dir] = val;
                         }
@@ -278,7 +279,7 @@ static void mg_precompute_bg_4field(mg_level_t *lev, int n_bh,
                     for (int a = 0; a < 3; a++)
                         for (int b = a; b < 3; b++) {
                             double val = fd_d2(h_bg[sym_map[a][b]], idx,
-                                               strides[dir], dx);
+                                               strides[dir], inv_dx);
                             d2_h[a][b][dir][dir] = val;
                             d2_h[b][a][dir][dir] = val;
                         }
@@ -289,7 +290,7 @@ static void mg_precompute_bg_4field(mg_level_t *lev, int n_bh,
                             for (int b = a; b < 3; b++) {
                                 double val = fd_d2_mixed(
                                     h_bg[sym_map[a][b]], idx,
-                                    strides[d1], strides[d2], dx);
+                                    strides[d1], strides[d2], inv_dx);
                                 d2_h[a][b][d1][d2] = val;
                                 d2_h[a][b][d2][d1] = val;
                                 d2_h[b][a][d1][d2] = val;
@@ -335,7 +336,7 @@ static void mg_precompute_bg_4field(mg_level_t *lev, int n_bh,
                     double div_A = 0.0;
                     for (int e = 0; e < 3; e++)
                         div_A += fd_d1(A_bg[sym_map[d][e]], idx,
-                                       strides[e], dx);
+                                       strides[e], inv_dx);
                     lev->S_M[d][idx] = -div_A;
                 }
             }
@@ -497,6 +498,7 @@ static void newton_gs_sweep_1field(mg_level_t *lev)
     int N  = lev->N;
     int Nt = lev->Ntotal;
     double dx = lev->dx;
+    double inv_dx = 1.0 / dx;
     double dx2 = dx * dx;
     int sx = 1, sy = Nt, sz = Nt * Nt;
     double J_lap = 3.0 * FD_D2_CENTER_WEIGHT / dx2;
@@ -514,9 +516,9 @@ static void newton_gs_sweep_1field(mg_level_t *lev)
                     double psi_tot = lev->psi_BL[idx] + lev->psi[idx];
                     if (psi_tot < 0.1) psi_tot = 0.1;
 
-                    double lap = fd_d2(lev->psi, idx, sx, dx)
-                               + fd_d2(lev->psi, idx, sy, dx)
-                               + fd_d2(lev->psi, idx, sz, dx);
+                    double lap = fd_d2(lev->psi, idx, sx, inv_dx)
+                               + fd_d2(lev->psi, idx, sy, inv_dx)
+                               + fd_d2(lev->psi, idx, sz, inv_dx);
 
                     double p2 = psi_tot * psi_tot;
                     double p4 = p2 * p2;
@@ -550,6 +552,7 @@ static void newton_gs_sweep_4field(mg_level_t *lev)
     int N  = lev->N;
     int Nt = lev->Ntotal;
     double dx = lev->dx;
+    double inv_dx = 1.0 / dx;
     double dx2 = dx * dx;
     int sx = 1, sy = Nt, sz = Nt * Nt;
     int strides[3] = { sx, sy, sz };
@@ -570,9 +573,9 @@ static void newton_gs_sweep_4field(mg_level_t *lev)
                     double psi_tot = lev->psi_BL[idx] + lev->psi[idx];
                     if (psi_tot < 0.1) psi_tot = 0.1;
 
-                    double lap_psi = fd_d2(lev->psi, idx, sx, dx)
-                                   + fd_d2(lev->psi, idx, sy, dx)
-                                   + fd_d2(lev->psi, idx, sz, dx);
+                    double lap_psi = fd_d2(lev->psi, idx, sx, inv_dx)
+                                   + fd_d2(lev->psi, idx, sy, inv_dx)
+                                   + fd_d2(lev->psi, idx, sz, inv_dx);
 
                     double p2 = psi_tot * psi_tot;
                     double p4 = p2 * p2;
@@ -588,18 +591,18 @@ static void newton_gs_sweep_4field(mg_level_t *lev)
 
                     /* --- Momentum (V^d) --- */
                     for (int d = 0; d < 3; d++) {
-                        double lap_V = fd_d2(lev->V[d], idx, sx, dx)
-                                     + fd_d2(lev->V[d], idx, sy, dx)
-                                     + fd_d2(lev->V[d], idx, sz, dx);
+                        double lap_V = fd_d2(lev->V[d], idx, sx, inv_dx)
+                                     + fd_d2(lev->V[d], idx, sy, inv_dx)
+                                     + fd_d2(lev->V[d], idx, sz, inv_dx);
                         double d_divV = 0.0;
                         for (int e = 0; e < 3; e++) {
                             if (e == d)
                                 d_divV += fd_d2(lev->V[e], idx,
-                                                strides[e], dx);
+                                                strides[e], inv_dx);
                             else
                                 d_divV += fd_d2_mixed(lev->V[e], idx,
                                                       strides[d],
-                                                      strides[e], dx);
+                                                      strides[e], inv_dx);
                         }
                         double res_V = lap_V + d_divV / 3.0
                                      + lev->S_M[d][idx] - lev->f_V[d][idx];
@@ -622,6 +625,7 @@ static void mg_compute_operator(mg_level_t *lev, int four_field)
     int N  = lev->N;
     int Nt = lev->Ntotal;
     double dx = lev->dx;
+    double inv_dx = 1.0 / dx;
     int sx = 1, sy = Nt, sz = Nt * Nt;
     int strides[3] = { sx, sy, sz };
 
@@ -634,9 +638,9 @@ static void mg_compute_operator(mg_level_t *lev, int four_field)
                 double psi_tot = lev->psi_BL[idx] + lev->psi[idx];
                 if (psi_tot < 0.1) psi_tot = 0.1;
 
-                double lap = fd_d2(lev->psi, idx, sx, dx)
-                           + fd_d2(lev->psi, idx, sy, dx)
-                           + fd_d2(lev->psi, idx, sz, dx);
+                double lap = fd_d2(lev->psi, idx, sx, inv_dx)
+                           + fd_d2(lev->psi, idx, sy, inv_dx)
+                           + fd_d2(lev->psi, idx, sz, inv_dx);
 
                 double p2 = psi_tot * psi_tot;
                 double p4 = p2 * p2;
@@ -653,18 +657,18 @@ static void mg_compute_operator(mg_level_t *lev, int four_field)
                 /* Momentum: L(V^d) */
                 if (four_field) {
                     for (int d = 0; d < 3; d++) {
-                        double lap_V = fd_d2(lev->V[d], idx, sx, dx)
-                                     + fd_d2(lev->V[d], idx, sy, dx)
-                                     + fd_d2(lev->V[d], idx, sz, dx);
+                        double lap_V = fd_d2(lev->V[d], idx, sx, inv_dx)
+                                     + fd_d2(lev->V[d], idx, sy, inv_dx)
+                                     + fd_d2(lev->V[d], idx, sz, inv_dx);
                         double d_divV = 0.0;
                         for (int e = 0; e < 3; e++) {
                             if (e == d)
                                 d_divV += fd_d2(lev->V[e], idx,
-                                                strides[e], dx);
+                                                strides[e], inv_dx);
                             else
                                 d_divV += fd_d2_mixed(lev->V[e], idx,
                                                       strides[d],
-                                                      strides[e], dx);
+                                                      strides[e], inv_dx);
                         }
                         lev->L_V[d][idx] = lap_V + d_divV / 3.0
                                          + lev->S_M[d][idx];

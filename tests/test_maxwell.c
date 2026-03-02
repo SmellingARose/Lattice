@@ -91,7 +91,7 @@ static double compute_div_E_l2(const grid_t *g)
     int lo = g->ghost;
     int hi = g->ghost + g->N;
     int strides[3] = { STRIDE_X, STRIDE_Y(g), STRIDE_Z(g) };
-    double dx = g->dx;
+    double inv_dx = g->inv_dx;
     double sum = 0.0;
     int count = 0;
 
@@ -102,7 +102,7 @@ static double compute_div_E_l2(const grid_t *g)
                 double divE = 0.0;
                 for (int a = 0; a < 3; a++) {
                     divE += fd_d1(g->fields[FIELD_E1 + a], idx,
-                                  strides[a], dx);
+                                  strides[a], inv_dx);
                 }
                 sum += divE * divE;
                 count++;

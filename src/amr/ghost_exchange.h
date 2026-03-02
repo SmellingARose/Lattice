@@ -46,13 +46,6 @@ void ghost_exchange(mesh_t *m);
 void ghost_exchange_all_blocks(mesh_t *m);
 
 /*
- * Fill ghost zones for a specific field array (not necessarily fields[]).
- * Used during RK stages when operating on intermediate states.
- * src_field selects which array to exchange: 0 = fields, 1 = scratch.
- */
-void ghost_exchange_array(mesh_t *m, int src_field);
-
-/*
  * Multi-level ghost exchange for AMR meshes with refinement.
  * Three phases:
  *   Phase 1: Restrict fine leaf data → non-leaf parents (top-down)

@@ -34,12 +34,12 @@
 
 /*
  * 6th-order first derivative: d f / d x
- * 7-point stencil: [-1/60, 3/20, -3/4, 0, 3/4, -3/20, 1/60] / dx
+ * 7-point stencil: [-1/60, 3/20, -3/4, 0, 3/4, -3/20, 1/60] * inv_dx
  * Ref: GRChombo SixthOrderDerivatives.hpp lines 36-49
  * Ref: Fornberg table, 6th-order centered d1
  */
 LATTICE_DEVICE
-static inline double fd_d1(const double *f, int idx, int s, double dx)
+static inline double fd_d1(const double *f, int idx, int s, double inv_dx)
 {
     double wvf = 1.0 / 60.0;    /* 1.6667e-2 */
     double wf  = 3.0 / 20.0;    /* 1.5000e-1 */
@@ -50,19 +50,19 @@ static inline double fd_d1(const double *f, int idx, int s, double dx)
             - wn * f[idx -   s]
             + wn * f[idx +   s]
             - wf * f[idx + 2*s]
-            +wvf * f[idx + 3*s]) / dx;
+            +wvf * f[idx + 3*s]) * inv_dx;
 }
 
 /*
  * 6th-order second derivative: d^2 f / d x^2
- * 7-point stencil: [1/90, -3/20, 3/2, -49/18, 3/2, -3/20, 1/90] / dx^2
+ * 7-point stencil: [1/90, -3/20, 3/2, -49/18, 3/2, -3/20, 1/90] * inv_dx^2
  * Ref: GRChombo SixthOrderDerivatives.hpp lines 117-133
  * Ref: Fornberg table, 6th-order centered d2
  */
 LATTICE_DEVICE
-static inline double fd_d2(const double *f, int idx, int s, double dx)
+static inline double fd_d2(const double *f, int idx, int s, double inv_dx)
 {
-    double dx2 = dx * dx;
+    double inv_dx2 = inv_dx * inv_dx;
     double wvf = 1.0 / 90.0;         /* 1.1111e-2 */
     double wf  = 3.0 / 20.0;         /* 1.5000e-1 */
     double wn  = 3.0 /  2.0;         /* 1.5000e+0 */
@@ -74,7 +74,7 @@ static inline double fd_d2(const double *f, int idx, int s, double dx)
            - wl  * f[idx]
            + wn  * f[idx +   s]
            - wf  * f[idx + 2*s]
-           + wvf * f[idx + 3*s]) / dx2;
+           + wvf * f[idx + 3*s]) * inv_dx2;
 }
 
 /*
@@ -84,22 +84,22 @@ static inline double fd_d2(const double *f, int idx, int s, double dx)
  * Ref: Fornberg table, 6th-order centered d1 + d2
  */
 LATTICE_DEVICE
-static inline void fd_d1_d2(const double *f, int idx, int s, double dx,
+static inline void fd_d1_d2(const double *f, int idx, int s, double inv_dx,
                             double *out_d1, double *out_d2)
 {
     double fm3 = f[idx - 3*s], fm2 = f[idx - 2*s], fm1 = f[idx - s];
     double f0  = f[idx];
     double fp1 = f[idx + s],   fp2 = f[idx + 2*s], fp3 = f[idx + 3*s];
 
-    /* d1: [-1/60, 3/20, -3/4, 0, 3/4, -3/20, 1/60] / dx */
+    /* d1: [-1/60, 3/20, -3/4, 0, 3/4, -3/20, 1/60] * inv_dx */
     *out_d1 = (-(1.0/60.0)*fm3 + (3.0/20.0)*fm2 - (3.0/4.0)*fm1
-               + (3.0/4.0)*fp1 - (3.0/20.0)*fp2 + (1.0/60.0)*fp3) / dx;
+               + (3.0/4.0)*fp1 - (3.0/20.0)*fp2 + (1.0/60.0)*fp3) * inv_dx;
 
-    /* d2: [1/90, -3/20, 3/2, -49/18, 3/2, -3/20, 1/90] / dx^2 */
-    double dx2 = dx * dx;
+    /* d2: [1/90, -3/20, 3/2, -49/18, 3/2, -3/20, 1/90] * inv_dx^2 */
+    double inv_dx2 = inv_dx * inv_dx;
     *out_d2 = ((1.0/90.0)*fm3 - (3.0/20.0)*fm2 + (3.0/2.0)*fm1
               - (49.0/18.0)*f0
-              + (3.0/2.0)*fp1 - (3.0/20.0)*fp2 + (1.0/90.0)*fp3) / dx2;
+              + (3.0/2.0)*fp1 - (3.0/20.0)*fp2 + (1.0/90.0)*fp3) * inv_dx2;
 }
 
 /*
@@ -110,9 +110,9 @@ static inline void fd_d1_d2(const double *f, int idx, int s, double dx,
  */
 LATTICE_DEVICE
 static inline double fd_d2_mixed(const double *f, int idx, int s1, int s2,
-                                 double dx)
+                                 double inv_dx)
 {
-    double dx2 = dx * dx;
+    double inv_dx2 = inv_dx * inv_dx;
 
     /* Products of d1 weights: (1/60)^2, (1/60)(3/20), (1/60)(3/4),
      *                         (3/20)^2, (3/20)(3/4), (3/4)^2 */
@@ -171,7 +171,7 @@ static inline double fd_d2_mixed(const double *f, int idx, int s1, int s2,
         + wvn * f[idx + 3*s1 +   s2]
         - wvf * f[idx + 3*s1 + 2*s2]
         + wvv * f[idx + 3*s1 + 3*s2]
-    ) / dx2;
+    ) * inv_dx2;
 }
 
 /*
@@ -182,7 +182,7 @@ static inline double fd_d2_mixed(const double *f, int idx, int s1, int s2,
  * Requires ghost >= 4. Ref: GRChombo SixthOrderDerivatives.hpp lines 300-337
  */
 LATTICE_DEVICE
-static inline double fd_adv_up(const double *f, int idx, int s, double dx)
+static inline double fd_adv_up(const double *f, int idx, int s, double inv_dx)
 {
     return ( ( 1.0/30.0) * f[idx - 2*s]
            + (-2.0/ 5.0) * f[idx -   s]
@@ -190,11 +190,11 @@ static inline double fd_adv_up(const double *f, int idx, int s, double dx)
            + ( 4.0/ 3.0) * f[idx +   s]
            + (-1.0/ 2.0) * f[idx + 2*s]
            + ( 2.0/15.0) * f[idx + 3*s]
-           + (-1.0/60.0) * f[idx + 4*s] ) / dx;
+           + (-1.0/60.0) * f[idx + 4*s] ) * inv_dx;
 }
 
 LATTICE_DEVICE
-static inline double fd_adv_down(const double *f, int idx, int s, double dx)
+static inline double fd_adv_down(const double *f, int idx, int s, double inv_dx)
 {
     return ( ( 1.0/60.0) * f[idx - 4*s]
            + (-2.0/15.0) * f[idx - 3*s]
@@ -202,17 +202,17 @@ static inline double fd_adv_down(const double *f, int idx, int s, double dx)
            + (-4.0/ 3.0) * f[idx -   s]
            + ( 7.0/12.0) * f[idx]
            + ( 2.0/ 5.0) * f[idx +   s]
-           + (-1.0/30.0) * f[idx + 2*s] ) / dx;
+           + (-1.0/30.0) * f[idx + 2*s] ) * inv_dx;
 }
 
 LATTICE_DEVICE
 static inline double fd_adv(const double *f, int idx, int s, double vel,
-                            double dx)
+                            double inv_dx)
 {
     if (vel > 0.0)
-        return vel * fd_adv_up(f, idx, s, dx);
+        return vel * fd_adv_up(f, idx, s, inv_dx);
     else
-        return vel * fd_adv_down(f, idx, s, dx);
+        return vel * fd_adv_down(f, idx, s, inv_dx);
 }
 
 /*
@@ -229,7 +229,7 @@ static inline double fd_adv(const double *f, int idx, int s, double vel,
  * Ref: arXiv:2404.01137 — higher-order KO paired with higher-order FD
  */
 LATTICE_DEVICE
-static inline double fd_ko(const double *f, int idx, int s, double dx)
+static inline double fd_ko(const double *f, int idx, int s, double inv_dx)
 {
     /* Raw 8th-order coefficients (positive central weight): */
     /* 1/256, 8/256, 28/256, 56/256, 70/256, 56/256, 28/256, 8/256, 1/256 */
@@ -248,7 +248,7 @@ static inline double fd_ko(const double *f, int idx, int s, double dx)
             + wn  * f[idx +   s]
             - wf  * f[idx + 2*s]
             + wvf * f[idx + 3*s]
-            -wvvf * f[idx + 4*s]) / dx;
+            -wvvf * f[idx + 4*s]) * inv_dx;
 }
 
 #elif FD_ORDER == 4
@@ -263,12 +263,12 @@ static inline double fd_ko(const double *f, int idx, int s, double dx)
  * Ref: GRChombo FourthOrderDerivatives.hpp lines 36-46
  */
 LATTICE_DEVICE
-static inline double fd_d1(const double *f, int idx, int s, double dx)
+static inline double fd_d1(const double *f, int idx, int s, double inv_dx)
 {
     return (  (1.0 / 12.0) * f[idx - 2*s]
             - (2.0 /  3.0) * f[idx -   s]
             + (2.0 /  3.0) * f[idx +   s]
-            - (1.0 / 12.0) * f[idx + 2*s] ) / dx;
+            - (1.0 / 12.0) * f[idx + 2*s] ) * inv_dx;
 }
 
 /*
@@ -276,14 +276,14 @@ static inline double fd_d1(const double *f, int idx, int s, double dx)
  * Ref: GRChombo FourthOrderDerivatives.hpp lines 114-128
  */
 LATTICE_DEVICE
-static inline double fd_d2(const double *f, int idx, int s, double dx)
+static inline double fd_d2(const double *f, int idx, int s, double inv_dx)
 {
-    double dx2 = dx * dx;
+    double inv_dx2 = inv_dx * inv_dx;
     return ( -(1.0 / 12.0) * f[idx - 2*s]
              + (4.0 /  3.0) * f[idx -   s]
              - (5.0 /  2.0) * f[idx]
              + (4.0 /  3.0) * f[idx +   s]
-             - (1.0 / 12.0) * f[idx + 2*s] ) / dx2;
+             - (1.0 / 12.0) * f[idx + 2*s] ) * inv_dx2;
 }
 
 /*
@@ -292,22 +292,22 @@ static inline double fd_d2(const double *f, int idx, int s, double dx)
  * Ref: Fornberg table, 4th-order centered d1 + d2
  */
 LATTICE_DEVICE
-static inline void fd_d1_d2(const double *f, int idx, int s, double dx,
+static inline void fd_d1_d2(const double *f, int idx, int s, double inv_dx,
                             double *out_d1, double *out_d2)
 {
     double fm2 = f[idx - 2*s], fm1 = f[idx - s];
     double f0  = f[idx];
     double fp1 = f[idx + s],   fp2 = f[idx + 2*s];
 
-    /* d1: [1/12, -2/3, 0, 2/3, -1/12] / dx */
+    /* d1: [1/12, -2/3, 0, 2/3, -1/12] * inv_dx */
     *out_d1 = ((1.0/12.0)*fm2 - (2.0/3.0)*fm1
-               + (2.0/3.0)*fp1 - (1.0/12.0)*fp2) / dx;
+               + (2.0/3.0)*fp1 - (1.0/12.0)*fp2) * inv_dx;
 
-    /* d2: [-1/12, 4/3, -5/2, 4/3, -1/12] / dx^2 */
-    double dx2 = dx * dx;
+    /* d2: [-1/12, 4/3, -5/2, 4/3, -1/12] * inv_dx^2 */
+    double inv_dx2 = inv_dx * inv_dx;
     *out_d2 = (-(1.0/12.0)*fm2 + (4.0/3.0)*fm1
               - (5.0/2.0)*f0
-              + (4.0/3.0)*fp1 - (1.0/12.0)*fp2) / dx2;
+              + (4.0/3.0)*fp1 - (1.0/12.0)*fp2) * inv_dx2;
 }
 
 /*
@@ -316,9 +316,9 @@ static inline void fd_d1_d2(const double *f, int idx, int s, double dx,
  */
 LATTICE_DEVICE
 static inline double fd_d2_mixed(const double *f, int idx, int s1, int s2,
-                                 double dx)
+                                 double inv_dx)
 {
-    double dx2 = dx * dx;
+    double inv_dx2 = inv_dx * inv_dx;
 
     double wff = 1.0 / 144.0;   /* (1/12)^2   */
     double wnf =  1.0 / 18.0;   /* (1/12)(2/3) */
@@ -342,7 +342,7 @@ static inline double fd_d2_mixed(const double *f, int idx, int s1, int s2,
            - wff * f[idx + 2*s1 - 2*s2]
            + wnf * f[idx + 2*s1 -   s2]
            - wnf * f[idx + 2*s1 +   s2]
-           + wff * f[idx + 2*s1 + 2*s2] ) / dx2;
+           + wff * f[idx + 2*s1 + 2*s2] ) * inv_dx2;
 }
 
 /*
@@ -351,7 +351,7 @@ static inline double fd_d2_mixed(const double *f, int idx, int s1, int s2,
  */
 LATTICE_DEVICE
 static inline double fd_adv(const double *f, int idx, int s, double vel,
-                            double dx)
+                            double inv_dx)
 {
     double w0 = -1.0 / 4.0;
     double w1 = -5.0 / 6.0;
@@ -364,13 +364,13 @@ static inline double fd_adv(const double *f, int idx, int s, double vel,
                      + w1 * f[idx]
                      + w2 * f[idx +   s]
                      + w3 * f[idx + 2*s]
-                     + w4 * f[idx + 3*s] ) / dx;
+                     + w4 * f[idx + 3*s] ) * inv_dx;
     } else {
         return vel * (-w4 * f[idx - 3*s]
                      - w3 * f[idx - 2*s]
                      - w2 * f[idx -   s]
                      - w1 * f[idx]
-                     - w0 * f[idx +   s] ) / dx;
+                     - w0 * f[idx +   s] ) * inv_dx;
     }
 }
 
@@ -380,7 +380,7 @@ static inline double fd_adv(const double *f, int idx, int s, double vel,
  * Ref: GRChombo FourthOrderDerivatives.hpp lines 361-378
  */
 LATTICE_DEVICE
-static inline double fd_ko(const double *f, int idx, int s, double dx)
+static inline double fd_ko(const double *f, int idx, int s, double inv_dx)
 {
     double wvf = 1.0 / 64.0;     /* 1.5625e-2 */
     double wf  = 6.0 / 64.0;     /* 9.375e-2  */
@@ -393,7 +393,7 @@ static inline double fd_ko(const double *f, int idx, int s, double dx)
            - wl  * f[idx]
            + wn  * f[idx +   s]
            - wf  * f[idx + 2*s]
-           + wvf * f[idx + 3*s] ) / dx;
+           + wvf * f[idx + 3*s] ) * inv_dx;
 }
 
 #else

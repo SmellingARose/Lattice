@@ -73,28 +73,28 @@ double asymptotic_value(int field)
  */
 LATTICE_DEVICE
 double boundary_d1(const double *f, int idx, int stride,
-                   int lo_offset, int hi_offset, double dx)
+                   int lo_offset, int hi_offset, double inv_dx)
 {
     if (lo_offset >= 2 && hi_offset >= 2) {
         /* Centered — 4th-order (5-point): same as fd_d1 at 4th order */
         return (  (1.0 / 12.0) * f[idx - 2*stride]
                 - (2.0 /  3.0) * f[idx -   stride]
                 + (2.0 /  3.0) * f[idx +   stride]
-                - (1.0 / 12.0) * f[idx + 2*stride] ) / dx;
+                - (1.0 / 12.0) * f[idx + 2*stride] ) * inv_dx;
     } else if (lo_offset < 1 && hi_offset >= 4) {
         /* Near low boundary — 4th-order forward stencil (needs 4 points ahead) */
         return (-25.0/12.0 * f[idx]
                 + 4.0      * f[idx +   stride]
                 - 3.0      * f[idx + 2*stride]
                 + 4.0/3.0  * f[idx + 3*stride]
-                - 1.0/4.0  * f[idx + 4*stride]) / dx;
+                - 1.0/4.0  * f[idx + 4*stride]) * inv_dx;
     } else if (hi_offset < 1 && lo_offset >= 4) {
         /* Near high boundary — 4th-order backward stencil */
         return ( 25.0/12.0 * f[idx]
                 - 4.0      * f[idx -   stride]
                 + 3.0      * f[idx - 2*stride]
                 - 4.0/3.0  * f[idx - 3*stride]
-                + 1.0/4.0  * f[idx - 4*stride]) / dx;
+                + 1.0/4.0  * f[idx - 4*stride]) * inv_dx;
     } else if (lo_offset >= 1 && hi_offset >= 3) {
         /* Near low boundary — 4th-order forward-biased (nodes -1,0,+1,+2,+3).
          * Ref: Fornberg, SIAM Review 40 (1998) */
@@ -102,7 +102,7 @@ double boundary_d1(const double *f, int idx, int stride,
                 - 5.0/6.0  * f[idx]
                 + 3.0/2.0  * f[idx + stride]
                 - 1.0/2.0  * f[idx + 2*stride]
-                + 1.0/12.0 * f[idx + 3*stride]) / dx;
+                + 1.0/12.0 * f[idx + 3*stride]) * inv_dx;
     } else if (hi_offset >= 1 && lo_offset >= 3) {
         /* Near high boundary — 4th-order backward-biased (nodes -3,-2,-1,0,+1).
          * Ref: Fornberg, SIAM Review 40 (1998) */
@@ -110,10 +110,10 @@ double boundary_d1(const double *f, int idx, int stride,
                 + 5.0/6.0  * f[idx]
                 - 3.0/2.0  * f[idx - stride]
                 + 1.0/2.0  * f[idx - 2*stride]
-                - 1.0/12.0 * f[idx - 3*stride]) / dx;
+                - 1.0/12.0 * f[idx - 3*stride]) * inv_dx;
     } else {
         /* Fallback: centered 2nd-order (should not be reached with ghost >= 4) */
-        return 0.5 * (f[idx + stride] - f[idx - stride]) / dx;
+        return 0.5 * (f[idx + stride] - f[idx - stride]) * inv_dx;
     }
 }
 

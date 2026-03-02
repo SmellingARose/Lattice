@@ -336,7 +336,7 @@ void set_ccz4_from_hispid(grid_t *g, const double *psi_arr,
      *
      * Ref: GRChombo KerrBH.impl.hpp:90-93 (notes Gamma^i is NON ZERO) */
     int gw = g->ghost;
-    double dx = g->dx;
+    double inv_dx = g->inv_dx;
     int strides[3] = { STRIDE_X, STRIDE_Y(g), STRIDE_Z(g) };
 
     static const int h_field_idx[3][3] = {
@@ -372,7 +372,7 @@ void set_ccz4_from_hispid(grid_t *g, const double *psi_arr,
                     for (int a = 0; a < 3; a++)
                         for (int b = a; b < 3; b++) {
                             double val = fd_d1(
-                                g->fields[h_field_idx[a][b]], idx, s, dx);
+                                g->fields[h_field_idx[a][b]], idx, s, inv_dx);
                             d1_h[a][b][dir] = val;
                             d1_h[b][a][dir] = val;
                         }
@@ -585,7 +585,7 @@ void set_ccz4_from_hispid_block(block_t *blk, int n_bh, const puncture_data_t *b
      * Ghost zone h_ij was set analytically in pass 1, so FD stencils
      * at block boundaries are correct. */
     int gw = g->ghost;
-    double dx = g->dx;
+    double inv_dx = g->inv_dx;
     int strides[3] = { STRIDE_X, STRIDE_Y(g), STRIDE_Z(g) };
 
     static const int h_field_idx[3][3] = {
@@ -621,7 +621,7 @@ void set_ccz4_from_hispid_block(block_t *blk, int n_bh, const puncture_data_t *b
                     for (int a = 0; a < 3; a++)
                         for (int b = a; b < 3; b++) {
                             double val = fd_d1(
-                                g->fields[h_field_idx[a][b]], idx, s, dx);
+                                g->fields[h_field_idx[a][b]], idx, s, inv_dx);
                             d1_h[a][b][dir] = val;
                             d1_h[b][a][dir] = val;
                         }

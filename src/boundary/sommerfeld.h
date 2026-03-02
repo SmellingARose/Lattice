@@ -29,7 +29,7 @@ double asymptotic_value(int field);
 
 LATTICE_DEVICE
 double boundary_d1(const double *f, int idx, int stride,
-                   int lo_offset, int hi_offset, double dx);
+                   int lo_offset, int hi_offset, double inv_dx);
 
 EXTERN_C_END
 

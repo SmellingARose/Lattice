@@ -60,10 +60,17 @@ void backend_map_pack(meshblock_pack_t *pack, const sim_params_t *p);
 
 /*
  * Unmap pack data from GPU device memory. CPU backend: no-op.
- * Syncs data, rhs, scratch, accum, coarse_data back to host.
- * Must be called before meshblock_pack_store.
+ * Frees device memory WITHOUT copying data back to host.
+ * Use when host data is not needed (future optimization).
  */
 void backend_unmap_pack(meshblock_pack_t *pack);
+
+/*
+ * Unmap pack data from GPU device memory WITH sync. CPU backend: no-op.
+ * Syncs data, rhs, scratch, accum, coarse_data back to host, then frees.
+ * Must be called before meshblock_pack_store.
+ */
+void backend_unmap_pack_sync(meshblock_pack_t *pack);
 
 /*
  * Zero a pack buffer. Used to initialize dU (scratch) for CK45
@@ -141,6 +148,26 @@ void backend_axpy_packed(meshblock_pack_t *pack, double alpha, double dt);
  * Final step of classic RK4: U = U^0 + accum.
  */
 void backend_apply_accum_packed(meshblock_pack_t *pack);
+
+/*
+ * Fused RK4 stage update (stages 1-3):
+ *   accum[i] += weight * dt * rhs[i]
+ *   data[i]   = scratch[i] + alpha * dt * rhs[i]
+ *
+ * Replaces separate backend_accum_add_packed + backend_axpy_packed.
+ * Saves 1 kernel launch + 1 rhs buffer read per stage.
+ */
+void backend_rk4_stage_packed(meshblock_pack_t *pack,
+                               double weight, double alpha, double dt);
+
+/*
+ * Fused RK4 final update (stage 4):
+ *   data[i] = scratch[i] + accum[i] + weight * dt * rhs[i]
+ *
+ * Replaces separate backend_accum_add_packed + backend_copy_packed +
+ * backend_apply_accum_packed. Saves 2 kernel launches.
+ */
+void backend_rk4_final_packed(meshblock_pack_t *pack, double weight, double dt);
 
 /*
  * Ghost exchange on pack buffers.

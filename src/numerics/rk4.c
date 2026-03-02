@@ -234,7 +234,7 @@ static void ck45_step_mesh_packed(mesh_t *m, const sim_params_t *p, double dt)
     }
 
     backend_enforce_algebraic_packed(pack);
-    backend_unmap_pack(pack);
+    backend_unmap_pack_sync(pack);
 
     meshblock_pack_sync_to_blocks(pack, m->blocks);
     mesh_restrict_to_parents(m);
@@ -272,37 +272,32 @@ static void classic_rk4_step_mesh_packed(mesh_t *m, const sim_params_t *p,
     backend_copy_packed(pack, PACK_BUF_SCRATCH, PACK_BUF_DATA);
     backend_zero_packed(pack, PACK_BUF_ACCUM);
 
-    /* Stage 1 */
+    /* Stage 1: accum += dt/6 * rhs; data = scratch + dt/2 * rhs */
     backend_ghost_exchange_packed(pack);
     backend_compute_rhs_packed(pack, p);
     backend_sommerfeld_packed(pack, p);
-    backend_accum_add_packed(pack, 1.0/6.0, dt);
-    backend_axpy_packed(pack, 0.5, dt);
+    backend_rk4_stage_packed(pack, 1.0/6.0, 0.5, dt);
 
-    /* Stage 2 */
+    /* Stage 2: accum += dt/3 * rhs; data = scratch + dt/2 * rhs */
     backend_ghost_exchange_packed(pack);
     backend_compute_rhs_packed(pack, p);
     backend_sommerfeld_packed(pack, p);
-    backend_accum_add_packed(pack, 1.0/3.0, dt);
-    backend_axpy_packed(pack, 0.5, dt);
+    backend_rk4_stage_packed(pack, 1.0/3.0, 0.5, dt);
 
-    /* Stage 3 */
+    /* Stage 3: accum += dt/3 * rhs; data = scratch + dt * rhs */
     backend_ghost_exchange_packed(pack);
     backend_compute_rhs_packed(pack, p);
     backend_sommerfeld_packed(pack, p);
-    backend_accum_add_packed(pack, 1.0/3.0, dt);
-    backend_axpy_packed(pack, 1.0, dt);
+    backend_rk4_stage_packed(pack, 1.0/3.0, 1.0, dt);
 
-    /* Stage 4 */
+    /* Stage 4: data = scratch + accum + dt/6 * rhs */
     backend_ghost_exchange_packed(pack);
     backend_compute_rhs_packed(pack, p);
     backend_sommerfeld_packed(pack, p);
-    backend_accum_add_packed(pack, 1.0/6.0, dt);
-    backend_copy_packed(pack, PACK_BUF_DATA, PACK_BUF_SCRATCH);
-    backend_apply_accum_packed(pack);
+    backend_rk4_final_packed(pack, 1.0/6.0, dt);
 
     backend_enforce_algebraic_packed(pack);
-    backend_unmap_pack(pack);
+    backend_unmap_pack_sync(pack);
 
     meshblock_pack_sync_to_blocks(pack, m->blocks);
 
@@ -487,34 +482,29 @@ static void step_level(mesh_t *m, const sim_params_t *p,
         backend_compute_rhs_packed(pack, p);
         backend_sommerfeld_packed(pack, p);
         save_k1_from_pack(pack, m->blocks);
-        backend_accum_add_packed(pack, 1.0/6.0, dt_level);
-        backend_axpy_packed(pack, 0.5, dt_level);
+        backend_rk4_stage_packed(pack, 1.0/6.0, 0.5, dt_level);
 
         /* Stage 2 */
         backend_ghost_exchange_packed(pack);
         backend_compute_rhs_packed(pack, p);
         backend_sommerfeld_packed(pack, p);
-        backend_accum_add_packed(pack, 1.0/3.0, dt_level);
-        backend_axpy_packed(pack, 0.5, dt_level);
+        backend_rk4_stage_packed(pack, 1.0/3.0, 0.5, dt_level);
 
         /* Stage 3 */
         backend_ghost_exchange_packed(pack);
         backend_compute_rhs_packed(pack, p);
         backend_sommerfeld_packed(pack, p);
-        backend_accum_add_packed(pack, 1.0/3.0, dt_level);
-        backend_axpy_packed(pack, 1.0, dt_level);
+        backend_rk4_stage_packed(pack, 1.0/3.0, 1.0, dt_level);
 
         /* Stage 4 */
         backend_ghost_exchange_packed(pack);
         backend_compute_rhs_packed(pack, p);
         backend_sommerfeld_packed(pack, p);
-        backend_accum_add_packed(pack, 1.0/6.0, dt_level);
-        backend_copy_packed(pack, PACK_BUF_DATA, PACK_BUF_SCRATCH);
-        backend_apply_accum_packed(pack);
+        backend_rk4_final_packed(pack, 1.0/6.0, dt_level);
     }
 
     backend_enforce_algebraic_packed(pack);
-    backend_unmap_pack(pack);
+    backend_unmap_pack_sync(pack);
 
     /* Sync only data buffer back to blocks (not rhs/scratch/accum) */
     meshblock_pack_sync_to_blocks(pack, m->blocks);

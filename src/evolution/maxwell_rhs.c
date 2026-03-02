@@ -185,7 +185,7 @@ void maxwell_rhs_point(double ** restrict rhs,
     const int sx  = STRIDE_X;
     const int sy  = STRIDE_Y(g);
     const int sz  = STRIDE_Z(g);
-    const double dx = g->dx;
+    const double inv_dx = g->inv_dx;
     const int strides[3] = { sx, sy, sz };
 
     /* Load metric and gauge fields */
@@ -217,9 +217,9 @@ void maxwell_rhs_point(double ** restrict rhs,
     FOR1(dir) {
         int s = strides[dir];
         FOR1(a) {
-            d1_E[a][dir] = fd_d1(src[FIELD_E1 + a], idx, s, dx);
-            d1_B[a][dir] = fd_d1(src[FIELD_BM1 + a], idx, s, dx);
-            d1_shift[a][dir] = fd_d1(src[FIELD_SHIFT1 + a], idx, s, dx);
+            d1_E[a][dir] = fd_d1(src[FIELD_E1 + a], idx, s, inv_dx);
+            d1_B[a][dir] = fd_d1(src[FIELD_BM1 + a], idx, s, inv_dx);
+            d1_shift[a][dir] = fd_d1(src[FIELD_SHIFT1 + a], idx, s, inv_dx);
         }
     }
 
@@ -232,8 +232,8 @@ void maxwell_rhs_point(double ** restrict rhs,
         double (*fd)(const double *, int, int, double) =
             (beta > 0.0) ? fd_adv_up : fd_adv_down;
         FOR1(a) {
-            advec_E[a] += beta * fd(src[FIELD_E1 + a], idx, s, dx);
-            advec_B[a] += beta * fd(src[FIELD_BM1 + a], idx, s, dx);
+            advec_E[a] += beta * fd(src[FIELD_E1 + a], idx, s, inv_dx);
+            advec_B[a] += beta * fd(src[FIELD_BM1 + a], idx, s, inv_dx);
         }
     }
 
@@ -317,11 +317,11 @@ void maxwell_rhs_point(double ** restrict rhs,
                  * or second derivative if dir == a */
                 int sa = strides[a];
                 if (dir == a) {
-                    d_divE += fd_d2(src[FIELD_E1 + a], idx, s, dx);
-                    d_divB += fd_d2(src[FIELD_BM1 + a], idx, s, dx);
+                    d_divE += fd_d2(src[FIELD_E1 + a], idx, s, inv_dx);
+                    d_divB += fd_d2(src[FIELD_BM1 + a], idx, s, inv_dx);
                 } else {
-                    d_divE += fd_d2_mixed(src[FIELD_E1 + a], idx, sa, s, dx);
-                    d_divB += fd_d2_mixed(src[FIELD_BM1 + a], idx, sa, s, dx);
+                    d_divE += fd_d2_mixed(src[FIELD_E1 + a], idx, sa, s, inv_dx);
+                    d_divB += fd_d2_mixed(src[FIELD_BM1 + a], idx, sa, s, inv_dx);
                 }
             }
             FOR1(m) {

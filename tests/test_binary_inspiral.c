@@ -28,16 +28,16 @@
  *
  * Grid configuration:
  *
- *   Domain:     [-10, 10]^3 M
- *   Root mesh:  2^3 blocks x 16^3 cells = 32^3 effective, dx_base = 0.625 M
- *   AMR:        max_level = 2  →  dx_fine = 0.156 M near punctures
+ *   Domain:     [-32, 32]^3 M
+ *   Root mesh:  3^3 blocks x 32^3 cells = 96^3 effective, dx_base = 0.667 M
+ *   AMR:        max_level = 3  →  dx_fine = 0.083 M near punctures
  *   CFL:        0.25
  *   Integrator: classic RK4
  *   BCs:        constraint-preserving (BAM-style, arXiv:1212.2901)
  *
  * Gravitational wave extraction:
  *
- *   Psi4 on sphere at r = 8 M, decomposed into _{-2}Y_{lm} up to l = 4.
+ *   Psi4 on sphere at r = 20 M, decomposed into _{-2}Y_{lm} up to l = 4.
  *   The dominant (2,2) mode encodes the orbital frequency and amplitude.
  *   For a quasi-circular orbit, |r Psi4_{22}| ≈ 0.01 at r = 20 M.
  *
@@ -45,8 +45,8 @@
  *
  *   Hyperbolic flow finder attempts to locate each BH's AH every 20
  *   steps, extracting irreducible mass M_irr and dimensionless spin chi.
- *   With AMR refinement (dx_fine = 0.078 M), the AH radius (~0.12 M)
- *   spans ~1.5 cells — marginal but detectable.
+ *   With AMR refinement (dx_fine = 0.083 M), the AH radius (~0.12 M)
+ *   spans ~1.4 cells — marginal but detectable.
  *
  * Pass criteria:
  *
@@ -103,10 +103,10 @@ extern void output_mesh_1d_slice(const mesh_t *m, int step, double time);
 /* ====================================================================
  * Grid and evolution parameters
  * ==================================================================== */
-#define L_DOMAIN    20.0
-#define N_ROOT      2
-#define N_BLOCK     16
-#define MAX_LEVEL   2
+#define L_DOMAIN    64.0
+#define N_ROOT      3
+#define N_BLOCK     32
+#define MAX_LEVEL   3
 #define CFL_FACTOR  0.25
 #define T_FINAL     20.0
 
@@ -122,7 +122,7 @@ extern void output_mesh_1d_slice(const mesh_t *m, int step, double time);
 /* ====================================================================
  * Wave extraction parameters
  * ==================================================================== */
-#define PSI4_RADIUS   8.0
+#define PSI4_RADIUS   20.0
 #define PSI4_LMAX     4
 #define PSI4_NTHETA   16
 #define PSI4_NPHI     32
@@ -320,6 +320,7 @@ int main(void)
     p.dt        = p.CFL * p.dx;
     p.sigma     = 0.3;
     p.bc_type   = BC_CONSTRAINT_PRESERVING;
+    p.noise.use_ssl = 0;  /* SSL delays gauge formation at fine AMR levels */
 
     amr_params_t ap;
     ap.max_level   = MAX_LEVEL;

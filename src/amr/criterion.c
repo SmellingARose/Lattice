@@ -25,6 +25,7 @@ double chi_gradient_max(const block_t *b)
     const int ghost = g->ghost;
     const int N = g->N;
     const double dx = g->dx;
+    const double inv_dx = g->inv_dx;
     const int sx = STRIDE_X;
     const int sy = STRIDE_Y(g);
     const int sz = STRIDE_Z(g);
@@ -44,9 +45,9 @@ double chi_gradient_max(const block_t *b)
                 double chi2 = chi_val * chi_val;
 
                 /* 4th-order first derivatives of chi */
-                double d1x = fd_d1(chi, idx, sx, dx);
-                double d1y = fd_d1(chi, idx, sy, dx);
-                double d1z = fd_d1(chi, idx, sz, dx);
+                double d1x = fd_d1(chi, idx, sx, inv_dx);
+                double d1y = fd_d1(chi, idx, sy, inv_dx);
+                double d1z = fd_d1(chi, idx, sz, inv_dx);
 
                 /* criterion = (dx / chi^2) * |grad(chi)| */
                 double grad_mag = sqrt(d1x * d1x + d1y * d1y + d1z * d1z);

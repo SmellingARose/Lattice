@@ -35,6 +35,7 @@ static grid_t *coarse_buf_alloc(int N, double dx, int n_fields)
     g->Ntotal = N + 2 * GHOST_WIDTH;
     g->L      = N * dx;
     g->dx     = dx;
+    g->inv_dx = 1.0 / dx;
     g->npoints = (size_t)g->Ntotal * g->Ntotal * g->Ntotal;
     g->n_fields = n_fields;
 
@@ -282,12 +283,6 @@ void block_save_old(block_t *b)
         b->interp_order = 1;
     else if (b->interp_order == 1)
         b->interp_order = 4;
-}
-
-void block_reset_interp(block_t *b)
-{
-    if (!b) return;
-    b->interp_order = 0;
 }
 
 void block_save_rhs_old(block_t *b, const double *const *rhs_src, size_t npoints)
