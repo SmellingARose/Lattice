@@ -12,6 +12,7 @@
 #ifndef LATTICE_CONSTRAINT_PRESERVING_H
 #define LATTICE_CONSTRAINT_PRESERVING_H
 
+#include "../core/device.h"
 #include "../core/fields.h"
 #include <math.h>
 
@@ -27,9 +28,7 @@
  *   Gamma^s (normal to face)      → sqrt(3/4)
  *   Gamma^A (tangential to face)  → 1.0
  */
-#ifdef LATTICE_GPU
-#pragma omp declare target
-#endif
+LATTICE_DEVICE
 static inline double cp_char_speed(int f, int face_dir, double alpha)
 {
     if (f == FIELD_THETA)
@@ -66,14 +65,12 @@ static inline double cp_char_speed(int f, int face_dir, double alpha)
  * f_asymp: asymptotic value of the field
  * r:      distance from origin
  */
+LATTICE_DEVICE
 static inline double cp_rhs(double alpha, double speed, double s_sign,
                              double df_ds, double f_val, double f_asymp,
                              double r)
 {
     return -alpha * speed * s_sign * df_ds - alpha * (f_val - f_asymp) / r;
 }
-#ifdef LATTICE_GPU
-#pragma omp end declare target
-#endif
 
 #endif /* LATTICE_CONSTRAINT_PRESERVING_H */

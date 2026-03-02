@@ -3,6 +3,41 @@
 > **Note:** When adding/removing/renaming files or functions, also update
 > `docs/architecture.html` — the living map of the codebase structure.
 
+## 2026-03-02: Native HIP GPU backend (replaces OpenMP target)
+
+Replaced OpenMP target offloading (`#pragma omp target teams distribute`) with
+a native HIP backend. HIP supports both AMD (ROCm) and NVIDIA (CUDA backend)
+GPUs, eliminating the GCC `-foffload` dependency and its issues (`-O2` forced
+on host, `GOMP_NVPTX_NATIVE_GPU_THREAD_STACK_SIZE` env var required).
+
+**Architecture:**
+- Single C++ file `src/backend/backend_hip.cpp` (~900 lines) contains all 15
+  HIP kernels, device memory management, and constant memory.
+- All physics code stays pure C. Headers use `LATTICE_DEVICE` macro
+  (`__host__ __device__` for HIP, empty for CPU) and `EXTERN_C_BEGIN/END`
+  guards for C++ linkage.
+- New `src/core/device.h` defines portability macros.
+- Two-phase Makefile: `gcc` compiles host C, `hipcc` compiles device C + HIP.
+
+**Changes:**
+- Created `src/core/device.h`, `src/backend/backend_hip.cpp`.
+- Deleted `src/backend/backend_gpu.c` (old OpenMP target backend).
+- All `#pragma omp declare target` blocks replaced with `LATTICE_DEVICE`.
+- Fixed `sommerfeld.c` `asym_values` designated initializer for C++ compat.
+- `restrict` → `__restrict__` compatibility for C++ builds.
+- Constant memory (~2.7 KB): `nbr_offset`, restriction/prolongation weight
+  tables, extrapolation coefficients. Loaded once in `backend_init()`.
+- Stack size set to 16 KB via `hipDeviceSetLimit()` (CCZ4 RHS needs ~5.3 KB).
+
+**15 kernels:** zero_packed, compute_rhs (4D decomposition calling
+`ccz4_rhs_point`), sommerfeld (4D with CP-BC support), update_ck45, copy,
+accum_add, axpy, apply_accum, ghost_same_level, ghost_restrict,
+ghost_coarse_fill, ghost_extrap, ghost_prolong, ghost_exchange (orchestrator),
+enforce_algebraic.
+
+**Result:** 2 backends remain: `BACKEND=cpu` (OpenMP threads, unchanged) and
+`BACKEND=gpu` (HIP). CPU build verified: zero warnings, all tests pass.
+
 ## 2026-03-02: Constraint-preserving boundary conditions
 
 Implemented BAM-style CP BCs (arXiv:1212.2901, Hilditch et al.). For constraint
@@ -22,7 +57,7 @@ standard Sommerfeld.
 
 **Implementation details:**
 - Header-only `constraint_preserving.h`: `cp_char_speed()` + `cp_rhs()`, both
-  `static inline` with `omp declare target` for GPU.
+  `static inline` with `LATTICE_DEVICE` for GPU.
 - CPU backend: `packed_sommerfeld_point()` gains `face_dir`, `s_sign`, `bc_type`
   params. Each face loop passes correct direction/sign.
 - GPU backend: same per-field branch in collapse(4) kernel. face_dir/s_sign

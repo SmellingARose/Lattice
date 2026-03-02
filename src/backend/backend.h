@@ -17,9 +17,12 @@
 #ifndef LATTICE_BACKEND_H
 #define LATTICE_BACKEND_H
 
+#include "../core/device.h"
 #include "../core/grid.h"
 #include "../core/params.h"
 #include "../amr/meshblock_pack.h"
+
+EXTERN_C_BEGIN
 
 /* Point-wise RHS function signature.
  * Called for each interior grid point (i,j,k).
@@ -161,5 +164,7 @@ void backend_ghost_exchange_packed(meshblock_pack_t *pack);
  * Ref: enforce_algebraic() in rk4.c (per-grid version)
  */
 void backend_enforce_algebraic_packed(meshblock_pack_t *pack);
+
+EXTERN_C_END
 
 #endif /* LATTICE_BACKEND_H */

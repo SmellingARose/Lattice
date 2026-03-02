@@ -32,9 +32,6 @@
  * Sum = 1, symmetric: w[j] = w[5-j]. Outer weights slightly negative.
  * Derived via SymPy (tools/compute_amr_weights.py).
  */
-#ifdef LATTICE_GPU
-#pragma omp declare target
-#endif
 const double restrict_w[RESTRICT_STENCIL] = {
     -17.0 / 11520.0,     /* -0.00147569... (outermost) */
      97.0 /  3840.0,     /*  0.02526041... */
@@ -66,9 +63,6 @@ const double restrict_wkj[RESTRICT_STENCIL][RESTRICT_STENCIL] = {
       (-17.0/11520.0)*(2743.0/5760.0), (-17.0/11520.0)*(2743.0/5760.0),
       (-17.0/11520.0)*(97.0/3840.0),   (-17.0/11520.0)*(-17.0/11520.0) },
 };
-#ifdef LATTICE_GPU
-#pragma omp end declare target
-#endif
 
 void restrict_field(const grid_t *fine_g, int ff,
                     grid_t *coarse_g, int cf)

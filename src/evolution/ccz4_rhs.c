@@ -87,10 +87,6 @@ typedef struct {
 } ccz4_gauge_rhs_t;
 
 /* Field indices for symmetric tensor components (file-scope for sub-functions) */
-#ifdef LATTICE_GPU
-#pragma omp declare target
-#endif
-
 static const int h_idx[3][3] = {
     {FIELD_H11, FIELD_H12, FIELD_H13},
     {FIELD_H12, FIELD_H22, FIELD_H23},
@@ -105,6 +101,7 @@ static const int A_idx[3][3] = {
 /* ============================================================
  * Phase 1: Load fields + compute all derivatives.
  * ============================================================ */
+LATTICE_DEVICE
 static inline void ccz4_load_and_differentiate(
     const double *const * restrict src,
     const grid_t *g, int idx,
@@ -209,6 +206,7 @@ static inline void ccz4_load_and_differentiate(
  * needed — the compiler can reuse those registers.
  * Ref: GRChombo CCZ4Geometry.hpp:56-112
  * ============================================================ */
+LATTICE_DEVICE
 static inline void ccz4_compute_geometry(
     const ccz4_fields_t *f, const ccz4_derivs_t *d,
     ccz4_geom_t *geom)
@@ -283,6 +281,7 @@ static inline void ccz4_compute_geometry(
  * After return, d2_lapse (9 doubles) is no longer needed.
  * Ref: GRChombo CCZ4RHS.impl.hpp:87-112
  * ============================================================ */
+LATTICE_DEVICE
 static inline void ccz4_compute_covariant(
     const ccz4_fields_t *f, const ccz4_derivs_t *d,
     const ccz4_geom_t *geom, ccz4_covd_t *covd)
@@ -324,6 +323,7 @@ static inline void ccz4_compute_covariant(
  * Also applies EM source terms if enabled.
  * Writes results to rhs arrays. Outputs rhs_Gamma for the gauge phase.
  * ============================================================ */
+LATTICE_DEVICE
 static inline void ccz4_compute_evolution(
     const double *const * restrict src,
     const grid_t *g, int idx,
@@ -480,6 +480,7 @@ static inline void ccz4_compute_evolution(
  * Phase 5: Moving puncture gauge RHS — lapse, shift, B.
  * Ref: GRChombo MovingPunctureGauge.hpp:54-65
  * ============================================================ */
+LATTICE_DEVICE
 static inline void ccz4_compute_gauge(
     const ccz4_fields_t *f, const ccz4_derivs_t *d,
     const ccz4_covd_t *covd, const double rhs_Gamma[3],
@@ -522,8 +523,8 @@ static inline void ccz4_compute_gauge(
     }
 }
 
-/* Forward declaration — add_ko_dissipation is defined in dissipation.c
- * within its own omp declare target block. */
+/* Forward declaration — add_ko_dissipation is defined in dissipation.c. */
+LATTICE_DEVICE
 extern void add_ko_dissipation(double ** restrict rhs,
                                const double *const * restrict src,
                                const grid_t *g, const sim_params_t *p,
@@ -537,6 +538,7 @@ extern void add_ko_dissipation(double ** restrict rhs,
  * structs on the stack. This avoids passing double** through
  * sub-function boundaries (GCC nvptx codegen issue).
  * ============================================================ */
+LATTICE_DEVICE
 void ccz4_rhs_point(double ** restrict rhs,
                     const double *const * restrict src,
                     const grid_t *g, const sim_params_t *p,
@@ -589,7 +591,3 @@ void ccz4_rhs_point(double ** restrict rhs,
 
     add_ko_dissipation(rhs, src, g, p, i, j, k);
 }
-
-#ifdef LATTICE_GPU
-#pragma omp end declare target
-#endif

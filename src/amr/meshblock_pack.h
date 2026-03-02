@@ -24,9 +24,12 @@
 #ifndef LATTICE_MESHBLOCK_PACK_H
 #define LATTICE_MESHBLOCK_PACK_H
 
+#include "../core/device.h"
 #include "block.h"
 #include "../core/fields.h"
 #include <stddef.h>
+
+EXTERN_C_BEGIN
 
 /*
  * Buffer index constants for backend_zero_packed / backend_copy_packed.
@@ -182,5 +185,7 @@ void meshblock_pack_sync_to_blocks(const meshblock_pack_t *pack, block_t **block
  * ghost_fill_from_coarser) have modified block ghost zones.
  */
 void meshblock_pack_sync_from_blocks(meshblock_pack_t *pack, block_t **blocks);
+
+EXTERN_C_END
 
 #endif /* LATTICE_MESHBLOCK_PACK_H */

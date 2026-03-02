@@ -9,12 +9,9 @@
 #ifndef LATTICE_TENSOR_UTILS_H
 #define LATTICE_TENSOR_UTILS_H
 
+#include "../core/device.h"
 #include "../core/fields.h"
 #include <math.h>
-
-#ifdef LATTICE_GPU
-#pragma omp declare target
-#endif
 
 /*
  * Christoffel symbol data: Gamma^i_{jk}, Gamma_{ijk}, Gamma^i (contracted)
@@ -36,6 +33,7 @@ typedef struct {
  * Determinant of symmetric 3x3 matrix.
  * Ref: GRChombo TensorAlgebra.hpp:55-63
  */
+LATTICE_DEVICE
 static inline double compute_det_sym(const double h[3][3])
 {
     return h[0][0] * h[1][1] * h[2][2]
@@ -49,6 +47,7 @@ static inline double compute_det_sym(const double h[3][3])
  * Inverse of symmetric 3x3 matrix.
  * Ref: GRChombo TensorAlgebra.hpp:77-99
  */
+LATTICE_DEVICE
 static inline void compute_inverse_sym(const double h[3][3],
                                        double h_UU[3][3])
 {
@@ -71,6 +70,7 @@ static inline void compute_inverse_sym(const double h[3][3],
  * Trace of A_{ij} with inverse metric: tr = h^{ij} A_{ij}
  * Ref: GRChombo TensorAlgebra.hpp:165-171
  */
+LATTICE_DEVICE
 static inline double compute_trace(const double A[3][3],
                                    const double h_UU[3][3])
 {
@@ -83,6 +83,7 @@ static inline double compute_trace(const double A[3][3],
  * Trace of a mixed tensor A^i_j (diagonal sum).
  * Ref: GRChombo TensorAlgebra.hpp:175-179
  */
+LATTICE_DEVICE
 static inline double compute_trace_diag(const double A[3][3])
 {
     return A[0][0] + A[1][1] + A[2][2];
@@ -92,6 +93,7 @@ static inline double compute_trace_diag(const double A[3][3])
  * Dot product of two vectors: v^i w_i (no metric).
  * Ref: GRChombo TensorAlgebra.hpp:193-199
  */
+LATTICE_DEVICE
 static inline double compute_dot_product(const double v[3], const double w[3])
 {
     return v[0] * w[0] + v[1] * w[1] + v[2] * w[2];
@@ -101,6 +103,7 @@ static inline double compute_dot_product(const double v[3], const double w[3])
  * Dot product with inverse metric: h^{ij} v_i w_j
  * Ref: GRChombo TensorAlgebra.hpp:204-214
  */
+LATTICE_DEVICE
 static inline double compute_dot_product_metric(const double v[3],
                                                 const double w[3],
                                                 const double h_UU[3][3])
@@ -120,6 +123,7 @@ static inline double compute_dot_product_metric(const double v[3],
  *
  * Ref: GRChombo TensorAlgebra.hpp:344-367
  */
+LATTICE_DEVICE
 static inline void compute_christoffel(const double d1_h[3][3][3],
                                        const double h_UU[3][3],
                                        chris_t *chris)
@@ -146,6 +150,7 @@ static inline void compute_christoffel(const double d1_h[3][3][3],
  * Raise both indices of a symmetric 2-tensor: A^{ij} = h^{ik} h^{jl} A_{kl}
  * Ref: GRChombo TensorAlgebra.hpp:259-270
  */
+LATTICE_DEVICE
 static inline void raise_all_2(const double A_dd[3][3],
                                 const double h_UU[3][3],
                                 double A_uu[3][3])
@@ -166,6 +171,7 @@ static inline void raise_all_2(const double A_dd[3][3],
  * Remove trace from symmetric tensor: A_{ij} -= (1/3) h_{ij} h^{kl} A_{kl}
  * Ref: GRChombo TensorAlgebra.hpp:220-230
  */
+LATTICE_DEVICE
 static inline void make_trace_free(double A[3][3],
                                    const double h[3][3],
                                    const double h_UU[3][3])
@@ -181,6 +187,7 @@ static inline void make_trace_free(double A[3][3],
  * Falls back to cbrt() for det outside [0.5, 2.0].
  * ~3-5x faster than 1/cbrt(det) for the common case.
  */
+LATTICE_DEVICE
 static inline double fast_inv_cbrt(double det)
 {
     if (det < 0.5 || det > 2.0)
@@ -197,9 +204,5 @@ static inline double fast_inv_cbrt(double det)
 
     return s;
 }
-
-#ifdef LATTICE_GPU
-#pragma omp end declare target
-#endif
 
 #endif /* LATTICE_TENSOR_UTILS_H */

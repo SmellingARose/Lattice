@@ -15,8 +15,11 @@
 #ifndef LATTICE_BLOCK_H
 #define LATTICE_BLOCK_H
 
+#include "../core/device.h"
 #include "../core/grid.h"
 #include "../core/params.h"
+
+EXTERN_C_BEGIN
 
 /* Number of same-level neighbors in 3D (6 face + 12 edge + 8 corner).
  * Stage 4 will expand to 56 for cross-level (4 sub-faces + 2 sub-edges). */
@@ -41,13 +44,7 @@ typedef struct {
  * The nblevel[3][3][3] table uses (ox3+1, ox2+1, ox1+1) indexing
  * following Athena++ convention, so nblevel[1][1][1] = self level.
  */
-#ifdef LATTICE_GPU
-#pragma omp declare target
-#endif
 extern const int nbr_offset[NUM_NEIGHBORS][3];
-#ifdef LATTICE_GPU
-#pragma omp end declare target
-#endif
 
 /* Neighbor type classification */
 typedef enum {
@@ -186,5 +183,7 @@ void block_save_rhs_old(block_t *b, const double *const *rhs_src, size_t npoints
  */
 void block_time_interp(const block_t *b, double frac,
                         double *out[], size_t npoints);
+
+EXTERN_C_END
 
 #endif /* LATTICE_BLOCK_H */

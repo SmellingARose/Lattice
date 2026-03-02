@@ -20,9 +20,6 @@
  * Derived via SymPy (tools/compute_amr_weights.py).
  * Verified: sum = 1, exact for polynomials through degree 6.
  */
-#ifdef LATTICE_GPU
-#pragma omp declare target
-#endif
 const double prolong_w[PROLONG_STENCIL] = {
       273.0 / 65536.0,     /*  0.00416564941 */
     -1287.0 / 32768.0,     /* -0.03927612305 */
@@ -79,9 +76,6 @@ const double prolong_wkj[4][PROLONG_STENCIL][PROLONG_STENCIL] = {
         { ( 273.0/65536.0)*( -231.0/65536.0), ( 273.0/65536.0)*( 1001.0/32768.0), ( 273.0/65536.0)*(-9009.0/65536.0), ( 273.0/65536.0)*(15015.0/16384.0), ( 273.0/65536.0)*(15015.0/65536.0), ( 273.0/65536.0)*(-1287.0/32768.0), ( 273.0/65536.0)*( 273.0/65536.0) },
     },
 };
-#ifdef LATTICE_GPU
-#pragma omp end declare target
-#endif
 
 void prolongate_field(const grid_t *coarse_g, int cf,
                       grid_t *fine_g, int ff)

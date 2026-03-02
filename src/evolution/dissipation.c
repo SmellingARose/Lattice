@@ -21,16 +21,15 @@
 #include "../numerics/finite_diff.h"
 #include <math.h>
 
-#ifdef LATTICE_GPU
-#pragma omp declare target
-#endif
 /* Gauge fields: lapse, shift^i, B^i (indices FIELD_LAPSE through FIELD_B3).
  * All other fields are physical.
  * Ref: arXiv:2404.01137 — "epsilon_KO,CA = 0.99 for gauge, 0.3 for physical" */
+LATTICE_DEVICE
 static inline int is_gauge_field(int f)
 {
     return f >= FIELD_LAPSE && f <= FIELD_B3;
 }
+LATTICE_DEVICE
 void add_ko_dissipation(double ** restrict rhs,
                         const double *const * restrict src,
                         const grid_t *g, const sim_params_t *p,
@@ -71,6 +70,3 @@ void add_ko_dissipation(double ** restrict rhs,
                                   + fd_ko(src[f], idx, sz, dx));
     }
 }
-#ifdef LATTICE_GPU
-#pragma omp end declare target
-#endif

@@ -12,7 +12,10 @@
 #ifndef LATTICE_PROLONGATION_H
 #define LATTICE_PROLONGATION_H
 
+#include "../core/device.h"
 #include "../core/grid.h"
+
+EXTERN_C_BEGIN
 
 /* 7-point 1D stencil for 6th-order cell-centered Lagrange interpolation.
  * Left child at x = -1/4 from coarse cell center, nodes at {-3..+3}.
@@ -29,14 +32,8 @@
  */
 #define PROLONG_STENCIL 7
 
-#ifdef LATTICE_GPU
-#pragma omp declare target
-#endif
 extern const double prolong_w[PROLONG_STENCIL];
 extern const double prolong_wkj[4][PROLONG_STENCIL][PROLONG_STENCIL];
-#ifdef LATTICE_GPU
-#pragma omp end declare target
-#endif
 
 /* Prolongate a single field from coarse grid to fine grid.
  * Fine grid has 2x the resolution (N_fine = 2 * N_coarse, dx_fine = dx_coarse/2).
@@ -47,5 +44,7 @@ void prolongate_field(const grid_t *coarse_g, int coarse_field,
 
 /* Prolongate all NUM_FIELDS from coarse grid to fine grid. */
 void prolongate_all(const grid_t *coarse_g, grid_t *fine_g);
+
+EXTERN_C_END
 
 #endif /* LATTICE_PROLONGATION_H */

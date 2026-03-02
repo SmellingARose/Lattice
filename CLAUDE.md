@@ -4,12 +4,12 @@
 
 C codebase implementing the CCZ4 (conformal covariant Z4) formulation of
 Einstein's field equations for evolving black hole spacetimes through inspiral,
-merger, and ringdown. GPU acceleration via OpenMP target offloading — physics
-kernels are pure C, a thin backend abstraction swaps CPU (OpenMP threads) and
-GPU (OpenMP target teams) with no platform-specific code.
+merger, and ringdown. GPU acceleration via HIP (AMD + NVIDIA) — physics
+kernels are pure C with `LATTICE_DEVICE` annotations, a thin backend
+abstraction swaps CPU (OpenMP threads) and GPU (HIP kernels).
 
-Primary dev target: Apple M4 (16 GB unified memory) for CPU, NVIDIA HPC GPUs
-(V100/A100/H100) for production runs. Requires GCC 14+ for GPU offloading.
+Primary dev target: Apple M4 (16 GB unified memory) for CPU, AMD (MI250X/MI300X)
+and NVIDIA (V100/A100/H100) HPC GPUs for production runs.
 
 ## Approach
 
@@ -137,7 +137,7 @@ work on AMR meshes.
     7 GPU kernel launches (same-level, restriction, coarse ghost fill, 3 boundary
     extrapolation sweeps, prolongation). Zero PCIe DMA during time steps. Uniform
     meshes: 1 kernel launch. Constants (`nbr_offset`, `restrict_w/wkj`,
-    `prolong_w/wkj`) wrapped with `omp declare target` for device access.
+    `prolong_w/wkj`) in HIP `__constant__` memory for device access.
   - *Remaining:* Dense output subcycling deferred.
 - **Constraint-preserving BCs:** BAM-style CP BCs replace the RHS of constraint
   fields (Theta, K, A_ij, Gamma^i) at boundary points with outgoing-wave equations
@@ -197,11 +197,12 @@ lattice/
 │   │   ├── grid.h / grid.c     # grid allocation, indexing, ghost zones
 │   │   ├── fields.h            # field enum, count
 │   │   ├── params.h            # simulation parameters
+│   │   ├── device.h            # LATTICE_DEVICE / EXTERN_C macros (HIP portability)
 │   │   └── timer.h             # TIMER_START/STOP macros (clock_gettime)
 │   ├── backend/
 │   │   ├── backend.h           # abstract interface
 │   │   ├── backend_cpu.c       # OpenMP threads (CPU)
-│   │   └── backend_gpu.c       # OpenMP target offloading (GPU)
+│   │   └── backend_hip.cpp     # HIP GPU kernels (AMD + NVIDIA)
 │   ├── evolution/
 │   │   ├── ccz4_rhs.c          # CCZ4 right-hand-side (+EM source terms)
 │   │   ├── maxwell_rhs.h/c     # Maxwell evolution equations (E^i, B^i)
@@ -273,7 +274,7 @@ lattice/
 
 ```bash
 make                    # CPU build (-O3 -ffast-math -march=native -flto)
-make BACKEND=gpu        # GPU build (OpenMP target offloading, requires GCC 14+)
+make BACKEND=gpu        # GPU build (HIP — AMD + NVIDIA, requires ROCm)
 make debug              # debug build (-O0 -g -fsanitize=address,undefined)
 make test               # all tests
 make test-convergence   # 3-resolution convergence verification
@@ -299,45 +300,39 @@ HDF5 flag: `HDF5=on` enables CCE worldtube output (requires `libhdf5-dev` + `pkg
 Time integrator: `--rk classic|ck45`. Default is `classic` (standard 4-stage
 RK4, 4 memory blocks). Use `--rk ck45` for Carpenter-Kennedy 2N low-storage
 (5 stages, 3 memory blocks, 25% less memory).
-Compiler: `clang` on macOS (CPU only), `gcc-14+` on Linux (CPU + GPU).
-No external dependencies beyond standard C and libomp. Optional: `libhdf5-dev`
-for CCE worldtube output (`make HDF5=on`).
+Compiler: `clang` on macOS (CPU only), `gcc` on Linux (CPU), `hipcc` (GPU).
+No external dependencies beyond standard C and libomp. GPU requires ROCm.
+Optional: `libhdf5-dev` for CCE worldtube output (`make HDF5=on`).
 Debug builds enable NaN/Inf checking — any floating-point trap is a bug.
 
 ### GPU backend requirements
 
-GPU offloading uses OpenMP target (`#pragma omp target teams distribute
-parallel for`). No CUDA, HIP, or Metal code — the same C physics kernels run
-on both CPU and GPU.
+GPU acceleration uses HIP (Heterogeneous-compute Interface for Portability).
+Physics kernels are pure C with `LATTICE_DEVICE` annotations — the same code
+compiles for both CPU and GPU. Only `src/backend/backend_hip.cpp` is C++.
 
 **Requirements:**
-- GCC 14+ with `-foffload=nvptx-none` (NVIDIA) or `-foffload=amdgcn-amdhsa` (AMD)
-- `GOMP_NVPTX_NATIVE_GPU_THREAD_STACK_SIZE=16384` env var (required — the CCZ4
-  RHS kernel uses ~4 KB stack per thread for derivative tensors, Christoffel
-  symbols, and Ricci tensor locals; default stack is too small)
-- HPC-class GPU with 1:2 FP64:FP32 ratio (V100, A100, H100, MI250X, MI300X).
+- ROCm (AMD GPUs) or HIP CUDA backend (NVIDIA GPUs)
+- `hipcc` compiler in PATH
+- HPC-class GPU with 1:2 FP64:FP32 ratio (MI250X, MI300X, V100, A100, H100).
   Consumer GPUs (1:32 ratio) have negligible FP64 throughput.
 
-**Host -O2 required for GPU builds:** GCC's `-O3` generates broken nvptx IR
-for large inlined functions like `ccz4_rhs_point` (~3 KB of locals from 5
-inlined sub-functions). The Makefile automatically uses `-O2` for the host
-compilation and passes `-O3` to the offload compiler via `-foffload-options`.
-This means host-side code (setup/teardown) runs at `-O2` while GPU kernels
-get full `-O3` optimization — zero performance impact on the compute hot path.
-CPU builds are unaffected and still use `-O3` with LTO.
+**Two-phase compilation:** Host-only C files compiled with `gcc`, device-callable
+C files and `backend_hip.cpp` compiled with `hipcc`. The Makefile handles this
+automatically. Stack size set to 16 KB per thread via `hipDeviceSetLimit()` in
+`backend_init()` (CCZ4 RHS kernel uses ~5.3 KB stack per thread).
 
 ```bash
-# Example: GPU build on Linux with GCC 14 targeting NVIDIA
-make BACKEND=gpu CC=gcc-14
+# Example: GPU build
+make BACKEND=gpu
 
-# Run with stack size env var
-export GOMP_NVPTX_NATIVE_GPU_THREAD_STACK_SIZE=16384
+# Run
 ./build/lattice --N 256 --steps 400 --puncture 1.0,0,0,0
 ```
 
 ## Code Style
 
-- **C17. No C++.**
+- **C17 for physics code.** Only `backend_hip.cpp` is C++ (required by HIP kernel syntax).
 - `snake_case` everywhere. `_t` suffix for typedefs. `UPPER_SNAKE_CASE` for constants.
 - Field enum uses `FIELD_` prefix (e.g. `FIELD_CHI`, `FIELD_H11`).
 - **Comment the physics, not the syntax.** Every function header cites:
@@ -470,12 +465,12 @@ flat spacetime -> single BH -> binary.
 CK45, ~7 GB with classic RK4). N=256 barely fits (10.3 GB CK45, 13.7 GB classic).
 Measured performance: ~4.5 sec/step at N=128 (~23 GFLOPS effective FP64).
 
-**GPU production targets:** NVIDIA V100/A100/H100 via OpenMP target offloading.
+**GPU production targets:** AMD MI250X/MI300X and NVIDIA V100/A100/H100 via HIP.
 Estimated 20-100x speedup over M4 CPU (0.05-0.2 sec/step at N=128).
-N=256 requires 40+ GB GPU memory. N=512 requires H200 (141 GB) or multi-GPU.
+N=256 requires 40+ GB GPU memory. N=512 requires MI300X (192 GB) or H200 (141 GB).
 
 No platform-specific code outside `src/backend/`. Physics kernels are pure C
-with `#pragma omp declare target` guards for GPU compilation.
+with `LATTICE_DEVICE` annotations for GPU compilation.
 
 ## DEVLOG.md
 

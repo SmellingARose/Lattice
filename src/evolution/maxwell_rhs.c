@@ -41,21 +41,11 @@
 #include <math.h>
 
 /* Levi-Civita symbol epsilon_{ijk} (fully antisymmetric, values +1/-1/0) */
-#ifdef LATTICE_GPU
-#pragma omp declare target
-#endif
 static const int levi_civita[3][3][3] = {
     {{ 0, 0, 0}, { 0, 0, 1}, { 0,-1, 0}},
     {{ 0, 0,-1}, { 0, 0, 0}, { 1, 0, 0}},
     {{ 0, 1, 0}, {-1, 0, 0}, { 0, 0, 0}}
 };
-#ifdef LATTICE_GPU
-#pragma omp end declare target
-#endif
-
-#ifdef LATTICE_GPU
-#pragma omp declare target
-#endif
 
 /*
  * EM stress-energy tensor components at a single point.
@@ -75,6 +65,7 @@ static const int levi_civita[3][3][3] = {
  *
  * Ref: arXiv:0907.1151 Eq. (5)
  */
+LATTICE_DEVICE
 void em_stress_energy(const double *const * restrict src, const grid_t *g,
                       int idx,
                       double chi, const double h_UU[3][3],
@@ -184,6 +175,7 @@ void em_stress_energy(const double *const * restrict src, const grid_t *g,
  * Ref: arXiv:0907.1151 Eqs. (23)-(24)
  * Ref: arXiv:1903.01036 Eq. (6)-(8)
  */
+LATTICE_DEVICE
 void maxwell_rhs_point(double ** restrict rhs,
                        const double *const * restrict src,
                        const grid_t *g, const sim_params_t *p,
@@ -382,6 +374,7 @@ void maxwell_rhs_point(double ** restrict rhs,
  * Calls ccz4_rhs_point (which includes EM source terms via p->em_enabled),
  * then maxwell_rhs_point for the 6 EM field equations.
  */
+LATTICE_DEVICE
 void ccz4_maxwell_rhs_point(double ** restrict rhs,
                              const double *const * restrict src,
                              const grid_t *g, const sim_params_t *p,
@@ -393,7 +386,3 @@ void ccz4_maxwell_rhs_point(double ** restrict rhs,
     /* Maxwell evolution equations */
     maxwell_rhs_point(rhs, src, g, p, i, j, k);
 }
-
-#ifdef LATTICE_GPU
-#pragma omp end declare target
-#endif

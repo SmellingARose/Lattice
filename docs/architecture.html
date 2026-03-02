@@ -180,7 +180,7 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 
 <p>Lattice is a 3D numerical relativity simulator written in pure C17. It evolves black hole spacetimes through inspiral, merger, and ringdown by solving the CCZ4 (conformal covariant Z4) formulation of Einstein's field equations.</p>
 
-<p>The key idea: <strong>one set of physics kernels runs on both CPU and GPU</strong> with no platform-specific code. GPU acceleration comes from OpenMP target offloading &mdash; no CUDA, no HIP, no Metal. The same C functions that run in parallel on CPU threads are compiled to GPU kernels via <code>gcc -foffload=nvptx-none</code>.</p>
+<p>The key idea: <strong>one set of physics kernels runs on both CPU and GPU</strong> with no platform-specific code. Physics functions are pure C with <code>LATTICE_DEVICE</code> annotations. GPU acceleration uses HIP (AMD + NVIDIA) &mdash; a single C++ file (<code>backend_hip.cpp</code>) contains all GPU kernel launches while the physics code stays in C.</p>
 
 <h3>What it does</h3>
 <ul>
@@ -234,7 +234,7 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
     +---&gt; <span class="type">diagnostics/</span>   Constraints, AH finder, Psi4
     +---&gt; <span class="type">boundary/</span>      Sommerfeld radiative outflow
     +---&gt; <span class="type">amr/</span>           Oct-tree blocks, ghost exchange, refinement
-    +---&gt; <span class="type">backend/</span>       CPU (OpenMP) and GPU (OpenMP target) dispatch
+    +---&gt; <span class="type">backend/</span>       CPU (OpenMP threads) and GPU (HIP) dispatch
     +---&gt; <span class="type">io/</span>            1D CSV slice output</div>
 
 <!-- ========================================== -->
@@ -245,12 +245,12 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 <tr>
   <td>Language</td>
   <td>C++ (GRChombo, SpECTRE, AthenaK)</td>
-  <td>Pure C17 &mdash; no templates, no OOP, no runtime polymorphism</td>
+  <td>C17 physics code + one C++ HIP file for GPU kernels</td>
 </tr>
 <tr>
   <td>GPU approach</td>
   <td>CUDA/HIP kernels or Kokkos abstraction layer</td>
-  <td>OpenMP target offloading &mdash; same .c files compile for CPU and GPU</td>
+  <td>HIP (AMD + NVIDIA) &mdash; physics in C with <code>LATTICE_DEVICE</code>, GPU dispatch in single .cpp</td>
 </tr>
 <tr>
   <td>Memory layout</td>
@@ -289,6 +289,7 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 <tr><td><code>grid.h / grid.c</code></td><td><code>grid_t</code> struct with <code>int n_fields</code> for conditional field allocation. <code>grid_alloc_ex(N, L, method, n_fields)</code> allocates only active fields; <code>grid_alloc()</code> is a static inline wrapper defaulting to <code>NUM_FIELDS</code>. Page-aligned (4096-byte), <code>IDX(g,i,j,k)</code> indexing macro, <code>COORD(g,i)</code> for physical coordinates. N padded to next multiple of 16.</td></tr>
 <tr><td><code>fields.h</code></td><td>Field enum (<code>FIELD_CHI</code> through <code>FIELD_BM3</code>), symmetric tensor index table, loop macros (<code>FOR1</code>...<code>FOR4</code>), Kronecker delta. <code>COMPILED_NUM_FIELDS</code> macro (25 or 31 based on <code>-DLATTICE_EM_ENABLED</code>) for constant loop bounds.</td></tr>
 <tr><td><code>params.h</code></td><td><code>sim_params_t</code> with CCZ4 params (kappa1/2/3), gauge params (eta, lapse_coeff, <code>position_dependent_eta</code>), AMR params, noise reduction params. <code>default_params()</code> inline.</td></tr>
+<tr><td><code>device.h</code></td><td><code>LATTICE_DEVICE</code> macro (<code>__host__ __device__</code> for HIP, empty for CPU), <code>EXTERN_C_BEGIN/END</code> for C++ linkage, <code>restrict</code> → <code>__restrict__</code> compat.</td></tr>
 <tr><td><code>timer.h</code></td><td>Header-only <code>TIMER_START</code>/<code>TIMER_STOP</code> macros via <code>clock_gettime(CLOCK_MONOTONIC)</code>.</td></tr>
 </table>
 
@@ -362,7 +363,7 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 <table class="file-table">
 <tr><th>File</th><th>Purpose</th></tr>
 <tr><td><code>sommerfeld.c</code></td><td><code>apply_sommerfeld()</code> (single-grid) and <code>apply_sommerfeld_block()</code> (AMR). Face-only ghost slab iteration (~5x fewer iterations than full-grid scan). Extracted <code>sommerfeld_point()</code> helper. GPU-annotated.</td></tr>
-<tr><td><code>constraint_preserving.h</code></td><td>Header-only: <code>cp_char_speed()</code> (per-field characteristic speed lookup) and <code>cp_rhs()</code> (CP boundary formula). Both <code>static inline</code> with <code>omp declare target</code>.</td></tr>
+<tr><td><code>constraint_preserving.h</code></td><td>Header-only: <code>cp_char_speed()</code> (per-field characteristic speed lookup) and <code>cp_rhs()</code> (CP boundary formula). Both <code>static inline</code> with <code>LATTICE_DEVICE</code>.</td></tr>
 </table>
 
 <!-- ========================================== -->
@@ -392,7 +393,7 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 <tr><th>File</th><th>Purpose</th></tr>
 <tr><td><code>backend.h</code></td><td>Abstract interface: RHS, Sommerfeld, CK45 update, ghost exchange, enforce_algebraic, map/unmap, copy, zero.</td></tr>
 <tr><td><code>backend_cpu.c</code></td><td>OpenMP threads. Packed: flattened (block, k, j) iteration, inner i-loop for SIMD. Ghost exchange directly on pack buffers. <code>backend_enforce_algebraic_packed()</code> for batched det(h)=1, tr(A)=0.</td></tr>
-<tr><td><code>backend_gpu.c</code></td><td>OpenMP target. Packed: collapse(4) over (block, k, j, i). ~5.3 KB stack per thread. <code>backend_enforce_algebraic_packed()</code> runs on device (no host sync). Device-side ghost exchange: 7 GPU kernel launches, zero PCIe DMA. Requires GCC 14+ with 16 KB thread stack.</td></tr>
+<tr><td><code>backend_hip.cpp</code></td><td>HIP GPU (AMD + NVIDIA). 15 explicit kernels with <code>hipLaunchKernelGGL</code>. Packed: 4D decomposition over (block, k, j, i). ~5.3 KB stack per thread (16 KB limit set in <code>backend_init</code>). <code>backend_enforce_algebraic_packed()</code> runs on device (no host sync). Device-side ghost exchange: 7 GPU kernel launches, zero PCIe DMA. Constant memory for lookup tables (~2.7 KB).</td></tr>
 </table>
 
 <!-- ========================================== -->
@@ -691,21 +692,21 @@ Level 0: everywhere (dx ~ M/2)     — outer domain + boundary</code></pre>
 <details>
 <summary>Why pure C instead of C++?</summary>
 <div class="detail-body">
-<p>OpenMP target offloading in GCC 15 works most reliably with C. Templates, virtual functions, and C++ standard library containers all complicate GPU compilation. C also forces a flat, transparent architecture: every function call is visible, every memory access is explicit. For a physics code where the inner kernel is a set of inlined sub-functions totalling ~540 lines, C++ abstraction layers add complexity without benefit.</p>
+<p>C forces a flat, transparent architecture: every function call is visible, every memory access is explicit. For a physics code where the inner kernel is a set of inlined sub-functions totalling ~540 lines, C++ abstraction layers add complexity without benefit. The one exception is <code>backend_hip.cpp</code> &mdash; HIP requires C++ for kernel launch syntax (<code>__global__</code>, <code>hipLaunchKernelGGL</code>), but this is a thin dispatch layer, not physics code.</p>
 </div>
 </details>
 
 <details>
-<summary>Why OpenMP target instead of CUDA/HIP?</summary>
+<summary>Why HIP instead of CUDA or OpenMP target?</summary>
 <div class="detail-body">
-<p>The physics kernels are pure C with no platform-specific code. OpenMP target offloading compiles the same source to both CPU threads and GPU kernels. This eliminates maintaining separate CUDA kernel files, avoids vendor lock-in, and keeps the codebase at one language. The tradeoff is requiring GCC 15+ (the first version with reliable nvptx offloading) and slightly less GPU tuning control than native CUDA.</p>
+<p>HIP is portable across AMD and NVIDIA GPUs from a single source. Unlike OpenMP target offloading (which required GCC 15+ with fragile <code>-foffload</code> support, forced <code>-O2</code> on host, and needed env vars for stack sizes), HIP gives native GPU performance with explicit kernel control. Unlike CUDA, HIP avoids vendor lock-in. The physics kernels stay in pure C with <code>LATTICE_DEVICE</code> annotations; only the launch wrappers in <code>backend_hip.cpp</code> are C++.</p>
 </div>
 </details>
 
 <details>
 <summary>Why Struct-of-Arrays (SoA)?</summary>
 <div class="detail-body">
-<p>The RHS kernel reads multiple fields at the same grid point but also reads neighbors (via FD stencils). SoA makes each field contiguous, so stencil access along x (unit stride) hits consecutive cache lines. For GPU, SoA means a single <code>omp target enter data map(to:block[0:size])</code> maps all field data. AoS would interleave fields, destroying both cache locality for stencils and GPU coalescing.</p>
+<p>The RHS kernel reads multiple fields at the same grid point but also reads neighbors (via FD stencils). SoA makes each field contiguous, so stencil access along x (unit stride) hits consecutive cache lines. For GPU, SoA means a single <code>hipMemcpy</code> maps all field data contiguously. AoS would interleave fields, destroying both cache locality for stencils and GPU coalescing.</p>
 </div>
 </details>
 
@@ -751,12 +752,12 @@ Level 0: everywhere (dx ~ M/2)     — outer domain + boundary</code></pre>
 
 <h3>Building</h3>
 <pre><code>make                    # CPU build (-O3 -ffast-math -march=native -flto)
-make BACKEND=gpu        # GPU build (OpenMP target offloading, requires GCC 15+, no LTO)
+make BACKEND=gpu        # GPU build (HIP — AMD + NVIDIA, requires ROCm)
 make debug              # debug build (-O0 -g -fsanitize=address,undefined)
 make EM=on              # build with Einstein-Maxwell fields compiled in
 make clean              # rm -rf build/</code></pre>
 
-<p>Compiler: <code>clang</code> on macOS (CPU only), <code>gcc-15</code> on Linux (CPU + GPU). No external dependencies beyond standard C and libomp.</p>
+<p>Compiler: <code>clang</code> on macOS (CPU only), <code>gcc</code> on Linux (CPU), <code>hipcc</code> (GPU). No external dependencies beyond standard C and libomp. GPU requires ROCm.</p>
 
 <h3>Running</h3>
 <pre><code># Single Schwarzschild puncture (M=1, 50M evolution)
@@ -771,8 +772,7 @@ make clean              # rm -rf build/</code></pre>
 ./build/lattice --N 64 --L 32 --steps 200 --em \
   --puncture 1.0,0,0,0,0,0,0,0,0,0.5,0.3
 
-# GPU run (set stack size for CCZ4 kernel)
-export GOMP_NVPTX_NATIVE_GPU_THREAD_STACK_SIZE=16384
+# GPU run (HIP backend handles stack size internally)
 ./build/lattice --N 256 --steps 400 --puncture 1.0,0,0,0</code></pre>
 
 <h3>CLI options</h3>

@@ -17,15 +17,12 @@
 #ifndef LATTICE_FINITE_DIFF_H
 #define LATTICE_FINITE_DIFF_H
 
+#include "../core/device.h"
 #include <math.h>
 
 /* Default to 6th-order if not specified */
 #ifndef FD_ORDER
 #define FD_ORDER 6
-#endif
-
-#ifdef LATTICE_GPU
-#pragma omp declare target
 #endif
 
 #if FD_ORDER == 6
@@ -41,6 +38,7 @@
  * Ref: GRChombo SixthOrderDerivatives.hpp lines 36-49
  * Ref: Fornberg table, 6th-order centered d1
  */
+LATTICE_DEVICE
 static inline double fd_d1(const double *f, int idx, int s, double dx)
 {
     double wvf = 1.0 / 60.0;    /* 1.6667e-2 */
@@ -61,6 +59,7 @@ static inline double fd_d1(const double *f, int idx, int s, double dx)
  * Ref: GRChombo SixthOrderDerivatives.hpp lines 117-133
  * Ref: Fornberg table, 6th-order centered d2
  */
+LATTICE_DEVICE
 static inline double fd_d2(const double *f, int idx, int s, double dx)
 {
     double dx2 = dx * dx;
@@ -84,6 +83,7 @@ static inline double fd_d2(const double *f, int idx, int s, double dx)
  * memory loads for fields needing both derivatives.
  * Ref: Fornberg table, 6th-order centered d1 + d2
  */
+LATTICE_DEVICE
 static inline void fd_d1_d2(const double *f, int idx, int s, double dx,
                             double *out_d1, double *out_d2)
 {
@@ -108,6 +108,7 @@ static inline void fd_d1_d2(const double *f, int idx, int s, double dx,
  * 6 distinct weight magnitudes from products of {1/60, 3/20, 3/4}.
  * Ref: GRChombo SixthOrderDerivatives.hpp lines 169-223
  */
+LATTICE_DEVICE
 static inline double fd_d2_mixed(const double *f, int idx, int s1, int s2,
                                  double dx)
 {
@@ -180,6 +181,7 @@ static inline double fd_d2_mixed(const double *f, int idx, int s1, int s2,
  * fd_adv: branching wrapper (legacy, use hoisted variants in hot loops).
  * Requires ghost >= 4. Ref: GRChombo SixthOrderDerivatives.hpp lines 300-337
  */
+LATTICE_DEVICE
 static inline double fd_adv_up(const double *f, int idx, int s, double dx)
 {
     return ( ( 1.0/30.0) * f[idx - 2*s]
@@ -191,6 +193,7 @@ static inline double fd_adv_up(const double *f, int idx, int s, double dx)
            + (-1.0/60.0) * f[idx + 4*s] ) / dx;
 }
 
+LATTICE_DEVICE
 static inline double fd_adv_down(const double *f, int idx, int s, double dx)
 {
     return ( ( 1.0/60.0) * f[idx - 4*s]
@@ -202,6 +205,7 @@ static inline double fd_adv_down(const double *f, int idx, int s, double dx)
            + (-1.0/30.0) * f[idx + 2*s] ) / dx;
 }
 
+LATTICE_DEVICE
 static inline double fd_adv(const double *f, int idx, int s, double vel,
                             double dx)
 {
@@ -224,6 +228,7 @@ static inline double fd_adv(const double *f, int idx, int s, double vel,
  * Ref: GRChombo SixthOrderDerivatives.hpp lines 398-422 (commented-out 8th)
  * Ref: arXiv:2404.01137 — higher-order KO paired with higher-order FD
  */
+LATTICE_DEVICE
 static inline double fd_ko(const double *f, int idx, int s, double dx)
 {
     /* Raw 8th-order coefficients (positive central weight): */
@@ -257,6 +262,7 @@ static inline double fd_ko(const double *f, int idx, int s, double dx)
  * 4th-order first derivative: d f / d x
  * Ref: GRChombo FourthOrderDerivatives.hpp lines 36-46
  */
+LATTICE_DEVICE
 static inline double fd_d1(const double *f, int idx, int s, double dx)
 {
     return (  (1.0 / 12.0) * f[idx - 2*s]
@@ -269,6 +275,7 @@ static inline double fd_d1(const double *f, int idx, int s, double dx)
  * 4th-order second derivative: d^2 f / d x^2
  * Ref: GRChombo FourthOrderDerivatives.hpp lines 114-128
  */
+LATTICE_DEVICE
 static inline double fd_d2(const double *f, int idx, int s, double dx)
 {
     double dx2 = dx * dx;
@@ -284,6 +291,7 @@ static inline double fd_d2(const double *f, int idx, int s, double dx)
  * Loads 5 stencil points once, computes both d1 and d2.
  * Ref: Fornberg table, 4th-order centered d1 + d2
  */
+LATTICE_DEVICE
 static inline void fd_d1_d2(const double *f, int idx, int s, double dx,
                             double *out_d1, double *out_d2)
 {
@@ -306,6 +314,7 @@ static inline void fd_d1_d2(const double *f, int idx, int s, double dx,
  * 4th-order mixed second derivative: d^2 f / (d x_a d x_b)
  * Ref: GRChombo mixed_diff2, FourthOrderDerivatives.hpp lines 163-192
  */
+LATTICE_DEVICE
 static inline double fd_d2_mixed(const double *f, int idx, int s1, int s2,
                                  double dx)
 {
@@ -340,6 +349,7 @@ static inline double fd_d2_mixed(const double *f, int idx, int s1, int s2,
  * 4th-order upwind advection derivative: beta^a d_a f
  * Ref: GRChombo advection_term, FourthOrderDerivatives.hpp lines 269-301
  */
+LATTICE_DEVICE
 static inline double fd_adv(const double *f, int idx, int s, double vel,
                             double dx)
 {
@@ -369,6 +379,7 @@ static inline double fd_adv(const double *f, int idx, int s, double vel,
  * 7-point stencil, divided by dx following GRChombo convention.
  * Ref: GRChombo FourthOrderDerivatives.hpp lines 361-378
  */
+LATTICE_DEVICE
 static inline double fd_ko(const double *f, int idx, int s, double dx)
 {
     double wvf = 1.0 / 64.0;     /* 1.5625e-2 */
@@ -387,10 +398,6 @@ static inline double fd_ko(const double *f, int idx, int s, double dx)
 
 #else
 #error "FD_ORDER must be 4 or 6"
-#endif
-
-#ifdef LATTICE_GPU
-#pragma omp end declare target
 #endif
 
 #endif /* LATTICE_FINITE_DIFF_H */

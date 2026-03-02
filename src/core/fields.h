@@ -9,6 +9,8 @@
 #ifndef LATTICE_FIELDS_H
 #define LATTICE_FIELDS_H
 
+#include "device.h"
+
 #define GR_SPACEDIM 3
 
 /* Evolved field indices — append-only, never reorder */

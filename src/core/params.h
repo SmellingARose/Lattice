@@ -9,7 +9,10 @@
 #ifndef LATTICE_PARAMS_H
 #define LATTICE_PARAMS_H
 
+#include "device.h"
 #include <stdbool.h>
+
+EXTERN_C_BEGIN
 
 /* Time integration method */
 typedef enum {
@@ -181,5 +184,7 @@ static inline sim_params_t default_params(void)
 
     return p;
 }
+
+EXTERN_C_END
 
 #endif /* LATTICE_PARAMS_H */

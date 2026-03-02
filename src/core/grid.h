@@ -10,9 +10,12 @@
 #ifndef LATTICE_GRID_H
 #define LATTICE_GRID_H
 
+#include "device.h"
 #include "fields.h"
 #include "params.h"
 #include <stddef.h>
+
+EXTERN_C_BEGIN
 
 #define GHOST_WIDTH 4
 
@@ -65,5 +68,7 @@ static inline grid_t *grid_alloc(int N, double L, rk_method_t method)
 
 /* Free all grid arrays */
 void grid_free(grid_t *g);
+
+EXTERN_C_END
 
 #endif /* LATTICE_GRID_H */

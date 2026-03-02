@@ -18,17 +18,37 @@
 /* Asymptotic values for each field.
  * Non-static: exposed in sommerfeld.h for packed GPU kernels.
  * Ref: GRChombo BoundaryConditions.cpp:593-598 */
-#ifdef LATTICE_GPU
-#pragma omp declare target
-#endif
 /* Array lookup: branchless, eliminates GPU warp divergence.
  * Fields with flat-space value 1: chi, h_11, h_22, h_33, lapse.
- * All others (K, A_ij, Theta, Gamma^i, shift, B^i, E^i, BM^i) → 0. */
+ * All others (K, A_ij, Theta, Gamma^i, shift, B^i, E^i, BM^i) → 0.
+ *
+ * C++ (hipcc) doesn't support C99 designated initializers, so we use
+ * positional initialization for C++ builds. Both produce the same array. */
+#ifdef __cplusplus
+static const double asym_values[NUM_FIELDS] = {
+    /* chi */ 1.0,
+    /* h11 */ 1.0, /* h12 */ 0.0, /* h13 */ 0.0,
+    /* h22 */ 1.0, /* h23 */ 0.0, /* h33 */ 1.0,
+    /* K   */ 0.0,
+    /* A11 */ 0.0, /* A12 */ 0.0, /* A13 */ 0.0,
+    /* A22 */ 0.0, /* A23 */ 0.0, /* A33 */ 0.0,
+    /* Theta */ 0.0,
+    /* Gamma1 */ 0.0, /* Gamma2 */ 0.0, /* Gamma3 */ 0.0,
+    /* lapse */ 1.0,
+    /* shift1 */ 0.0, /* shift2 */ 0.0, /* shift3 */ 0.0,
+    /* B1 */ 0.0, /* B2 */ 0.0, /* B3 */ 0.0,
+    /* E1 */ 0.0, /* E2 */ 0.0, /* E3 */ 0.0,
+    /* BM1 */ 0.0, /* BM2 */ 0.0, /* BM3 */ 0.0,
+};
+#else
 static const double asym_values[NUM_FIELDS] = {
     [FIELD_CHI]   = 1.0,
     [FIELD_H11]   = 1.0, [FIELD_H22] = 1.0, [FIELD_H33] = 1.0,
     [FIELD_LAPSE] = 1.0
 };
+#endif
+
+LATTICE_DEVICE
 double asymptotic_value(int field)
 {
     return asym_values[field];
@@ -51,6 +71,7 @@ double asymptotic_value(int field)
  * Ref: Fornberg, SIAM Review 40 (1998) — FD weight generation algorithm
  * Ref: GRChombo BoundaryConditions.cpp:617-649 (original 2nd-order)
  */
+LATTICE_DEVICE
 double boundary_d1(const double *f, int idx, int stride,
                    int lo_offset, int hi_offset, double dx)
 {
@@ -95,7 +116,4 @@ double boundary_d1(const double *f, int idx, int stride,
         return 0.5 * (f[idx + stride] - f[idx - stride]) / dx;
     }
 }
-#ifdef LATTICE_GPU
-#pragma omp end declare target
-#endif
 

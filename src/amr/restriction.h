@@ -18,7 +18,10 @@
 #ifndef LATTICE_RESTRICTION_H
 #define LATTICE_RESTRICTION_H
 
+#include "../core/device.h"
 #include "../core/grid.h"
+
+EXTERN_C_BEGIN
 
 /* Forward declaration for restrict_to_coarse_buf */
 struct block_s;
@@ -35,14 +38,8 @@ struct block_s;
  * Ref: Fornberg, SIAM Review 40 (1998) */
 #define RESTRICT_STENCIL 6
 
-#ifdef LATTICE_GPU
-#pragma omp declare target
-#endif
 extern const double restrict_w[RESTRICT_STENCIL];
 extern const double restrict_wkj[RESTRICT_STENCIL][RESTRICT_STENCIL];
-#ifdef LATTICE_GPU
-#pragma omp end declare target
-#endif
 
 /*
  * Restrict a single coarse cell from fine data.
@@ -84,5 +81,7 @@ void restrict_all(const grid_t *fine_g, grid_t *coarse_g);
  * Block-local operation: no cross-block memory access.
  * Ref: AthenaK coarse-buffer architecture */
 void restrict_to_coarse_buf(struct block_s *b);
+
+EXTERN_C_END
 
 #endif /* LATTICE_RESTRICTION_H */

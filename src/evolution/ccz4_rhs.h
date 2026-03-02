@@ -9,21 +9,21 @@
 #ifndef LATTICE_CCZ4_RHS_H
 #define LATTICE_CCZ4_RHS_H
 
+#include "../core/device.h"
 #include "../core/grid.h"
 #include "../core/params.h"
+
+EXTERN_C_BEGIN
 
 /* Compute the full CCZ4 RHS at a single grid point (i,j,k).
  * Includes: CCZ4 evolution, moving puncture gauge, KO dissipation.
  * Writes results into rhs arrays. */
-#ifdef LATTICE_GPU
-#pragma omp declare target
-#endif
+LATTICE_DEVICE
 void ccz4_rhs_point(double ** restrict rhs,
                     const double *const * restrict src,
                     const grid_t *g, const sim_params_t *p,
                     int i, int j, int k);
-#ifdef LATTICE_GPU
-#pragma omp end declare target
-#endif
+
+EXTERN_C_END
 
 #endif /* LATTICE_CCZ4_RHS_H */
