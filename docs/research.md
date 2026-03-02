@@ -9,14 +9,14 @@ math, simplest implementation path, estimated effort, and key references.
 
 | Item | Effort | Lines | Difficulty | Blocks | Competitive Edge |
 |------|--------|-------|------------|--------|-----------------|
-| **Psi4 extraction** | 3-5 days | ~580 | Medium | PHE, CCE | Table stakes — every NR code has this |
+| **Psi4 extraction** | Done | ~740 | Medium | PHE, CCE | Table stakes — every NR code has this |
 | **PHE** | 1-2 weeks | ~470 | Medium | — | **No public standalone PHE exists** — first-of-kind tool |
 | **CCE worldtube** | 2-3 weeks | ~930 | Medium | Needs HDF5 | Matches GR-Athena++, SpECTRE interop |
 | **HIP backend** | 1-2 weeks | ~900 | Medium | — | **AMD + NVIDIA from one source** — only AthenaK does this (via Kokkos) |
 | **Constraint-preserving BC** | 2-3 weeks | ~500 | Hard | — | Matches BAM; most CCZ4 codes lack this |
 | **Larger domain (AMR)** | 0 days | 0 | Trivial | — | Already possible, just use `--L 4000` |
 
-**Fast path to publishable waveforms:** Psi4 (5 days) + PHE (2 weeks) = ~3 weeks.
+**Fast path to publishable waveforms:** Psi4 (done) + PHE (2 weeks) = ~2 weeks.
 No external dependencies, pure C17.
 
 ### How Lattice Compares After Implementation
@@ -25,7 +25,7 @@ No external dependencies, pure C17.
 |------------|-------------------|-----------------|----------|---------|-------------|-----|
 | Spatial FD order | 6th | 6th | 4th | Spectral | 6th | 4th-8th |
 | Off-grid interpolation | 6th | 6th | 4th | Spectral | 4th | 4th |
-| Waveform extraction | None | Psi4 + PHE + CCE | Psi4 only | Full CCE | CCE | Psi4 + CCE |
+| Waveform extraction | Psi4 | Psi4 + PHE + CCE | Psi4 only | Full CCE | CCE | Psi4 + CCE |
 | GPU backend | OpenMP target | OpenMP + HIP | None | Charm++ | Kokkos | None |
 | AMD GPU support | No | **Yes (HIP)** | No | No | Yes (Kokkos) | No |
 | N-body (N>2) | Yes (32) | Yes (32) | No | No | No | Yes |
@@ -56,8 +56,8 @@ No external dependencies, pure C17.
 
 ## 1. Psi4 Extraction
 
-**Status:** Not implemented. Blocks PHE and CCE.
-**Effort:** 3-5 days, ~580 lines across `psi4.h` + `psi4.c`.
+**Status:** Implemented. `src/diagnostics/psi4.h` + `psi4.c` (~740 lines).
+15/15 tests pass. CLI: `--psi4`, `--psi4_every`, `--psi4_radius`, `--psi4_l_max`.
 **Dependencies:** None — reuses existing infrastructure heavily.
 
 ### 1.1 Core Math
@@ -280,10 +280,9 @@ CFL is modest: a 5000M run at N=401 takes ~25,000 steps — seconds on a laptop.
 
 ## 3. CCE Worldtube Output
 
-**Status:** Not implemented.
-**Effort:** 2-3 weeks, ~930 lines in `cce_worldtube.h` + `cce_worldtube.c`.
-**Dependencies:** Requires Psi4 infrastructure (shares interpolation). Requires
-HDF5 library (conditional: `make HDF5=on`).
+**Status:** Implemented. `src/diagnostics/cce_worldtube.h` + `cce_worldtube.c`
+(~430 lines). 41/41 tests pass. CLI: `--cce`, `--cce_every`, `--cce_radius`,
+`--cce_lmax`. Requires HDF5 library (conditional: `make HDF5=on`).
 
 ### 3.1 Overview
 
@@ -296,11 +295,14 @@ waveform accuracy.
 2. Run SpECTRE `PreprocessCceWorldtube` to convert to Bondi-Sachs modal
 3. Run SpECTRE CCE on the converted file
 
-### 3.2 Required Data (31 HDF5 Datasets)
+### 3.2 Required Data (49 HDF5 Datasets)
 
 | Category | Datasets | Count |
 |----------|----------|-------|
 | Spatial metric | `gxx.dat` ... `gzz.dat` | 6 |
+| d_x metric | `Dxgxx.dat` ... `Dxgzz.dat` | 6 |
+| d_y metric | `Dygxx.dat` ... `Dygzz.dat` | 6 |
+| d_z metric | `Dzgxx.dat` ... `Dzgzz.dat` | 6 |
 | Extrinsic curvature | `Kxx.dat` ... `Kzz.dat` | 6 |
 | Lapse + derivatives | `Lapse.dat`, `D{x,y,z}Lapse.dat` | 4 |
 | Shift + derivatives | `Shift{x,y,z}.dat`, `D{x,y,z}Shift{x,y,z}.dat` | 12 |
@@ -555,7 +557,7 @@ Not recommended unless needed for sub-dominant mode accuracy.
 ### Dependency Chain
 
 ```
-Psi4 (3-5 days)
+Psi4 (DONE)
   ├─→ PHE (1-2 weeks) ───→ production waveforms at scri+
   └─→ CCE worldtube (2-3 weeks) ───→ gold-standard via SpECTRE
 
@@ -569,7 +571,7 @@ CP-Sommerfeld (2-3 weeks) ─── independent, nice-to-have
 
 | # | Item | Effort | Why first? |
 |---|------|--------|------------|
-| 1 | **Psi4 extraction** | 3-5 days | Blocks everything else |
+| 1 | **Psi4 extraction** | Done | Blocks everything else |
 | 2 | **PHE** | 1-2 weeks | Fast path to publishable waveforms |
 | 3 | **HIP backend** | 1-2 weeks | Can run in parallel with PHE |
 | 4 | **Larger domain** | 0 days | Just use `--L 4000` |
@@ -578,7 +580,7 @@ CP-Sommerfeld (2-3 weeks) ─── independent, nice-to-have
 
 ### Fast Path to First Publishable Waveforms
 
-**Psi4 (5 days) + PHE (2 weeks) = ~3 weeks total.**
+**Psi4 (done) + PHE (2 weeks) = ~2 weeks remaining.**
 
 No HDF5, no external tools, pure C17. Produces waveforms at null infinity with
 < 0.05 rad phase accuracy — sufficient for current and next-gen detectors.

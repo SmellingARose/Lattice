@@ -172,7 +172,7 @@ work on AMR meshes.
 - **Default integrator:** Changed from CK45 to classic RK4 (`RK_CLASSIC`). Classic is
   faster (4 stages vs 5) but uses 25% more memory. All test allocations updated.
 - **Tests:** Flat spacetime, convergence (order 6.5), Bowen-York (29/29 + N-body),
-  HiSpID (26/26), AH finder (13/13), Maxwell (15/15), Psi4 (15/15), CCE (41/41),
+  HiSpID (26/26), AH finder (13/13), Maxwell (15/15), Psi4 (15/15), CCE (49/49),
   pack_evolve (8/8), amr_prolong (15/15). N-body smoke tests: 3-BH line, 5-BH pentagon.
   Total: 31 evolved fields (25 CCZ4 + 6 EM).
 
@@ -248,7 +248,7 @@ lattice/
 │   ├── test_ah_finder.c     # Apparent horizon finder tests (13/13)
 │   ├── test_maxwell.c       # Einstein-Maxwell tests (15/15)
 │   ├── test_psi4.c          # Psi4 gravitational wave extraction tests (15/15)
-│   ├── test_cce_worldtube.c # CCE worldtube HDF5 output tests (41/41, requires HDF5)
+│   ├── test_cce_worldtube.c # CCE worldtube HDF5 output tests (49/49, requires HDF5)
 │   ├── test_inspiral_convergence.c  # AMR binary inspiral convergence (3 resolutions)
 │   ├── test_gpu_debug.c       # GPU kernel isolation test (per-kernel sync barriers)
 │   └── convergence.sh          # 3-resolution convergence check

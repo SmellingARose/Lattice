@@ -3,6 +3,35 @@
 > **Note:** When adding/removing/renaming files or functions, also update
 > `docs/architecture.html` — the living map of the codebase structure.
 
+## 2026-03-02: CCE accuracy improvements
+
+Three changes based on review against research doc:
+
+1. **Default l_max bumped from 8 to 16.** Research doc specifies l_max=16
+   (17×33=561 angular points) as the production default. l_max=8 (9×17=153)
+   was too coarse for precessing/high-spin systems with significant power in
+   l=5+ modes. SpECTRE's PreprocessCceWorldtube uses `LMaxFactor: 3`, so
+   l_max=16 input → l_max=48 internal CCE resolution.
+
+2. **Research doc dataset count fixed: 31→49.** Was missing the 18 spatial
+   metric derivative datasets (Dx/Dy/Dz of gamma_ij). Implementation was
+   always correct at 49.
+
+3. **Schwarzschild derivative test added.** Extracts on Brill-Lindquist
+   single-puncture (M=1) at R=50 with dx=4. Compares all 49 extracted
+   quantities against analytical isotropic Schwarzschild:
+   - `gamma_ij = psi^4 delta_ij`, error = 4.7e-9
+   - `d_k gamma_ij = -2M psi^3 delta_ij x_k/r^3`, error = 7.0e-9
+   - `alpha = psi^{-2}`, error = 2.3e-9
+   - `d_k alpha = M psi^{-3} x_k/r^3`, error = 3.5e-9
+   - K_ij, shift, B^i all exactly zero (time-symmetric BL data)
+
+   This validates the conformal→physical chain rule with real gradients,
+   not just flat spacetime. Errors are ~O(dx^6/R^7) as expected from
+   6th-order Lagrange interpolation.
+
+Test count: 41→49 (8 new Schwarzschild assertions).
+
 ## 2026-03-01: CCE worldtube output for SpECTRE
 
 Added SpECTRE-compatible Cauchy-Characteristic Evolution (CCE) worldtube HDF5

@@ -5,10 +5,11 @@
  * Tests:
  *   1. Conformal-to-physical reconstruction (unit test)
  *   2. Flat spacetime extraction (full pipeline)
- *   3. HDF5 format validation (dataset names, shapes, Legend)
- *   4. Angular ordering (theta-varies-fastest)
- *   5. Dataset name completeness
- *   6. Multiple time rows
+ *   3. Schwarzschild derivatives (analytical BL comparison)
+ *   4. HDF5 format validation (dataset names, shapes, Legend)
+ *   5. Angular ordering (theta-varies-fastest)
+ *   6. Dataset name completeness
+ *   7. Multiple time rows
  */
 
 #include <stdio.h>
@@ -195,7 +196,164 @@ static void test_flat_extraction(void)
 }
 
 /* ================================================================
- * Test 3: HDF5 format validation
+ * Test 3: Schwarzschild derivatives
+ *
+ * Brill-Lindquist single puncture at origin with mass M=1:
+ *   psi = 1 + M/(2r),  chi = psi^{-4},  h_ij = delta_ij
+ *   gamma_ij = psi^4 * delta_ij,  K_ij = 0,  alpha = psi^{-2}
+ *
+ * Analytical derivatives at (x,y,z) on sphere of radius R:
+ *   d_k gamma_ij = -2M * psi^3 * delta_ij * x_k / R^3
+ *   d_k alpha    = M * psi^{-3} * x_k / R^3
+ *   d_k shift    = 0
+ * ================================================================ */
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
+static void test_schwarzschild_derivatives(void)
+{
+    printf("\n=== Test 3: Schwarzschild derivatives ===\n");
+
+    /* Domain L=256 gives [-128,128]. Extraction at R=50 fits well inside.
+     * N=64 gives dx=4 — smooth BL data at R=50 gives ~1e-8 interpolation error. */
+    double L = 256.0;
+    int N = 64;
+    double M_bh = 1.0;
+    double R_ext = 50.0;
+
+    mesh_t *m = mesh_create_ex(1, N, L, RK_CLASSIC, NUM_CCZ4_FIELDS);
+    double masses[1] = {M_bh};
+    double centers[1][3] = {{0, 0, 0}};
+    set_brill_lindquist(m->blocks[0]->grid, 1, masses, centers);
+
+    double center[3] = {0, 0, 0};
+    const char *fname = "build/test_cce_schwarz.h5";
+    int l_max = 4;  /* 5x9=45 points — enough for this test */
+    cce_ws_t *ws = cce_alloc(l_max, R_ext, center, fname);
+
+    cce_extract(ws, m, 0.0);
+
+    /* Analytical values at R_ext */
+    double psi = 1.0 + M_bh / (2.0 * R_ext);
+    double psi3 = psi * psi * psi;
+    double psi4 = psi3 * psi;
+    double psi_m2 = 1.0 / (psi * psi);
+    double psi_m3 = psi_m2 / psi;
+
+    int n_angular = ws->n_theta * ws->n_phi;
+    double *abuf = ws->angular_buf;
+
+    double max_gii_err = 0, max_gij_err = 0;
+    double max_K_err = 0, max_lapse_err = 0;
+    double max_dgamma_err = 0, max_dlapse_err = 0;
+    double max_shift_err = 0, max_dshift_err = 0;
+
+    for (int iph = 0; iph < ws->n_phi; iph++) {
+        double ph = ws->phi[iph];
+        double sp = sin(ph), cp = cos(ph);
+
+        for (int ith = 0; ith < ws->n_theta; ith++) {
+            int aidx = iph * ws->n_theta + ith;
+            double th = ws->theta[ith];
+            double st = sin(th), ct = cos(th);
+
+            /* Unit direction vector */
+            double nx = st * cp;
+            double ny = st * sp;
+            double nz = ct;
+            double n_hat[3] = {nx, ny, nz};
+
+            /* --- Metric: gamma_ij = psi^4 * delta_ij --- */
+            for (int d = 0; d < 6; d++) {
+                double val = abuf[(CCE_GXX + d) * n_angular + aidx];
+                int diag = (d == 0 || d == 3 || d == 5);
+                double expected = diag ? psi4 : 0.0;
+                double err = fabs(val - expected);
+                if (diag) {
+                    if (err > max_gii_err) max_gii_err = err;
+                } else {
+                    if (err > max_gij_err) max_gij_err = err;
+                }
+            }
+
+            /* --- K_ij = 0 (time-symmetric) --- */
+            for (int d = 0; d < 6; d++) {
+                double kval = abuf[(CCE_KXX + d) * n_angular + aidx];
+                if (fabs(kval) > max_K_err) max_K_err = fabs(kval);
+            }
+
+            /* --- Lapse: alpha = psi^{-2} --- */
+            double alpha_num = abuf[CCE_LAPSE * n_angular + aidx];
+            double err = fabs(alpha_num - psi_m2);
+            if (err > max_lapse_err) max_lapse_err = err;
+
+            /* --- d_k gamma_ij = -2M psi^3 delta_ij x_k / R^3 --- */
+            /* x_k = R * n_hat[k], so d_k gamma_ij = -2M psi^3 delta_ij n_hat[k] / R^2 */
+            double coeff_dg = -2.0 * M_bh * psi3 / (R_ext * R_ext);
+            for (int k = 0; k < 3; k++) {
+                for (int s = 0; s < 6; s++) {
+                    double dval = abuf[(CCE_DXGXX + k * 6 + s) * n_angular + aidx];
+                    int diag = (s == 0 || s == 3 || s == 5);
+                    double expected = diag ? coeff_dg * n_hat[k] : 0.0;
+                    double de = fabs(dval - expected);
+                    if (de > max_dgamma_err) max_dgamma_err = de;
+                }
+            }
+
+            /* --- d_k alpha = M psi^{-3} x_k / R^3 = M psi^{-3} n_hat[k] / R^2 --- */
+            double coeff_da = M_bh * psi_m3 / (R_ext * R_ext);
+            double dlapse[3] = {
+                abuf[CCE_DXLAPSE * n_angular + aidx],
+                abuf[CCE_DYLAPSE * n_angular + aidx],
+                abuf[CCE_DZLAPSE * n_angular + aidx]
+            };
+            for (int k = 0; k < 3; k++) {
+                double expected = coeff_da * n_hat[k];
+                double de = fabs(dlapse[k] - expected);
+                if (de > max_dlapse_err) max_dlapse_err = de;
+            }
+
+            /* --- Shift and shift derivatives = 0 --- */
+            for (int d = 0; d < 3; d++) {
+                double sval = abuf[(CCE_SHIFTX + d) * n_angular + aidx];
+                if (fabs(sval) > max_shift_err) max_shift_err = fabs(sval);
+            }
+            for (int d = CCE_DXSHIFTX; d <= CCE_DZSHIFTZ; d++) {
+                double dsval = abuf[d * n_angular + aidx];
+                if (fabs(dsval) > max_dshift_err) max_dshift_err = fabs(dsval);
+            }
+        }
+    }
+
+    printf("  psi(R=50) = %.10f\n", psi);
+    printf("  gamma_ii expected = %.10f\n", psi4);
+    printf("  max |g_ii - psi^4|    = %.2e\n", max_gii_err);
+    printf("  max |g_ij|            = %.2e\n", max_gij_err);
+    printf("  max |K_ij|            = %.2e\n", max_K_err);
+    printf("  max |alpha - psi^-2|  = %.2e\n", max_lapse_err);
+    printf("  max |d_k g_ij err|    = %.2e\n", max_dgamma_err);
+    printf("  max |d_k alpha err|   = %.2e\n", max_dlapse_err);
+    printf("  max |shift|           = %.2e\n", max_shift_err);
+    printf("  max |d_k shift|       = %.2e\n", max_dshift_err);
+
+    /* 6th-order interpolation at dx=4, R=50 should give ~1e-7 or better */
+    CHECK(max_gii_err < 1e-6, "gamma_ii matches psi^4 (Schwarzschild)");
+    CHECK(max_gij_err < 1e-6, "gamma_ij = 0 off-diagonal (conformal flat)");
+    CHECK(max_K_err < 1e-6, "K_ij = 0 (time-symmetric BL data)");
+    CHECK(max_lapse_err < 1e-6, "lapse matches psi^{-2} (Schwarzschild)");
+    CHECK(max_dgamma_err < 1e-6, "d_k gamma_ij matches analytical (chain rule)");
+    CHECK(max_dlapse_err < 1e-6, "d_k lapse matches analytical");
+    CHECK(max_shift_err < 1e-12, "shift = 0 (BL data)");
+    CHECK(max_dshift_err < 1e-6, "d_k shift ~ 0 (BL data)");
+
+    cce_free(ws);
+    mesh_free(m);
+}
+
+/* ================================================================
+ * Test 4 (was 3): HDF5 format validation
  *
  * Reopen the file from test 2 and verify:
  *   - All 49 datasets exist with correct names
@@ -206,7 +364,7 @@ static void test_flat_extraction(void)
 
 static void test_hdf5_format(void)
 {
-    printf("\n=== Test 3: HDF5 format validation ===\n");
+    printf("\n=== Test 4: HDF5 format validation ===\n");
 
     const char *fname = "build/test_cce_flat.h5";
     hid_t file = H5Fopen(fname, H5F_ACC_RDONLY, H5P_DEFAULT);
@@ -291,14 +449,14 @@ static void test_hdf5_format(void)
 }
 
 /* ================================================================
- * Test 4: Angular ordering (theta-varies-fastest)
+ * Test 5: Angular ordering (theta-varies-fastest)
  *
  * SpECTRE convention: column index = 1 + phi_j * n_theta + theta_i
  * ================================================================ */
 
 static void test_angular_ordering(void)
 {
-    printf("\n=== Test 4: Angular ordering ===\n");
+    printf("\n=== Test 5: Angular ordering ===\n");
 
     int l_max = 4;
     int n_theta = l_max + 1;   /* 5 */
@@ -329,14 +487,14 @@ static void test_angular_ordering(void)
 }
 
 /* ================================================================
- * Test 5: Dataset name completeness
+ * Test 6: Dataset name completeness
  *
  * Verify all 49 names match the SpECTRE specification exactly.
  * ================================================================ */
 
 static void test_dataset_names(void)
 {
-    printf("\n=== Test 5: Dataset name completeness ===\n");
+    printf("\n=== Test 6: Dataset name completeness ===\n");
 
     const char *expected[] = {
         "gxx.dat", "gxy.dat", "gxz.dat", "gyy.dat", "gyz.dat", "gzz.dat",
@@ -382,14 +540,14 @@ static void test_dataset_names(void)
 }
 
 /* ================================================================
- * Test 6: Multiple time rows
+ * Test 7: Multiple time rows
  *
  * Write 3 time steps, verify HDF5 has 3 rows with correct times.
  * ================================================================ */
 
 static void test_multiple_rows(void)
 {
-    printf("\n=== Test 6: Multiple time rows ===\n");
+    printf("\n=== Test 7: Multiple time rows ===\n");
 
     mesh_t *m = mesh_create_ex(1, 32, 128.0, RK_CLASSIC, NUM_CCZ4_FIELDS);
     set_flat_spacetime(m->blocks[0]->grid);
@@ -443,6 +601,7 @@ int main(void)
 
     test_conformal_to_physical();
     test_flat_extraction();
+    test_schwarzschild_derivatives();
     test_hdf5_format();
     test_angular_ordering();
     test_dataset_names();

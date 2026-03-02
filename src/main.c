@@ -104,7 +104,7 @@ static void print_usage(void)
     fprintf(stderr, "  --cce                  Enable CCE worldtube output\n");
     fprintf(stderr, "  --cce_every <int>      Extraction interval (default 1)\n");
     fprintf(stderr, "  --cce_radius <float>   Extraction radius (default 100)\n");
-    fprintf(stderr, "  --cce_lmax <int>       Angular resolution (default 8)\n");
+    fprintf(stderr, "  --cce_lmax <int>       Angular resolution (default 16)\n");
 #endif
 }
 
@@ -140,7 +140,7 @@ int main(int argc, char **argv)
     int cce_enabled = 0;
     int cce_every = 1;
     double cce_radius = 100.0;
-    int cce_lmax = 8;
+    int cce_lmax = 16;
 #endif
 
     /* Parse CLI args */
