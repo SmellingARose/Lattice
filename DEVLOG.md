@@ -3,6 +3,49 @@
 > **Note:** When adding/removing/renaming files or functions, also update
 > `docs/architecture.html` — the living map of the codebase structure.
 
+## 2026-03-01: CCE worldtube output for SpECTRE
+
+Added SpECTRE-compatible Cauchy-Characteristic Evolution (CCE) worldtube HDF5
+output. This is the production path to gauge-invariant gravitational wave strain
+`h` at future null infinity (scri+), complementing the existing Psi4 extraction
+which gives `r·Psi4 ≈ d²h/dt²` at finite radius.
+
+**Pipeline:** Lattice → `CceR####.h5` → SpECTRE `PreprocessCceWorldtube` →
+SpECTRE `CharacteristicExtract` → strain `h` at scri+.
+
+**New files:**
+- `src/diagnostics/cce_worldtube.h` — workspace struct, 49-dataset enum, API
+- `src/diagnostics/cce_worldtube.c` — GL grid, HDF5 creation, sphere interpolation,
+  conformal→physical ADM reconstruction, row writes (~350 lines)
+- `tests/test_cce_worldtube.c` — 41 tests: conformal→physical, flat spacetime,
+  HDF5 format, angular ordering, dataset names, multi-row
+
+**SpECTRE AdmMetricNodal format:** 49 datasets (gamma_ij, d_k gamma_ij, lapse,
+d_k lapse, shift, d_k shift, K_ij, AuxShift) on GL×uniform angular grid.
+Theta-varies-fastest ordering. Each dataset is extensible (chunked, unlimited
+rows). Column 0 = time, columns 1..N = angular data. Legend string attribute.
+
+**Conformal → physical reconstruction:**
+- `gamma_ij = h_ij / chi`
+- `K_ij = (A_ij + K/3 h_ij) / chi`
+- `d_k gamma_ij = d_k(h_ij)/chi - h_ij d_k(chi)/chi²`
+- Lapse/shift derivatives pass through directly
+
+**Implementation:** For each angular point on extraction sphere, interpolates 11
+fields with derivatives (`interp_field_deriv_at_block`: chi, h_ij, lapse, shift)
+and 10 fields values-only (`interp_field_at_block`: K, A_ij, B^i). Block-cached
+mesh lookup follows psi4_extract pattern. All 49 quantities written per time step.
+
+**Build:** `make HDF5=on` adds `-DLATTICE_HDF5` + pkg-config HDF5 flags. All CCE
+code is `#ifdef LATTICE_HDF5` guarded — zero impact on builds without HDF5.
+`make HDF5=on test-cce` runs the test suite.
+
+**CLI:** `--cce`, `--cce_every <int>`, `--cce_radius <float>`, `--cce_lmax <int>`.
+
+**Testing:** 41/41 tests pass. Flat spacetime: `|g_ii - 1| = 4.4e-16`,
+`|derivatives| = 1.8e-16` (machine precision). HDF5 format validated
+(49 datasets, correct shapes, Legend attributes, theta-varies-fastest ordering).
+
 ## 2026-03-01: Upgrade off-grid interpolation to 6th order
 
 Replaced 4th-order (5-point) Lagrange interpolation with 6th-order (7-point)
@@ -1962,3 +2005,64 @@ Convergence order 5.4 (unchanged). EM fields zero by default, zero overhead when
 
 Step 3: XCTS + Superposed Kerr-Schild + Fill-the-Holes for chi ≤ 0.9997 initial data.
 Uses AH finder from Step 1 for excision boundary.
+
+---
+
+## Psi4 Gravitational Wave Extraction
+
+Implemented Newman-Penrose Psi4 scalar for outgoing gravitational radiation.
+
+### Physics
+
+Psi4 = C_{abcd} n^a mbar^b n^c mbar^d, computed via 3+1 decomposition:
+- Electric Weyl: E_ij = R_ij + (K - Theta) K_ij - K_ik K^k_j (trace-free)
+- Magnetic Weyl: B_ij = epsilon_{(i}^{kl} D_k K_{j)l} (trace-free)
+- Projection: Re(Psi4) = (E_vv - E_ww)/2 + B_vw
+              Im(Psi4) = (B_vv - B_ww)/2 - E_vw
+- Tetrad: Gram-Schmidt orthonormalization of {r,theta,phi} against gamma_ij
+
+**CCZ4 correction:** E_ij uses `(K - Theta)`, not plain `K`. The CCZ4 evolved
+variable K contains a Theta contribution; the Gauss-Codazzi relation requires
+`(K - Theta)` for the physical trace. This is NOT the `(K - 2*Theta)` that
+appears in the CCZ4 evolution equations. GRChombo Weyl4.impl.hpp has an
+explicit comment about this distinction.
+
+Ref: B&S Eqs. (8.53)-(8.55), (3.30); GRChombo Weyl4.impl.hpp
+
+### Implementation
+
+- `src/diagnostics/psi4.h` (~80 lines) — workspace struct, public API
+- `src/diagnostics/psi4.c` (~740 lines) — full pipeline:
+  - Gauss-Legendre quadrature (Newton iteration on Legendre roots)
+  - Spin-weighted spherical harmonics _{-2}Y_{lm} via Wigner d-matrix
+  - Psi4 kernel: FD derivatives, physical Ricci, physical Christoffel (B&S 3.30),
+    covariant derivative of K_ij, Electric + Magnetic Weyl, Gram-Schmidt tetrad
+  - Block-aware AMR sphere extraction (mesh_find_block_at with cache)
+  - Mode decomposition: GL × trapezoidal quadrature
+  - CSV output (t, l, m, Re, Im, |rPsi4|, phase)
+
+CLI: `--psi4`, `--psi4_every N`, `--psi4_radius R`, `--psi4_l_max L`,
+     `--psi4_n_theta N`, `--psi4_n_phi N`
+
+### Test results (15/15 PASS)
+
+- GL quadrature: exact for x^0, x^2, x^4, x^30 (n=16)
+- _{-2}Y_{22}, _{-2}Y_{20} normalization = 1 (to 1e-8)
+- _{-2}Y_{22} orthogonal to _{-2}Y_{21} (to 1e-12)
+- Mode round-trip: inject _{-2}Y_{22}, recover (2,2)=1.0, others < 1e-15
+- Flat spacetime: |Psi4| = 1.3e-15 (machine epsilon)
+- Schwarzschild: |Psi4| = 4.2e-8 (r=4M), 7.8e-11 (r=8M), 1.4e-12 (r=12M)
+  — pure FD truncation error, consistent with 6th-order at dx=0.5
+- CSV output: header + data lines written correctly
+
+### Reused infrastructure
+
+compute_inverse_sym, compute_christoffel (tensor_utils.h), fd_d1/d2/d2_mixed
+(finite_diff.h), mesh_find_block_at (mesh.h), Physical Christoffel pattern
+(ah_finder.c), Levi-Civita (same as maxwell_rhs.c).
+
+### What's next
+
+PHE (Perturbative Hyperboloidal Extraction) — post-processing tool that
+propagates Psi4 modes to null infinity via RWZ on hyperboloidal slices.
+~470 lines, pure C17, no external dependencies. Unblocked by Psi4.

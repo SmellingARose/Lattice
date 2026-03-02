@@ -18,6 +18,10 @@
 #include "numerics/rk4.h"
 #include "diagnostics/constraints.h"
 #include "diagnostics/ah_finder.h"
+#include "diagnostics/psi4.h"
+#ifdef LATTICE_HDF5
+#include "diagnostics/cce_worldtube.h"
+#endif
 #include "amr/mesh.h"
 #include "amr/refine.h"
 #include "backend/backend.h"
@@ -88,6 +92,20 @@ static void print_usage(void)
     fprintf(stderr, "  --ah_n_phi <int>       AH azimuthal resolution (default 32)\n");
     fprintf(stderr, "  --ah_tol <float>       AH convergence tolerance (default 1e-6)\n");
     fprintf(stderr, "  --ah_max_iter <int>    AH max iterations (default 500)\n");
+    fprintf(stderr, "\nPsi4 wave extraction:\n");
+    fprintf(stderr, "  --psi4                 Enable Psi4 extraction\n");
+    fprintf(stderr, "  --psi4_every <int>     Extraction interval (default 10)\n");
+    fprintf(stderr, "  --psi4_radius <float>  Extraction radius (default 50)\n");
+    fprintf(stderr, "  --psi4_l_max <int>     Max l for modes (default 4)\n");
+    fprintf(stderr, "  --psi4_n_theta <int>   Polar resolution (default 32)\n");
+    fprintf(stderr, "  --psi4_n_phi <int>     Azimuthal resolution (default 64)\n");
+#ifdef LATTICE_HDF5
+    fprintf(stderr, "\nCCE worldtube output (requires HDF5):\n");
+    fprintf(stderr, "  --cce                  Enable CCE worldtube output\n");
+    fprintf(stderr, "  --cce_every <int>      Extraction interval (default 1)\n");
+    fprintf(stderr, "  --cce_radius <float>   Extraction radius (default 100)\n");
+    fprintf(stderr, "  --cce_lmax <int>       Angular resolution (default 8)\n");
+#endif
 }
 
 int main(int argc, char **argv)
@@ -108,6 +126,22 @@ int main(int argc, char **argv)
     int ah_n_phi = 32;
     double ah_tol = 1.0e-6;
     int ah_max_iter = 500;
+
+    /* Psi4 extraction options */
+    int psi4_enabled = 0;
+    int psi4_every = 10;
+    double psi4_radius = 50.0;
+    int psi4_l_max = 4;
+    int psi4_n_theta = 32;
+    int psi4_n_phi = 64;
+
+#ifdef LATTICE_HDF5
+    /* CCE worldtube output options */
+    int cce_enabled = 0;
+    int cce_every = 1;
+    double cce_radius = 100.0;
+    int cce_lmax = 8;
+#endif
 
     /* Parse CLI args */
     for (int a = 1; a < argc; a++) {
@@ -253,6 +287,30 @@ int main(int argc, char **argv)
             ah_tol = atof(argv[++a]);
         } else if (strcmp(argv[a], "--ah_max_iter") == 0 && a + 1 < argc) {
             ah_max_iter = atoi(argv[++a]);
+        /* Psi4 wave extraction */
+        } else if (strcmp(argv[a], "--psi4") == 0) {
+            psi4_enabled = 1;
+        } else if (strcmp(argv[a], "--psi4_every") == 0 && a + 1 < argc) {
+            psi4_every = atoi(argv[++a]);
+        } else if (strcmp(argv[a], "--psi4_radius") == 0 && a + 1 < argc) {
+            psi4_radius = atof(argv[++a]);
+        } else if (strcmp(argv[a], "--psi4_l_max") == 0 && a + 1 < argc) {
+            psi4_l_max = atoi(argv[++a]);
+        } else if (strcmp(argv[a], "--psi4_n_theta") == 0 && a + 1 < argc) {
+            psi4_n_theta = atoi(argv[++a]);
+        } else if (strcmp(argv[a], "--psi4_n_phi") == 0 && a + 1 < argc) {
+            psi4_n_phi = atoi(argv[++a]);
+#ifdef LATTICE_HDF5
+        /* CCE worldtube output */
+        } else if (strcmp(argv[a], "--cce") == 0) {
+            cce_enabled = 1;
+        } else if (strcmp(argv[a], "--cce_every") == 0 && a + 1 < argc) {
+            cce_every = atoi(argv[++a]);
+        } else if (strcmp(argv[a], "--cce_radius") == 0 && a + 1 < argc) {
+            cce_radius = atof(argv[++a]);
+        } else if (strcmp(argv[a], "--cce_lmax") == 0 && a + 1 < argc) {
+            cce_lmax = atoi(argv[++a]);
+#endif
         /* Initial data */
         } else if (strcmp(argv[a], "--hispid") == 0) {
             set_hispid_override(1);
@@ -328,6 +386,30 @@ int main(int argc, char **argv)
                    ah_every, r0);
         }
 
+        /* Psi4 extraction setup (AMR path) */
+        psi4_workspace_t *psi4_ws = NULL;
+        if (psi4_enabled) {
+            double psi4_center[3] = {0, 0, 0};
+            psi4_ws = psi4_alloc(psi4_n_theta, psi4_n_phi, psi4_l_max,
+                                  psi4_radius, psi4_center);
+            printf("  Psi4: enabled, every %d steps, r=%.1f, l_max=%d\n",
+                   psi4_every, psi4_radius, psi4_l_max);
+        }
+
+#ifdef LATTICE_HDF5
+        /* CCE worldtube setup (AMR path) */
+        cce_ws_t *cce_ws = NULL;
+        if (cce_enabled) {
+            double cce_center[3] = {0, 0, 0};
+            char cce_fname[64];
+            snprintf(cce_fname, sizeof(cce_fname),
+                     "build/CceR%04d.h5", (int)cce_radius);
+            cce_ws = cce_alloc(cce_lmax, cce_radius, cce_center, cce_fname);
+            printf("  CCE: enabled, every %d steps, r=%.0f, l_max=%d → %s\n",
+                   cce_every, cce_radius, cce_lmax, cce_fname);
+        }
+#endif
+
         /* Evolution loop.
          * p.time tracks the simulation time for subcycling's temporal
          * interpolation (Berger-Oliger). dt is the coarsest-level step. */
@@ -358,8 +440,29 @@ int main(int argc, char **argv)
                            ahr.mean_radius);
                 }
             }
+
+            /* Psi4 extraction (AMR path) */
+            if (psi4_ws && psi4_every > 0 && step % psi4_every == 0) {
+                psi4_extract(psi4_ws, m);
+                psi4_write_modes(psi4_ws, p.time, "build/psi4_modes.csv");
+                int mi_22 = 4 + 2 + 2 - 4; /* (2,2) mode index */
+                double re22 = psi4_ws->mode_re[mi_22];
+                double im22 = psi4_ws->mode_im[mi_22];
+                printf("  Psi4 step %5d: r*Psi4(2,2) = %.6e + %.6ei\n",
+                       step, re22, im22);
+            }
+
+#ifdef LATTICE_HDF5
+            /* CCE worldtube extraction (AMR path) */
+            if (cce_ws && cce_every > 0 && step % cce_every == 0)
+                cce_extract(cce_ws, m, p.time);
+#endif
         }
 
+#ifdef LATTICE_HDF5
+        cce_free(cce_ws);
+#endif
+        psi4_free(psi4_ws);
         ah_free(ah_ws);
         mesh_free(m);
     } else {
@@ -408,6 +511,30 @@ int main(int argc, char **argv)
                    ah_every, r0);
         }
 
+        /* Psi4 extraction setup (single-grid path) */
+        psi4_workspace_t *psi4_ws = NULL;
+        if (psi4_enabled) {
+            double psi4_center[3] = {0, 0, 0};
+            psi4_ws = psi4_alloc(psi4_n_theta, psi4_n_phi, psi4_l_max,
+                                  psi4_radius, psi4_center);
+            printf("  Psi4: enabled, every %d steps, r=%.1f, l_max=%d\n",
+                   psi4_every, psi4_radius, psi4_l_max);
+        }
+
+#ifdef LATTICE_HDF5
+        /* CCE worldtube setup (single-grid path) */
+        cce_ws_t *cce_ws = NULL;
+        if (cce_enabled) {
+            double cce_center[3] = {0, 0, 0};
+            char cce_fname[64];
+            snprintf(cce_fname, sizeof(cce_fname),
+                     "build/CceR%04d.h5", (int)cce_radius);
+            cce_ws = cce_alloc(cce_lmax, cce_radius, cce_center, cce_fname);
+            printf("  CCE: enabled, every %d steps, r=%.0f, l_max=%d → %s\n",
+                   cce_every, cce_radius, cce_lmax, cce_fname);
+        }
+#endif
+
         /* Time evolution */
         p.time = 0.0;
         for (int step = 1; step <= p.num_steps; step++) {
@@ -434,8 +561,29 @@ int main(int argc, char **argv)
                            ahr.mean_radius);
                 }
             }
+
+            /* Psi4 extraction (single-grid path) */
+            if (psi4_ws && psi4_every > 0 && step % psi4_every == 0) {
+                psi4_extract(psi4_ws, m);
+                psi4_write_modes(psi4_ws, p.time, "build/psi4_modes.csv");
+                int mi_22 = 4 + 2 + 2 - 4;
+                double re22 = psi4_ws->mode_re[mi_22];
+                double im22 = psi4_ws->mode_im[mi_22];
+                printf("  Psi4 step %5d: r*Psi4(2,2) = %.6e + %.6ei\n",
+                       step, re22, im22);
+            }
+
+#ifdef LATTICE_HDF5
+            /* CCE worldtube extraction (single-grid path) */
+            if (cce_ws && cce_every > 0 && step % cce_every == 0)
+                cce_extract(cce_ws, m, p.time);
+#endif
         }
 
+#ifdef LATTICE_HDF5
+        cce_free(cce_ws);
+#endif
+        psi4_free(psi4_ws);
         ah_free(ah_ws);
         mesh_free(m);
     }

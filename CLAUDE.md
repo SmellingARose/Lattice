@@ -146,6 +146,14 @@ work on AMR meshes.
 - **Einstein-Maxwell:** 6 new evolved fields (E^i, B^i), conformal Maxwell evolution with constraint damping, EM stress-energy coupling to CCZ4 (gated by `--em` flag), charged puncture initial data via `--puncture M,x,y,z,Px,Py,Pz,Sx,Sy,Sz,Q`.
 - **Spin:** Bowen-York spinning punctures + HiSpID high-spin initial data (quasi-isotropic Kerr conformal metric, coupled 4-field relaxation).
 - **Apparent horizons:** Hyperbolic flow method (BHaHAHA-inspired) with 6th-order off-grid interpolation, mass/spin/area extraction, `--ah` CLI flag. Works on both single-grid and AMR meshes.
+- **Psi4 extraction:** Newman-Penrose Psi4 via 3+1 Weyl decomposition (Electric + Magnetic Weyl tensors), Gram-Schmidt tetrad, spin-weighted spherical harmonic decomposition via Wigner d-matrix, Gauss-Legendre × trapezoidal quadrature, block-aware AMR extraction. CLI: `--psi4`, `--psi4_every`, `--psi4_radius`, `--psi4_l_max`, `--psi4_n_theta`, `--psi4_n_phi`. CSV mode output.
+- **CCE worldtube output:** SpECTRE-compatible AdmMetricNodal HDF5 format for
+  Cauchy-Characteristic Evolution. Interpolates conformal CCZ4 fields on extraction
+  sphere, reconstructs physical ADM quantities (gamma_ij, K_ij, lapse, shift + all
+  spatial derivatives), writes 49 datasets in GL×uniform angular grid. Pipeline:
+  Lattice → `CceR####.h5` → SpECTRE `PreprocessCceWorldtube` → gauge-invariant
+  strain at scri+. Optional dependency on libhdf5 (`make HDF5=on`). CLI: `--cce`,
+  `--cce_every`, `--cce_radius`, `--cce_lmax`.
 - **AMR:** Block-structured Berger-Oliger with subcycling, Morton-ordered mesh, 6th-order prolongation/restriction, multi-level ghost exchange. AMR-aware 1D output slices and AH finder.
 - **Solve on evolution mesh:** AMR initial data constraint solver operates directly
   on evolution blocks (`set_bowen_york_mesh()`), eliminating interpolation error
@@ -164,8 +172,8 @@ work on AMR meshes.
 - **Default integrator:** Changed from CK45 to classic RK4 (`RK_CLASSIC`). Classic is
   faster (4 stages vs 5) but uses 25% more memory. All test allocations updated.
 - **Tests:** Flat spacetime, convergence (order 6.5), Bowen-York (29/29 + N-body),
-  HiSpID (26/26), AH finder (13/13), Maxwell (15/15), pack_evolve (8/8),
-  amr_prolong (15/15). N-body smoke tests: 3-BH line, 5-BH pentagon.
+  HiSpID (26/26), AH finder (13/13), Maxwell (15/15), Psi4 (15/15), CCE (41/41),
+  pack_evolve (8/8), amr_prolong (15/15). N-body smoke tests: 3-BH line, 5-BH pentagon.
   Total: 31 evolved fields (25 CCZ4 + 6 EM).
 
 Update as milestones are reached.
@@ -207,7 +215,8 @@ lattice/
 │   ├── diagnostics/
 │   │   ├── constraints.c       # Hamiltonian + momentum constraints
 │   │   ├── ah_finder.h/c       # Apparent horizon finder (hyperbolic flow)
-│   │   └── psi4.c              # Weyl4 scalar extraction
+│   │   ├── psi4.h/c            # Psi4 gravitational wave extraction
+│   │   └── cce_worldtube.h/c   # CCE worldtube HDF5 output (optional, HDF5=on)
 │   ├── boundary/
 │   │   └── sommerfeld.c        # radiative BCs (+block-aware variant)
 │   ├── amr/
@@ -238,6 +247,8 @@ lattice/
 │   ├── test_hispid.c        # HiSpID high-spin initial data (QI Kerr + coupled solver)
 │   ├── test_ah_finder.c     # Apparent horizon finder tests (13/13)
 │   ├── test_maxwell.c       # Einstein-Maxwell tests (15/15)
+│   ├── test_psi4.c          # Psi4 gravitational wave extraction tests (15/15)
+│   ├── test_cce_worldtube.c # CCE worldtube HDF5 output tests (41/41, requires HDF5)
 │   ├── test_inspiral_convergence.c  # AMR binary inspiral convergence (3 resolutions)
 │   ├── test_gpu_debug.c       # GPU kernel isolation test (per-kernel sync barriers)
 │   └── convergence.sh          # 3-resolution convergence check
@@ -267,17 +278,21 @@ make test-bowen-york   # Bowen-York initial data (A_ij, solver, evolution)
 make test-hispid       # HiSpID high-spin initial data (QI Kerr + coupled solver)
 make test-ah           # Apparent horizon finder (interpolation, Schwarzschild, diagnostics)
 make test-maxwell      # Einstein-Maxwell (flat EM, plane wave, charged BH, constraints)
+make test-psi4         # Psi4 extraction (GL quadrature, harmonics, modes, flat, Schwarzschild)
+make HDF5=on test-cce  # CCE worldtube HDF5 output (requires libhdf5-dev)
 make test-inspiral-convergence  # AMR binary inspiral convergence (long run, ~hours)
 make test-gpu-debug    # GPU kernel isolation test (requires BACKEND=gpu)
 make clean
 ```
 
 Backend flag: `BACKEND=cpu|gpu`. Default is `cpu` (OpenMP threads).
+HDF5 flag: `HDF5=on` enables CCE worldtube output (requires `libhdf5-dev` + `pkg-config`).
 Time integrator: `--rk classic|ck45`. Default is `classic` (standard 4-stage
 RK4, 4 memory blocks). Use `--rk ck45` for Carpenter-Kennedy 2N low-storage
 (5 stages, 3 memory blocks, 25% less memory).
 Compiler: `clang` on macOS (CPU only), `gcc-14+` on Linux (CPU + GPU).
-No external dependencies beyond standard C and libomp.
+No external dependencies beyond standard C and libomp. Optional: `libhdf5-dev`
+for CCE worldtube output (`make HDF5=on`).
 Debug builds enable NaN/Inf checking — any floating-point trap is a bug.
 
 ### GPU backend requirements

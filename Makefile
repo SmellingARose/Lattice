@@ -14,6 +14,7 @@
 BACKEND ?= cpu
 FD_ORDER ?= 6
 EM ?= off
+HDF5 ?= off
 
 # Platform detection: macOS vs Linux
 UNAME := $(shell uname -s)
@@ -28,7 +29,7 @@ CORE_SRC    = src/core/grid.c
 EVOLUTION_SRC = src/evolution/ccz4_rhs.c src/evolution/dissipation.c src/evolution/maxwell_rhs.c
 NUMERICS_SRC  = src/numerics/rk4.c
 INITIAL_SRC   = src/initial_data/puncture.c src/initial_data/bowen_york.c src/initial_data/relaxation.c src/initial_data/relaxation_amr.c src/initial_data/kerr_quasi_isotropic.c
-DIAG_SRC      = src/diagnostics/constraints.c src/diagnostics/ah_finder.c
+DIAG_SRC      = src/diagnostics/constraints.c src/diagnostics/ah_finder.c src/diagnostics/psi4.c
 BOUNDARY_SRC  = src/boundary/sommerfeld.c
 IO_SRC        = src/io/output.c
 AMR_SRC       = src/amr/block.c src/amr/mesh.c src/amr/meshblock_pack.c src/amr/ghost_exchange.c \
@@ -73,6 +74,18 @@ endif
 ALL_SRC = $(CORE_SRC) $(EVOLUTION_SRC) $(NUMERICS_SRC) $(INITIAL_SRC) \
           $(DIAG_SRC) $(BOUNDARY_SRC) $(IO_SRC) $(AMR_SRC) $(BACKEND_SRC)
 
+# HDF5 support (optional, for CCE worldtube output).
+# make HDF5=on  → adds -DLATTICE_HDF5, links libhdf5, compiles cce_worldtube.c.
+# make HDF5=off → CCE code excluded via #ifdef, zero impact on build.
+ifeq ($(HDF5),on)
+    HDF5_FLAGS = -DLATTICE_HDF5 $(shell pkg-config --cflags hdf5)
+    HDF5_LIBS = $(shell pkg-config --libs hdf5)
+    ALL_SRC += src/diagnostics/cce_worldtube.c
+else
+    HDF5_FLAGS =
+    HDF5_LIBS =
+endif
+
 # EM compile-time dispatch: EM=on adds -DLATTICE_EM_ENABLED.
 # When off (default), COMPILED_NUM_FIELDS=25 lets the compiler eliminate EM
 # field iterations from hot loops. When on, COMPILED_NUM_FIELDS=31.
@@ -84,7 +97,7 @@ endif
 
 # Compiler flags
 INCLUDES = -I src
-CFLAGS_BASE = -std=c17 -Wall -Wextra -Werror -D_GNU_SOURCE -Wno-unused-but-set-variable -DFD_ORDER=$(FD_ORDER) $(EM_FLAGS) $(INCLUDES) $(BACKEND_FLAGS)
+CFLAGS_BASE = -std=c17 -Wall -Wextra -Werror -D_GNU_SOURCE -Wno-unused-but-set-variable -DFD_ORDER=$(FD_ORDER) $(EM_FLAGS) $(HDF5_FLAGS) $(INCLUDES) $(BACKEND_FLAGS)
 HOST_OPT ?= -O3
 ifeq ($(BACKEND),gpu)
     HOST_OPT = $(GPU_OPT)
@@ -92,13 +105,13 @@ endif
 CFLAGS_OPT  = $(CFLAGS_BASE) $(HOST_OPT) -ffast-math -march=native $(LTO_FLAGS)
 CFLAGS_DBG  = $(CFLAGS_BASE) -O0 -g -fsanitize=address,undefined -DDEBUG
 
-LDFLAGS = $(BACKEND_LIBS) -lm $(LTO_FLAGS)
+LDFLAGS = $(BACKEND_LIBS) $(HDF5_LIBS) -lm $(LTO_FLAGS)
 
 # Build directory
 BUILD = build
 
 # Targets
-.PHONY: all debug test test-single-bh test-convergence test-constraints test-head-on test-amr-mesh test-amr-ghost test-amr-prolong test-amr-refine test-amr-evolve test-pack-evolve test-subcycle test-bowen-york test-hispid test-maxwell test-ah test-inspiral-convergence test-relaxation-amr clean
+.PHONY: all debug test test-single-bh test-convergence test-constraints test-head-on test-amr-mesh test-amr-ghost test-amr-prolong test-amr-refine test-amr-evolve test-pack-evolve test-subcycle test-bowen-york test-hispid test-maxwell test-ah test-psi4 test-cce test-inspiral-convergence test-relaxation-amr clean
 
 all: $(BUILD)/lattice
 
@@ -253,6 +266,30 @@ $(BUILD)/test_ah_finder: tests/test_ah_finder.c $(ALL_SRC)
 test-ah: $(BUILD)/test_ah_finder
 	@echo "=== Running AH finder test ==="
 	$(BUILD)/test_ah_finder
+
+$(BUILD)/test_psi4: tests/test_psi4.c $(ALL_SRC)
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS_OPT) -o $@ tests/test_psi4.c $(ALL_SRC) $(LDFLAGS)
+
+test-psi4: $(BUILD)/test_psi4
+	@echo "=== Running Psi4 test ==="
+	$(BUILD)/test_psi4
+
+# CCE test: always compiled with HDF5 flags. Use ALL_SRC_BASE (without
+# conditional cce_worldtube.c) plus the explicit file to avoid duplicates
+# regardless of whether HDF5=on was passed to make.
+CCE_HDF5_FLAGS = -DLATTICE_HDF5 $(shell pkg-config --cflags hdf5)
+CCE_HDF5_LIBS = $(shell pkg-config --libs hdf5)
+ALL_SRC_BASE = $(CORE_SRC) $(EVOLUTION_SRC) $(NUMERICS_SRC) $(INITIAL_SRC) \
+               $(DIAG_SRC) $(BOUNDARY_SRC) $(IO_SRC) $(AMR_SRC) $(BACKEND_SRC)
+
+$(BUILD)/test_cce_worldtube: tests/test_cce_worldtube.c $(ALL_SRC_BASE) src/diagnostics/cce_worldtube.c
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS_OPT) $(CCE_HDF5_FLAGS) -o $@ tests/test_cce_worldtube.c $(ALL_SRC_BASE) src/diagnostics/cce_worldtube.c $(LDFLAGS) $(CCE_HDF5_LIBS)
+
+test-cce: $(BUILD)/test_cce_worldtube
+	@echo "=== Running CCE worldtube test ==="
+	$(BUILD)/test_cce_worldtube
 
 $(BUILD)/test_inspiral_convergence: tests/test_inspiral_convergence.c $(ALL_SRC)
 	@mkdir -p $(BUILD)
