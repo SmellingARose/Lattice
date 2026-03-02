@@ -192,7 +192,7 @@ work on AMR meshes.
 - **Solve on evolution mesh:** AMR initial data constraint solver operates directly
   on evolution blocks (`set_bowen_york_mesh()`), eliminating interpolation error
   and ensuring exact discrete operator consistency. Solver reuses idle evolution
-  arrays at t=0 (22 of 100 slots). Refinement depth defaults to `--max-level` so
+  arrays at t=0 (22 of 100 slots). Refinement depth defaults to `--max_level` so
   initial data and evolution use the same AMR depth (override with `--amr-levels`).
   Each level halves dx near punctures. Measured 218,000x better near-field constraint
   quality vs the old copy approach on refined meshes.
@@ -234,6 +234,7 @@ lattice/
 ├── CLAUDE.md
 ├── DEVLOG.md
 ├── Makefile
+├── setup_rocm.sh           # GPU setup script (CUDA + ROCm + env vars)
 ├── grchombo-ref/           # read-only reference (not compiled)
 ├── src/
 │   ├── core/
@@ -349,10 +350,14 @@ HDF5 flag: `HDF5=on` enables CCE worldtube output (requires `libhdf5-dev` + `pkg
 Time integrator: `--rk classic|ck45`. Default is `classic` (standard 4-stage
 RK4, 4 memory blocks). Use `--rk ck45` for Carpenter-Kennedy 2N low-storage
 (5 stages, 3 memory blocks, 25% less memory).
-Compiler: `clang` on macOS (CPU only), `gcc` on Linux (CPU), `hipcc` (GPU).
-No external dependencies beyond standard C and libomp. GPU requires ROCm.
+Compiler: `clang` on macOS (CPU only), `gcc` on Linux (CPU), `nvcc` (NVIDIA GPU),
+`hipcc` (AMD GPU). The Makefile auto-detects the platform.
+No external dependencies beyond standard C and libomp. GPU requires ROCm HIP
+headers (for the portable HIP API). NVIDIA builds also require `nvcc` (CUDA toolkit).
 Optional: `libhdf5-dev` for CCE worldtube output (`make HDF5=on`).
 Debug builds enable NaN/Inf checking — any floating-point trap is a bug.
+Setup helper: `setup_rocm.sh` automates GPU dependency installation (CUDA toolkit,
+ROCm HIP headers, environment variables) on Ubuntu with NVIDIA or AMD GPUs.
 
 ### GPU backend requirements
 
@@ -361,18 +366,34 @@ Physics kernels are pure C with `LATTICE_DEVICE` annotations — the same code
 compiles for both CPU and GPU. Only `src/backend/backend_hip.cpp` is C++.
 
 **Requirements:**
-- ROCm (AMD GPUs) or HIP CUDA backend (NVIDIA GPUs)
-- `hipcc` compiler in PATH
+- ROCm HIP headers (`/opt/rocm/include/hip/hip_runtime.h`) for the portable API
+- AMD GPUs: `hipcc` compiler (native HIP, `HIP_PLATFORM=amd` default)
+- NVIDIA GPUs: `nvcc` compiler (CUDA toolkit). The Makefile sets `HIPCC := nvcc`
+  and uses `-x cu` to compile device code. HIP API calls (hipMalloc, hipMemcpy,
+  etc.) are thin wrappers around CUDA, provided by the ROCm HIP headers.
 - HPC-class GPU with 1:2 FP64:FP32 ratio (MI250X, MI300X, V100, A100, H100).
   Consumer GPUs (1:32 ratio) have negligible FP64 throughput.
 
 **Two-phase compilation:** Host-only C files compiled with `gcc`, device-callable
-C files and `backend_hip.cpp` compiled with `hipcc`. The Makefile handles this
-automatically. Stack size set to 16 KB per thread via `hipDeviceSetLimit()` in
-`backend_init()` (CCZ4 RHS kernel uses ~5.3 KB stack per thread).
+C files and `backend_hip.cpp` compiled with the device compiler (`nvcc` on NVIDIA,
+`hipcc` on AMD). The Makefile auto-detects the platform via `HIP_PLATFORM`.
+Stack size set to 16 KB per thread via `hipDeviceSetLimit()` in `backend_init()`
+(CCZ4 RHS kernel uses ~5.3 KB stack per thread).
+
+**`device.h` portability:** `LATTICE_DEVICE` expands to `__host__ __device__`
+only when compiled by hipcc/nvcc (detected via `__HIPCC__` or `__cplusplus`
+with `LATTICE_HIP` defined). Host-only C files never see HIP headers.
+`LATTICE_DEVICE` is also required on `static const` arrays at file scope
+(e.g., `h_idx`, `A_idx`, `levi_civita`, `asym_values`) because `nvcc` does
+not auto-promote static const arrays to device-visible — without the annotation,
+device code gets zeroed-out values.
 
 ```bash
-# Example: GPU build
+# AMD GPU build (hipcc native)
+make BACKEND=gpu
+
+# NVIDIA GPU build (nvcc + HIP headers)
+export HIP_PLATFORM=nvidia CUDA_PATH=/usr
 make BACKEND=gpu
 
 # Run
@@ -452,7 +473,7 @@ constant `GR_SPACEDIM = 3`.
 | `eta` | 1.0 | Damping in Gamma-driver: dt(B^i) = dt(Gamma^i) - eta * B^i |
 | `rk_method` | `RK_CLASSIC` | Time integrator: `RK_CLASSIC` (4 stages, 4 blocks) or `RK_CK45` (5 stages, 3 blocks) |
 | `bc_type` | `BC_CONSTRAINT_PRESERVING` | Boundary conditions: `BC_SOMMERFELD` (standard radiative) or `BC_CONSTRAINT_PRESERVING` (BAM-style, arXiv:1212.2901) |
-| `amr_levels` | `max_level` | Initial data solver refinement levels (`--amr-levels`). Defaults to `--max-level` so initial data and evolution use the same depth. Each level halves dx near punctures. Override for rare cases where you want finer initial data than evolution can afford. Requires `--rk classic`. |
+| `amr_levels` | `max_level` | Initial data solver refinement levels (`--amr-levels`). Defaults to `--max_level` so initial data and evolution use the same depth. Each level halves dx near punctures. Override for rare cases where you want finer initial data than evolution can afford. Requires `--rk classic`. |
 
 ### FAS Multigrid Solver Tuning
 

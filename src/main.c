@@ -42,7 +42,7 @@ static void print_usage(void)
     fprintf(stderr, "  --CFL <float>          CFL factor (default 0.25)\n");
     fprintf(stderr, "  --sigma <float>        KO dissipation (default 0.3)\n");
     fprintf(stderr, "  --output_every <int>   Output interval (default 0=off)\n");
-    fprintf(stderr, "  --rk classic|ck45      Time integrator (default ck45)\n");
+    fprintf(stderr, "  --rk classic|ck45      Time integrator (default classic)\n");
     fprintf(stderr, "  --puncture M,x,y,z[,Px,Py,Pz[,Sx,Sy,Sz[,Q]]]  Add puncture\n");
     fprintf(stderr, "\nCCZ4 constraint damping:\n");
     fprintf(stderr, "  --kappa1 <float>       Theta+Z_i damping (default 0.1)\n");

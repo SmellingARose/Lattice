@@ -180,7 +180,7 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 
 <p>Lattice is a 3D numerical relativity simulator written in pure C17. It evolves black hole spacetimes through inspiral, merger, and ringdown by solving the CCZ4 (conformal covariant Z4) formulation of Einstein's field equations.</p>
 
-<p>The key idea: <strong>one set of physics kernels runs on both CPU and GPU</strong> with no platform-specific code. Physics functions are pure C with <code>LATTICE_DEVICE</code> annotations. GPU acceleration uses HIP (AMD + NVIDIA) &mdash; a single C++ file (<code>backend_hip.cpp</code>) contains all GPU kernel launches while the physics code stays in C.</p>
+<p>The key idea: <strong>one set of physics kernels runs on both CPU and GPU</strong> with no platform-specific code. Physics functions are pure C with <code>LATTICE_DEVICE</code> annotations. GPU acceleration uses the HIP API &mdash; AMD via <code>hipcc</code>, NVIDIA via <code>nvcc</code> directly &mdash; with a single C++ file (<code>backend_hip.cpp</code>) containing all GPU kernel launches while the physics code stays in C.</p>
 
 <h3>What it does</h3>
 <ul>
@@ -193,7 +193,7 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 </ul>
 
 <h3>What it is not</h3>
-<p>Lattice is a research code, not a production pipeline. It has no MPI (single-node only), no checkpoint/restart, and no HDF5 output. It targets single-GPU or multi-core CPU runs on one machine.</p>
+<p>Lattice is a research code, not a production pipeline. It has no MPI (single-node only) and no checkpoint/restart. It targets single-GPU or multi-core CPU runs on one machine. Optional HDF5 output for CCE worldtube data (<code>make HDF5=on</code>).</p>
 
 <!-- ========================================== -->
 <h2 id="architecture">Architecture Overview</h2>
@@ -216,7 +216,7 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
                                              |       |       <span class="fn">ccz4_rhs_point</span>()    <span class="comment">// FD stencils, Ricci, gauge</span>
                                              |       |       <span class="fn">maxwell_rhs_point</span>() <span class="comment">// if --em enabled</span>
                                              |       +--&gt; <span class="fn">apply_sommerfeld</span>()   <span class="comment">// radiative/CP BCs</span>
-                                             |       +--&gt; <span class="fn">ck45_update</span>()        <span class="comment">// field update</span>
+                                             |       +--&gt; <span class="fn">rk4_update</span>()         <span class="comment">// field update</span>
                                              |     |
                                              |     +--&gt; <span class="fn">enforce_algebraic</span>() <span class="comment">// det(h)=1, tr(A)=0</span>
                                              |
@@ -232,9 +232,9 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
     +---&gt; <span class="type">geometry/</span>      Tensor algebra (Christoffels, Ricci, traces)
     +---&gt; <span class="type">initial_data/</span>  Punctures, Bowen-York, HiSpID, multigrid solver
     +---&gt; <span class="type">diagnostics/</span>   Constraints, AH finder, Psi4
-    +---&gt; <span class="type">boundary/</span>      Sommerfeld radiative outflow
+    +---&gt; <span class="type">boundary/</span>      Constraint-preserving BCs (default) + Sommerfeld
     +---&gt; <span class="type">amr/</span>           Oct-tree blocks, ghost exchange, refinement
-    +---&gt; <span class="type">backend/</span>       CPU (OpenMP threads) and GPU (HIP) dispatch
+    +---&gt; <span class="type">backend/</span>       CPU (OpenMP threads) and GPU (HIP: hipcc/nvcc) dispatch
     +---&gt; <span class="type">io/</span>            1D CSV slice output</div>
 
 <!-- ========================================== -->
@@ -250,7 +250,7 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 <tr>
   <td>GPU approach</td>
   <td>CUDA/HIP kernels or Kokkos abstraction layer</td>
-  <td>HIP (AMD + NVIDIA) &mdash; physics in C with <code>LATTICE_DEVICE</code>, GPU dispatch in single .cpp</td>
+  <td>HIP API (AMD via hipcc, NVIDIA via nvcc) &mdash; physics in C with <code>LATTICE_DEVICE</code>, GPU dispatch in single .cpp</td>
 </tr>
 <tr>
   <td>Memory layout</td>
@@ -289,7 +289,7 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 <tr><td><code>grid.h / grid.c</code></td><td><code>grid_t</code> struct with <code>int n_fields</code> for conditional field allocation, <code>double inv_dx</code> precomputed inverse grid spacing (1.0/dx). <code>grid_alloc_ex(N, L, method, n_fields)</code> allocates only active fields; <code>grid_alloc()</code> is a static inline wrapper defaulting to <code>NUM_FIELDS</code>. Page-aligned (4096-byte), <code>IDX(g,i,j,k)</code> indexing macro, <code>COORD(g,i)</code> for physical coordinates. N padded to next multiple of 16.</td></tr>
 <tr><td><code>fields.h</code></td><td>Field enum (<code>FIELD_CHI</code> through <code>FIELD_BM3</code>), symmetric tensor index table, loop macros (<code>FOR1</code>...<code>FOR4</code>), Kronecker delta. <code>COMPILED_NUM_FIELDS</code> macro (25 or 31 based on <code>-DLATTICE_EM_ENABLED</code>) for constant loop bounds.</td></tr>
 <tr><td><code>params.h</code></td><td><code>sim_params_t</code> with CCZ4 params (kappa1/2/3), gauge params (eta, lapse_coeff, <code>position_dependent_eta</code>), AMR params, noise reduction params. <code>default_params()</code> inline.</td></tr>
-<tr><td><code>device.h</code></td><td><code>LATTICE_DEVICE</code> macro (<code>__host__ __device__</code> for HIP, empty for CPU), <code>EXTERN_C_BEGIN/END</code> for C++ linkage, <code>restrict</code> → <code>__restrict__</code> compat.</td></tr>
+<tr><td><code>device.h</code></td><td><code>LATTICE_DEVICE</code> macro (<code>__host__ __device__</code> for HIP, empty for CPU), <code>EXTERN_C_BEGIN/END</code> for C++ linkage, <code>restrict</code> &rarr; <code>__restrict__</code> compat. Only includes <code>hip/hip_runtime.h</code> when compiled as C++ (not in host C files), so nvcc does not pollute host translation units.</td></tr>
 <tr><td><code>timer.h</code></td><td>Header-only <code>TIMER_START</code>/<code>TIMER_STOP</code> macros via <code>clock_gettime(CLOCK_MONOTONIC)</code>.</td></tr>
 </table>
 
@@ -374,7 +374,7 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 <table class="file-table">
 <tr><th>File</th><th>Purpose</th></tr>
 <tr><td><code>block.h/c</code></td><td><code>block_t</code>: grid_t + coarse_buf + logical location + 26 neighbors + tree links. <code>block_alloc()</code> takes <code>n_fields</code> for conditional allocation.</td></tr>
-<tr><td><code>mesh.h/c</code></td><td><code>mesh_t</code> with <code>int n_fields</code>: block collection, Morton sort, neighbor finding via hash table (O(1) lookup). Pre-allocated <code>ghost_scratch</code> buffer for temporal interpolation. Persistent pack cache: <code>leaf_pack</code>, <code>level_packs[MAX_AMR_LEVELS]</code>, <code>packs_dirty</code> flag. Single root block (N_ROOT=1 hardcoded); all multi-block topology from AMR refinement. <code>mesh_create_ex(N_block, L, method, n_fields)</code>; <code>mesh_create(N_block, L, method)</code> wrapper defaults to <code>NUM_FIELDS</code>.</td></tr>
+<tr><td><code>mesh.h/c</code></td><td><code>mesh_t</code> with <code>int n_fields</code>: block collection, Morton sort, neighbor finding via hash table (O(1) lookup). Pre-allocated <code>ghost_scratch</code> buffer for temporal interpolation. Persistent pack cache: <code>leaf_pack</code>, <code>level_packs[MAX_AMR_LEVELS]</code>, <code>packs_dirty</code> flag. Single root block (hardcoded); all multi-block topology from AMR refinement. <code>mesh_create_ex(N_block, L, method, n_fields)</code>; <code>mesh_create(N_block, L, method)</code> wrapper defaults to <code>NUM_FIELDS</code>.</td></tr>
 <tr><td><code>ghost_exchange.h/c</code></td><td>5-phase coarse-buffer multilevel ghost exchange (AthenaK pattern). Also provides <code>ghost_exchange_all_blocks()</code> which includes non-leaf blocks in the same-level 26-neighbor exchange &mdash; required by the composite multigrid solver where V-cycles operate on all blocks, not just leaves.</td></tr>
 <tr><td><code>prolongation.h/c</code></td><td>6th-order cell-centered Lagrange interpolation (coarse to fine). 7-point 1D stencil, 3D tensor product. Pre-computed <code>prolong_wkj[4][7][7]</code> weight products for 4 octant combos.</td></tr>
 <tr><td><code>restriction.h/c</code></td><td>6th-order Lagrange cell-average restriction (fine to coarse). 6-point symmetric stencil: w = {-17/11520, 97/3840, 2743/5760, ...}. Pre-computed <code>restrict_wkj[6][6]</code> weight products.</td></tr>
@@ -387,13 +387,13 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 <!-- ========================================== -->
 <h2 id="mod-backend">Module: backend/</h2>
 
-<p>Two-tier abstraction layer isolating physics from platform details. <strong>Tier 1 (legacy):</strong> per-grid <code>backend_compute_rhs()</code> with function pointer dispatch for single-grid tests. <strong>Tier 2 (production):</strong> packed batch API &mdash; one kernel launch per operation over all leaf blocks in a <code>meshblock_pack_t</code>. CPU backend uses <code>#pragma omp parallel for</code>; GPU backend uses <code>#pragma omp target teams distribute parallel for</code>. Physics kernels never include platform headers (Critical Invariant #9).</p>
+<p>Two-tier abstraction layer isolating physics from platform details. <strong>Tier 1 (legacy):</strong> per-grid <code>backend_compute_rhs()</code> with function pointer dispatch for single-grid tests. <strong>Tier 2 (production):</strong> packed batch API &mdash; one kernel launch per operation over all leaf blocks in a <code>meshblock_pack_t</code>. CPU backend uses <code>#pragma omp parallel for</code>; GPU backend uses HIP kernel launches via <code>hipLaunchKernelGGL</code>. Physics kernels never include platform headers (Critical Invariant #9). Two-phase compilation: <code>gcc</code> compiles host-only C files; <code>hipcc</code> (AMD) or <code>nvcc</code> (NVIDIA) compiles device-callable C files as C++ and <code>backend_hip.cpp</code>. For NVIDIA, <code>HIP_PLATFORM=nvidia</code> triggers <code>nvcc</code> with <code>-x cu</code>, <code>-rdc=true</code>, and ROCm HIP headers for API compatibility.</p>
 
 <table class="file-table">
 <tr><th>File</th><th>Purpose</th></tr>
-<tr><td><code>backend.h</code></td><td>Abstract interface: RHS, Sommerfeld, CK45 update, ghost exchange, enforce_algebraic, map/unmap, copy, zero. Fused RK4 kernels: <code>backend_rk4_stage_packed()</code> (accum + axpy in one kernel), <code>backend_rk4_final_packed()</code> (final update, replaces 3 separate ops), <code>backend_unmap_pack_sync()</code> (sync+free variant).</td></tr>
+<tr><td><code>backend.h</code></td><td>Abstract interface: RHS, Sommerfeld, RK4 update, ghost exchange, enforce_algebraic, map/unmap, copy, zero. Fused RK4 kernels: <code>backend_rk4_stage_packed()</code> (accum + axpy in one kernel), <code>backend_rk4_final_packed()</code> (final update, replaces 3 separate ops), <code>backend_unmap_pack_sync()</code> (sync+free variant).</td></tr>
 <tr><td><code>backend_cpu.c</code></td><td>OpenMP threads. Packed: flattened (block, k, j) iteration, inner i-loop for SIMD. Ghost exchange directly on pack buffers. <code>backend_enforce_algebraic_packed()</code> for batched det(h)=1, tr(A)=0. Fused RK4 operations: <code>backend_rk4_stage_packed()</code>, <code>backend_rk4_final_packed()</code>.</td></tr>
-<tr><td><code>backend_hip.cpp</code></td><td>HIP GPU (AMD + NVIDIA). Explicit kernels with <code>hipLaunchKernelGGL</code>. Packed: 4D decomposition over (block, k, j, i). ~5.3 KB stack per thread (16 KB limit set in <code>backend_init</code>). <code>backend_enforce_algebraic_packed()</code> runs on device (no host sync). Device-side ghost exchange: 7 GPU kernel launches, zero PCIe DMA. Fused RK4: <code>backend_rk4_stage_packed()</code>, <code>backend_rk4_final_packed()</code>. Constant memory for lookup tables (~2.7 KB).</td></tr>
+<tr><td><code>backend_hip.cpp</code></td><td>HIP GPU (AMD via <code>hipcc</code> + NVIDIA via <code>nvcc</code>). Explicit kernels with <code>hipLaunchKernelGGL</code>. Packed: 4D decomposition over (block, k, j, i). ~5.3 KB stack per thread (16 KB limit set in <code>backend_init</code>). <code>backend_enforce_algebraic_packed()</code> runs on device (no host sync). Device-side ghost exchange: 7 GPU kernel launches, zero PCIe DMA. Fused RK4: <code>backend_rk4_stage_packed()</code>, <code>backend_rk4_final_packed()</code>. Constant memory for lookup tables (~2.7 KB). Note: <code>nvcc</code> requires explicit <code>LATTICE_DEVICE</code> (<code>__device__</code>) on file-scope <code>static const</code> arrays used in device code (clang/hipcc auto-promotes them); applied to <code>h_idx</code>/<code>A_idx</code> in <code>ccz4_rhs.c</code>, <code>levi_civita</code> in <code>maxwell_rhs.c</code>, <code>asym_values</code> in <code>sommerfeld.c</code>.</td></tr>
 </table>
 
 <!-- ========================================== -->
@@ -411,7 +411,7 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 
 <h3>Struct-of-Arrays layout</h3>
 
-<p>Every field is a contiguous <code>double*</code> array of <code>Ntotal^3</code> elements. All field arrays for one memory block (fields, rhs, scratch) are packed into a single contiguous allocation. This enables a single <code>omp target enter data</code> call per block on GPU.</p>
+<p>Every field is a contiguous <code>double*</code> array of <code>Ntotal^3</code> elements. All field arrays for one memory block (fields, rhs, scratch) are packed into a single contiguous allocation. This enables a single <code>hipMemcpy</code> call per block on GPU.</p>
 
 <pre><code>fields_block:  [ field_0: Ntotal^3 doubles | field_1: Ntotal^3 doubles | ... | field_30 ]
                 ^                             ^
@@ -436,7 +436,7 @@ Grid indexing:  IDX(g, i, j, k) = k * Ntotal^2 + j * Ntotal + i
 <details>
 <summary>GPU batch kernel architecture (MeshBlockPack)</summary>
 <div class="detail-body">
-<p>For AMR, all leaf blocks are packed into a single <code>meshblock_pack_t</code> with contiguous GPU buffers. Each backend operation (RHS, Sommerfeld, CK45 update) is one kernel launch over the entire pack. On GPU, the iteration space is <code>collapse(4)</code> over (block, k, j, i). Each GPU thread builds a stack-local pointer array (~400 B) and grid_t (~872 B), then calls <code>ccz4_rhs_point</code> (~4 KB). Total ~5.3 KB per thread, under the 16 KB GPU stack limit.</p>
+<p>For AMR, all leaf blocks are packed into a single <code>meshblock_pack_t</code> with contiguous GPU buffers. Each backend operation (RHS, Sommerfeld, RK4 update) is one kernel launch over the entire pack. On GPU, the iteration space is <code>collapse(4)</code> over (block, k, j, i). Each GPU thread builds a stack-local pointer array (~400 B) and grid_t (~872 B), then calls <code>ccz4_rhs_point</code> (~4 KB). Total ~5.3 KB per thread, under the 16 KB GPU stack limit.</p>
 
 <p>Packs are cached persistently in <code>mesh_t</code> (<code>leaf_pack</code> for uniform, <code>level_packs[]</code> for AMR subcycling). Only rebuilt on regrid (<code>packs_dirty</code> flag). Data-only sync (<code>sync_to/from_blocks</code>) replaces the per-step malloc/load/store/free cycle, eliminating ~1 GB of allocation overhead per step for large meshes. Ghost exchange on GPU runs entirely on device via 7 kernel launches (same-level exchange, restriction, coarse ghost fill, 3 boundary extrapolation sweeps, prolongation), zero PCIe DMA during time steps. Uniform meshes: 1 kernel launch.</p>
 </div>
@@ -448,8 +448,11 @@ Grid indexing:  IDX(g, i, j, k) = k * Ntotal^2 + j * Ntotal + i
 <h3>Why oct-tree?</h3>
 <p>Black holes need very fine resolution (dx ~ M/50) while gravitational waves propagate through regions where coarse resolution (dx ~ 2M) suffices. Oct-tree AMR with fixed 16^3 blocks provides: (1) uniform GPU batching since all blocks are identical in shape, (2) O(N) scaling with the number of black holes since each BH gets its own nested refinement, (3) trivial load balancing since all work units are the same size. The tradeoff is higher ghost overhead (70% per block) compared to variable-size boxes, but this is bounded and the GPU benefits dominate.</p>
 
+<h3>Single root block</h3>
+<p>The mesh starts with a single root block covering the entire domain. All multi-block topology comes exclusively from AMR refinement (oct-tree splitting). This design is required by the composite multigrid constraint solver, which needs whole-domain visibility at the coarsest level &mdash; multi-root meshes broke cross-block coupling, causing V-cycle divergence. With a single root, the solver achieves a convergence factor of ~0.13/cycle (textbook multigrid). Higher <code>--max-level</code> compensates for the coarser base grid. <code>mesh_create(N_block, L, method)</code> creates one root block; there is no N_root parameter.</p>
+
 <h3>Block structure</h3>
-<p>Each <code>block_t</code> wraps a <code>grid_t</code> (16^3 interior + 4 ghost cells per side = 24^3 total) with: logical location in the oct-tree, 26-neighbor IDs, <code>nblevel[3][3][3]</code> neighbor level table, parent/child tree links, boundary flags, and a <code>coarse_buf</code> (half-resolution grid_t for multilevel ghost fill, allocated for level > 0).</p>
+<p>Each <code>block_t</code> wraps a <code>grid_t</code> (N_block^3 interior + 4 ghost cells per side) with: logical location in the oct-tree, 26-neighbor IDs, <code>nblevel[3][3][3]</code> neighbor level table, parent/child tree links, boundary flags, and a <code>coarse_buf</code> (half-resolution grid_t for multilevel ghost fill, allocated for level > 0).</p>
 
 <h3>Morton Z-order</h3>
 <p>Blocks are sorted by Morton (Z-order) code, which bit-interleaves the logical coordinates. This ensures spatially nearby blocks are nearby in memory, improving cache locality during ghost exchange and kernel iteration.</p>
@@ -713,7 +716,7 @@ Level 0: everywhere (dx ~ M/2)     — outer domain + boundary</code></pre>
 <details>
 <summary>Why HIP instead of CUDA or OpenMP target?</summary>
 <div class="detail-body">
-<p>HIP is portable across AMD and NVIDIA GPUs from a single source. Unlike OpenMP target offloading (which required GCC 15+ with fragile <code>-foffload</code> support, forced <code>-O2</code> on host, and needed env vars for stack sizes), HIP gives native GPU performance with explicit kernel control. Unlike CUDA, HIP avoids vendor lock-in. The physics kernels stay in pure C with <code>LATTICE_DEVICE</code> annotations; only the launch wrappers in <code>backend_hip.cpp</code> are C++.</p>
+<p>HIP is portable across AMD and NVIDIA GPUs from a single source. Unlike OpenMP target offloading (which required GCC 15+ with fragile <code>-foffload</code> support, forced <code>-O2</code> on host, and needed env vars for stack sizes), HIP gives native GPU performance with explicit kernel control. Unlike CUDA, HIP avoids vendor lock-in. The physics kernels stay in pure C with <code>LATTICE_DEVICE</code> annotations; only the launch wrappers in <code>backend_hip.cpp</code> are C++. On NVIDIA, the Makefile uses <code>nvcc</code> directly (not hipcc) with ROCm HIP headers for API compatibility (<code>HIP_PLATFORM=nvidia</code>, <code>-x cu</code>, <code>-rdc=true</code>). This avoids hipcc wrapper issues on systems with the Ubuntu CUDA toolkit.</p>
 </div>
 </details>
 
@@ -766,21 +769,22 @@ Level 0: everywhere (dx ~ M/2)     — outer domain + boundary</code></pre>
 
 <h3>Building</h3>
 <pre><code>make                    # CPU build (-O3 -ffast-math -march=native -flto)
-make BACKEND=gpu        # GPU build (HIP — AMD + NVIDIA, requires ROCm)
+make BACKEND=gpu        # GPU build (AMD: hipcc, NVIDIA: nvcc)
+make BACKEND=gpu HIP_PLATFORM=nvidia  # GPU build for NVIDIA (nvcc)
 make debug              # debug build (-O0 -g -fsanitize=address,undefined)
 make EM=on              # build with Einstein-Maxwell fields compiled in
 make clean              # rm -rf build/</code></pre>
 
-<p>Compiler: <code>clang</code> on macOS (CPU only), <code>gcc</code> on Linux (CPU), <code>hipcc</code> (GPU). No external dependencies beyond standard C and libomp. GPU requires ROCm.</p>
+<p>Compiler: <code>clang</code> on macOS (CPU only), <code>gcc</code> on Linux (CPU), <code>hipcc</code> (AMD GPU), <code>nvcc</code> (NVIDIA GPU). Two-phase GPU compilation: <code>gcc</code> compiles host-only C files; the GPU compiler (<code>hipcc</code> or <code>nvcc</code>) compiles device-callable C files as C++ and <code>backend_hip.cpp</code>. For NVIDIA, set <code>HIP_PLATFORM=nvidia</code> to use <code>nvcc</code> directly with <code>-x cu</code>, <code>-rdc=true</code>, and ROCm HIP headers for API compatibility. No external dependencies beyond standard C and libomp. GPU requires ROCm (AMD) or CUDA toolkit (NVIDIA).</p>
 
 <h3>Running</h3>
 <pre><code># Single Schwarzschild puncture (M=1, 50M evolution)
 ./build/lattice --N 64 --L 32 --steps 400 --puncture 1.0,0,0,0
 
-# Binary inspiral with Bowen-York momentum and AMR
-./build/lattice --N 16 --N-root 4 --L 128 --steps 10000 \
+# Binary inspiral with Bowen-York momentum and AMR (D=10M equal-mass quasi-circular)
+./build/lattice --N 32 --L 64 --steps 10000 \
   --puncture 0.5,5,0,0,0,0.05,0 --puncture 0.5,-5,0,0,0,-0.05,0 \
-  --max-level 3 --rk classic
+  --max-level 4
 
 # Charged spinning black hole with Einstein-Maxwell
 ./build/lattice --N 64 --L 32 --steps 200 --em \
@@ -797,11 +801,11 @@ make clean              # rm -rf build/</code></pre>
 <tr><td><code>--steps</code></td><td>100</td><td>Number of timesteps</td></tr>
 <tr><td><code>--puncture M,x,y,z[,Px,Py,Pz,Sx,Sy,Sz,Q]</code></td><td>&mdash;</td><td>Add a puncture (up to 32). Mass, position, optional momentum/spin/charge.</td></tr>
 <tr><td><code>--rk classic|ck45</code></td><td>classic</td><td>Time integrator selection</td></tr>
+<tr><td><code>--bc sommerfeld|cp</code></td><td>cp</td><td>Boundary condition type. Constraint-preserving (default) or pure Sommerfeld radiative.</td></tr>
 <tr><td><code>--em</code></td><td>off</td><td>Enable Einstein-Maxwell (6 extra evolved fields)</td></tr>
 <tr><td><code>--ah</code></td><td>off</td><td>Enable apparent horizon finder</td></tr>
 <tr><td><code>--block-size</code></td><td>32</td><td>Cells per block side (alias for <code>--N_block</code>). Must be even and &ge; 8.</td></tr>
-<tr><td><code>--N-root</code></td><td>&mdash;</td><td>Root blocks per dimension (enables AMR mode)</td></tr>
-<tr><td><code>--max-level</code></td><td>0</td><td>Maximum AMR refinement level during evolution</td></tr>
+<tr><td><code>--max-level</code></td><td>0</td><td>Maximum AMR refinement level during evolution. All multi-block topology comes from AMR refinement of a single root block.</td></tr>
 <tr><td><code>--amr-levels</code></td><td><code>max-level</code></td><td>Initial data solver refinement depth. Defaults to <code>--max-level</code> so initial data and evolution use the same AMR depth. Each level halves dx near punctures. Requires <code>--rk classic</code>.</td></tr>
 </table>
 
@@ -825,7 +829,7 @@ make clean              # rm -rf build/</code></pre>
 <tr><td><code>make test-maxwell</code></td><td>Einstein-Maxwell: flat EM, plane wave, charged BH, constraints (15 tests)</td><td><span class="badge badge-green">Passing</span></td></tr>
 <tr><td><code>make test-psi4</code></td><td>Psi4 gravitational wave extraction: quadrature, harmonics, modes (15 tests)</td><td><span class="badge badge-green">Passing</span></td></tr>
 <tr><td><code>make test-cp-bc</code></td><td>Constraint-preserving BCs: char speeds, formula, flat, single BH (30 tests)</td><td><span class="badge badge-green">Passing</span></td></tr>
-<tr><td><code>make test-inspiral</code></td><td>Binary inspiral full system validation: BY+AMR+CCZ4+Psi4+AH+constraints (10 subsystems)</td><td><span class="badge badge-green">Passing</span></td></tr>
+<tr><td><code>make test-inspiral</code></td><td>Binary inspiral full system validation (T=700M, D=10M equal-mass quasi-circular, N_BLOCK=32, MAX_LEVEL=4): BY+AMR+CCZ4+Psi4+AH+constraints+CSV diagnostics every step (10 subsystems)</td><td><span class="badge badge-green">Passing</span></td></tr>
 <tr><td><code>make test-inspiral-convergence</code></td><td>AMR binary inspiral convergence at 3 resolutions (long run)</td><td><span class="badge badge-green">Passing</span></td></tr>
 </table>
 
