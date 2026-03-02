@@ -198,16 +198,23 @@ LIB_HOST_OBJS = $(patsubst %.c,$(BUILD)/host/%.o,$(HOST_SRC))
 ALL_LIB_OBJS = $(LIB_HOST_OBJS) $(DEVICE_C_OBJS) $(DEVICE_CXX_OBJS)
 
 # Default pattern rule: handles all standard tests
+# NVIDIA: nvcc needs -Xcompiler -fopenmp; AMD: hipcc takes -fopenmp directly
+ifeq ($(HIP_PLATFORM),nvidia)
+    GPU_LINK_FLAGS = -rdc=true -lgomp -lcudadevrt -lcudart
+else
+    GPU_LINK_FLAGS = -fopenmp
+endif
+
 $(BUILD)/test_%: tests/test_%.c $(ALL_LIB_OBJS)
 	@mkdir -p $(BUILD)/host/tests
 	$(CC) $(CFLAGS_OPT) $(HIP_FLAGS) -c -o $(BUILD)/host/tests/test_$*.o $<
-	$(HIPCC) -fopenmp -o $@ $(BUILD)/host/tests/test_$*.o $(ALL_LIB_OBJS) $(HDF5_LIBS) -lm
+	$(HIPCC) $(GPU_LINK_FLAGS) -o $@ $(BUILD)/host/tests/test_$*.o $(ALL_LIB_OBJS) $(HDF5_LIBS) -lm
 
 # EM tests: recompile device + host sources with -DLATTICE_EM_ENABLED
 DEVICE_C_OBJS_EM = $(patsubst %.c,$(BUILD)/device_em/%.o,$(HIP_DEVICE_SRC))
 $(BUILD)/device_em/%.o: %.c
 	@mkdir -p $(dir $@)
-	$(HIPCC) $(HIP_CXXFLAGS) -DLATTICE_EM_ENABLED -x hip -c -o $@ $<
+	$(HIPCC) $(HIP_CXXFLAGS) -DLATTICE_EM_ENABLED $(HIP_LANG_FLAG) -c -o $@ $<
 
 LIB_HOST_OBJS_EM = $(patsubst %.c,$(BUILD)/host_em/%.o,$(HOST_SRC))
 $(BUILD)/host_em/%.o: %.c
@@ -219,19 +226,19 @@ ALL_LIB_OBJS_EM = $(LIB_HOST_OBJS_EM) $(DEVICE_C_OBJS_EM) $(DEVICE_CXX_OBJS)
 $(BUILD)/test_maxwell: tests/test_maxwell.c $(ALL_LIB_OBJS_EM)
 	@mkdir -p $(BUILD)/host/tests
 	$(CC) $(CFLAGS_OPT) $(HIP_FLAGS) -DLATTICE_EM_ENABLED -c -o $(BUILD)/host/tests/test_maxwell.o $<
-	$(HIPCC) -fopenmp -o $@ $(BUILD)/host/tests/test_maxwell.o $(ALL_LIB_OBJS_EM) $(HDF5_LIBS) -lm
+	$(HIPCC) $(GPU_LINK_FLAGS) -o $@ $(BUILD)/host/tests/test_maxwell.o $(ALL_LIB_OBJS_EM) $(HDF5_LIBS) -lm
 
 $(BUILD)/test_maxwell_debug: tests/test_maxwell_debug.c $(ALL_LIB_OBJS_EM)
 	@mkdir -p $(BUILD)/host/tests
 	$(CC) $(CFLAGS_OPT) $(HIP_FLAGS) -DLATTICE_EM_ENABLED -c -o $(BUILD)/host/tests/test_maxwell_debug.o $<
-	$(HIPCC) -fopenmp -o $@ $(BUILD)/host/tests/test_maxwell_debug.o $(ALL_LIB_OBJS_EM) $(HDF5_LIBS) -lm
+	$(HIPCC) $(GPU_LINK_FLAGS) -o $@ $(BUILD)/host/tests/test_maxwell_debug.o $(ALL_LIB_OBJS_EM) $(HDF5_LIBS) -lm
 
 # CCE test: needs HDF5 flags + extra source file
 $(BUILD)/test_cce_worldtube: tests/test_cce_worldtube.c $(ALL_LIB_OBJS) src/diagnostics/cce_worldtube.c
 	@mkdir -p $(BUILD)/host/tests $(BUILD)/host/src/diagnostics
 	$(CC) $(CFLAGS_OPT) $(HIP_FLAGS) $(CCE_HDF5_FLAGS) -c -o $(BUILD)/host/tests/test_cce_worldtube.o $<
 	$(CC) $(CFLAGS_OPT) $(HIP_FLAGS) $(CCE_HDF5_FLAGS) -c -o $(BUILD)/host/src/diagnostics/cce_worldtube.o src/diagnostics/cce_worldtube.c
-	$(HIPCC) -fopenmp -o $@ $(BUILD)/host/tests/test_cce_worldtube.o $(BUILD)/host/src/diagnostics/cce_worldtube.o $(ALL_LIB_OBJS) $(CCE_HDF5_LIBS) -lm
+	$(HIPCC) $(GPU_LINK_FLAGS) -o $@ $(BUILD)/host/tests/test_cce_worldtube.o $(BUILD)/host/src/diagnostics/cce_worldtube.o $(ALL_LIB_OBJS) $(CCE_HDF5_LIBS) -lm
 
 else
 # CPU test builds: single-phase gcc compilation.
