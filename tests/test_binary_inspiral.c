@@ -112,11 +112,11 @@ extern void output_mesh_1d_slice(const mesh_t *m, int step, double time);
 /* ====================================================================
  * Diagnostic schedule
  * ==================================================================== */
-#define DIAG_EVERY    10
+#define DIAG_EVERY    1
 #define REGRID_EVERY  50
 #define SLICE_EVERY   200
-#define PSI4_EVERY    10
-#define AH_EVERY      10
+#define PSI4_EVERY    1
+#define AH_EVERY      1
 
 /* ====================================================================
  * Wave extraction parameters
