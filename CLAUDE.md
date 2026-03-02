@@ -197,6 +197,12 @@ work on AMR meshes.
   Each level halves dx near punctures. Measured 218,000x better near-field constraint
   quality vs the old copy approach on refined meshes.
   Ref: Athena++ MG (Tomida & Stone 2023), arXiv:0912.2920 (Alic et al.).
+- **Single root block (N_ROOT=1):** Multi-root meshes removed. All multi-block topology
+  comes from AMR refinement only. The composite multigrid solver requires whole-domain
+  visibility at the coarsest level — multi-root meshes broke cross-block coupling,
+  causing V-cycle divergence. With single root, the solver achieves convergence factor
+  ~0.13/cycle (textbook multigrid). Higher MAX_LEVEL compensates for the coarser base
+  grid. `mesh_create(N_block, L, method)` creates one root block; no N_root parameter.
 - **Tier 0 bug fixes:** `enforce_algebraic_block()` in refine.c fixed (was using slow
   `1.0/cbrt(det)` with divergent `if (det > 0.0)` guard; now uses `fast_inv_cbrt(det)`
   unconditionally, matching `rk4.c`). Packed RHS kernel `g_local.n_fields` was 0
