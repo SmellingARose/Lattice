@@ -9,15 +9,14 @@ math, simplest implementation path, estimated effort, and key references.
 
 | Item | Effort | Lines | Difficulty | Blocks | Competitive Edge |
 |------|--------|-------|------------|--------|-----------------|
-| **Psi4 extraction** | Done | ~740 | Medium | PHE, CCE | Table stakes — every NR code has this |
-| **PHE** | 1-2 weeks | ~470 | Medium | — | **No public standalone PHE exists** — first-of-kind tool |
-| **CCE worldtube** | 2-3 weeks | ~930 | Medium | Needs HDF5 | Matches GR-Athena++, SpECTRE interop |
+| **Psi4 extraction** | Done | ~740 | Medium | CCE | Table stakes — every NR code has this |
+| **CCE worldtube** | Done | ~430 | Medium | Needs HDF5 | Matches GR-Athena++, SpECTRE interop |
 | **HIP backend** | 1-2 weeks | ~900 | Medium | — | **AMD + NVIDIA from one source** — only AthenaK does this (via Kokkos) |
 | **Constraint-preserving BC** | 2-3 weeks | ~500 | Hard | — | Matches BAM; most CCZ4 codes lack this |
 | **Larger domain (AMR)** | 0 days | 0 | Trivial | — | Already possible, just use `--L 4000` |
 
-**Fast path to publishable waveforms:** Psi4 (done) + PHE (2 weeks) = ~2 weeks.
-No external dependencies, pure C17.
+**Waveform pipeline complete:** Psi4 (done) + CCE worldtube (done) → SpECTRE
+CCE → gauge-invariant strain at scri+.
 
 ### How Lattice Compares After Implementation
 
@@ -25,7 +24,7 @@ No external dependencies, pure C17.
 |------------|-------------------|-----------------|----------|---------|-------------|-----|
 | Spatial FD order | 6th | 6th | 4th | Spectral | 6th | 4th-8th |
 | Off-grid interpolation | 6th | 6th | 4th | Spectral | 4th | 4th |
-| Waveform extraction | Psi4 | Psi4 + PHE + CCE | Psi4 only | Full CCE | CCE | Psi4 + CCE |
+| Waveform extraction | Psi4 + CCE | Psi4 + CCE | Psi4 only | Full CCE | CCE | Psi4 + CCE |
 | GPU backend | OpenMP target | OpenMP + HIP | None | Charm++ | Kokkos | None |
 | AMD GPU support | No | **Yes (HIP)** | No | No | Yes (Kokkos) | No |
 | N-body (N>2) | Yes (32) | Yes (32) | No | No | No | Yes |
@@ -37,7 +36,6 @@ No external dependencies, pure C17.
 
 **Unique advantages after completion:**
 - **Only code with N-body + EM + GPU + CCE pipeline** (no other code combines all four)
-- **PHE tool** would be first publicly available standalone implementation
 - **HIP backend** gives AMD GPU support — only AthenaK has this, via heavier Kokkos abstraction
 - **6th-order interpolation everywhere** — most codes use 4th-order off-grid
 
@@ -46,11 +44,10 @@ No external dependencies, pure C17.
 ## Table of Contents
 
 1. [Psi4 Extraction](#1-psi4-extraction)
-2. [PHE (Perturbative Hyperboloidal Extraction)](#2-phe)
-3. [CCE Worldtube Output](#3-cce-worldtube-output)
-4. [HIP Backend](#4-hip-backend)
-5. [HOBC (Higher-Order Absorbing BCs)](#5-hobc)
-6. [Priority & Dependencies](#6-priority--dependencies)
+2. [CCE Worldtube Output](#2-cce-worldtube-output)
+3. [HIP Backend](#3-hip-backend)
+4. [HOBC (Higher-Order Absorbing BCs)](#4-hobc)
+5. [Priority & Dependencies](#5-priority--dependencies)
 
 ---
 
@@ -168,123 +165,13 @@ Typical l_max: 4 for equal-mass BBH, 8 for high-spin/precessing.
 
 ---
 
-## 2. PHE
-
-**Status:** Not implemented. **No public standalone PHE tool exists** — this
-would be a genuine first-of-kind contribution.
-**Effort:** 1-2 weeks, ~470 lines in `tools/phe_extract.c`.
-**Dependencies:** Requires Psi4 extraction (Section 1).
-
-### 2.1 What PHE Does
-
-Post-processing tool that takes Psi4 multipoles extracted at finite radius and
-propagates them to null infinity via the Regge-Wheeler-Zerilli (RWZ) equations
-on hyperboloidal slices. Removes finite-radius extraction error without
-modifying the evolution code.
-
-**Published accuracy (arXiv:2508.05743):** PHE vs CCE phase difference < 0.05
-rad for BBH mergers. Sufficient for LIGO A+, ET, and CE detectors.
-
-### 2.2 The RWZ Master Equation
-
-Perturbations of Schwarzschild satisfy a 1+1 wave equation per (l,m) mode:
-
-```
-d²Psi/dt² - d²Psi/dr*² + V_l(r) * Psi = 0
-```
-
-**Tortoise coordinate:** `r* = r + 2M ln(r/(2M) - 1)`
-
-**Potentials:**
-
-```
-V_RW(r) = (1 - 2M/r) * [l(l+1)/r² - 6M/r³]               (odd parity)
-V_Z(r)  = (1 - 2M/r) * [2λ²(λ+1)r³ + 6λ²Mr² + 18λM²r + 18M³]
-                       / [r³(λr + 3M)²]                     (even parity)
-```
-
-where `λ = (l-1)(l+2)/2`.
-
-### 2.3 Hyperboloidal Compactification
-
-Transform (t, r*) → (tau, rho) via height function:
-
-```
-tau = t - h(r*)           (time transformation)
-r*  = rho / Omega(rho)    (spatial compactification)
-```
-
-**Domain:**
-
-```
-rho_min = r*(r_ext)        inner boundary (extraction radius)
-rho_*   = 1.5 * rho_min    start of hyperboloidal layer
-rho_S   = 2.0 * rho_min    null infinity (Omega = 0)
-```
-
-At null infinity the equation becomes purely ingoing — **no outer boundary
-condition needed**. This is the key advantage.
-
-**Inner boundary:** NR data provides ingoing characteristic variable
-`g(t) = Psi_t - Psi_{r*}` at r_ext, smoothed by activation function
-ramping 0→1 over ~100M.
-
-### 2.4 Implementation
-
-Standalone post-processing — zero coupling to evolution code:
-
-```
-tools/phe_extract.c
-  Input:  psi4_lm_rXXX.csv (Psi4 multipole time series)
-  Output: strain_lm_scri.csv (h at null infinity)
-  Build:  make phe-extract (pure C17 + libm, no Lattice dependency)
-```
-
-Steps per (l,m) mode:
-1. Set up 1D radial grid (N = 401-1601 points)
-2. Compute compactification functions Omega(rho), H(rho), V_l(rho)
-3. Read NR time series, construct inner BC with activation
-4. Time-step hyperboloidal RWZ: RK4 in time, 4th-order FD in space
-5. Record waveform at rho_S (null infinity)
-
-### 2.5 Resolution & Accuracy
-
-| N (radial) | Phase accuracy | Use case |
-|------------|---------------|----------|
-| 401 | ~0.01 rad | Development |
-| 801 | ~10⁻³ rad | Production |
-| 1601 | ~10⁻⁴ rad | High accuracy |
-
-CFL is modest: a 5000M run at N=401 takes ~25,000 steps — seconds on a laptop.
-
-### 2.6 Line Count
-
-| Component | Lines |
-|-----------|-------|
-| Grid setup + compactification | ~120 |
-| RWZ RHS (4th-order FD + potential) | ~80 |
-| RK4 time stepper | ~60 |
-| Inner BC (characteristic + activation) | ~50 |
-| I/O (CSV read/write) | ~100 |
-| Main + CLI | ~60 |
-| **Total** | **~470** |
-
-### 2.7 Key References
-
-- arXiv:2508.05743 (Bernuzzi et al. 2025) — the PHE paper
-- arXiv:1008.3809 (Zenginoglu 2011) — hyperboloidal layers
-- arXiv:1107.5402 (Bernuzzi, Nagar, Zenginoglu 2012) — BBH with hyperboloidal
-- gr-qc/0502028 (Martel & Poisson 2005) — gauge-invariant RWZ formalism
-
----
-
-## 3. CCE Worldtube Output
+## 2. CCE Worldtube Output
 
 **Status:** Implemented. `src/diagnostics/cce_worldtube.h` + `cce_worldtube.c`
 (~430 lines). 41/41 tests pass. CLI: `--cce`, `--cce_every`, `--cce_radius`,
 `--cce_lmax`. Requires HDF5 library (conditional: `make HDF5=on`).
 
-### 3.1 Overview
+### 2.1 Overview
 
 Output worldtube boundary data on a coordinate sphere for SpECTRE's CCE solver.
 SpECTRE does the characteristic evolution to null infinity — gold standard for
@@ -295,7 +182,7 @@ waveform accuracy.
 2. Run SpECTRE `PreprocessCceWorldtube` to convert to Bondi-Sachs modal
 3. Run SpECTRE CCE on the converted file
 
-### 3.2 Required Data (49 HDF5 Datasets)
+### 2.2 Required Data (49 HDF5 Datasets)
 
 | Category | Datasets | Count |
 |----------|----------|-------|
@@ -308,7 +195,7 @@ waveform accuracy.
 | Shift + derivatives | `Shift{x,y,z}.dat`, `D{x,y,z}Shift{x,y,z}.dat` | 12 |
 | Gauge auxiliary | `AuxiliaryShift{x,y,z}.dat` (= B^i) | 3 |
 
-### 3.3 Angular Grid
+### 2.3 Angular Grid
 
 - theta: `l_max + 1` Gauss-Legendre points in cos(theta)
 - phi: `2 * l_max + 1` equally spaced
@@ -317,7 +204,7 @@ waveform accuracy.
 - `Legend` attribute required on every dataset
 - File naming: `CceR{XXXX}.h5` (zero-padded radius)
 
-### 3.4 Conformal-to-Physical Reconstruction
+### 2.4 Conformal-to-Physical Reconstruction
 
 ```c
 gamma_ij = h_ij / chi                                    // physical metric
@@ -327,7 +214,7 @@ d_k gamma_ij = d_k(h_ij)/chi - h_ij * d_k(chi) / chi²  // chain rule
 
 Cartesian derivatives via `interp_field_deriv_at()` — no FD on the sphere.
 
-### 3.5 PreprocessCceWorldtube Config
+### 2.5 PreprocessCceWorldtube Config
 
 ```yaml
 InputDataFormat:
@@ -340,7 +227,7 @@ ExtractionRadius: 100
 LMaxFactor: 3
 ```
 
-### 3.6 HDF5 Dependency
+### 2.6 HDF5 Dependency
 
 Required — SpECTRE only reads HDF5. Gated behind `make HDF5=on`:
 ```makefile
@@ -355,7 +242,7 @@ Default `HDF5=off` — zero impact on normal builds.
 **Alternative:** Python postprocessor (`tools/write_cce_worldtube.py`, ~150
 lines) reads raw binary and writes HDF5 via h5py. Avoids C dependency.
 
-### 3.7 CLI Flags
+### 2.7 CLI Flags
 
 ```
 --cce-radius 100     # extraction radius (M)
@@ -363,7 +250,7 @@ lines) reads raw binary and writes HDF5 via h5py. Avoids C dependency.
 --cce-lmax 16        # angular resolution
 ```
 
-### 3.8 Line Count
+### 2.8 Line Count
 
 | Component | Lines |
 |-----------|-------|
@@ -377,7 +264,7 @@ lines) reads raw binary and writes HDF5 via h5py. Avoids C dependency.
 | Cleanup | ~30 |
 | **Total** | **~930** |
 
-### 3.9 Key References
+### 2.9 Key References
 
 - arXiv:2110.08635 (Moxon et al. 2023) — SpECTRE CCE system
 - spectre-code.org/tutorial_cce.html — exact HDF5 format spec
@@ -385,13 +272,13 @@ lines) reads raw binary and writes HDF5 via h5py. Avoids C dependency.
 
 ---
 
-## 4. HIP Backend
+## 3. HIP Backend
 
 **Status:** Not implemented.
 **Effort:** 1-2 weeks, ~900 lines in `backend_hip.cpp` + Makefile.
 **Dependencies:** None (independent of other work).
 
-### 4.1 What HIP Is
+### 3.1 What HIP Is
 
 AMD's GPU programming model — near-identical CUDA syntax, compiles for both:
 
@@ -400,7 +287,7 @@ AMD's GPU programming model — near-identical CUDA syntax, compiles for both:
 
 20-50% faster than OpenMP target offloading. Avoids GCC nvptx codegen bugs.
 
-### 4.2 Translation Pattern
+### 3.2 Translation Pattern
 
 | OpenMP Target | HIP |
 |---------------|-----|
@@ -410,7 +297,7 @@ AMD's GPU programming model — near-identical CUDA syntax, compiles for both:
 | `#pragma omp declare target` on function | `__device__` attribute |
 | `#pragma omp declare target` on constant | `__constant__` memory |
 
-### 4.3 Architecture
+### 3.3 Architecture
 
 **Single new file:** `src/backend/backend_hip.cpp` (.cpp required for hipcc).
 
@@ -428,7 +315,7 @@ it. Required because `ccz4_rhs_point` and everything it calls must be
 #endif
 ```
 
-### 4.4 Required Kernels (~17)
+### 3.4 Required Kernels (~17)
 
 | Function | Kernels | Lines | Notes |
 |----------|---------|-------|-------|
@@ -441,7 +328,7 @@ it. Required because `ccz4_rhs_point` and everything it calls must be
 | `backend_enforce_algebraic_packed` | 1 | ~60 | det/inverse/trace-free |
 | `backend_init/cleanup` | 0 | ~20 | hipMemcpyToSymbol |
 
-### 4.5 Performance Notes
+### 3.5 Performance Notes
 
 - **No shared memory for RHS.** 25+ fields × 7-point stencils = ~690 KB needed,
   far exceeding 48-64 KB limits. Global memory + cache is correct (same as
@@ -449,7 +336,7 @@ it. Required because `ccz4_rhs_point` and everything it calls must be
 - **Block size:** 128-256 for RHS (5.3 KB stack/thread), 256-512 for simple
   kernels.
 
-### 4.6 Makefile Addition
+### 3.6 Makefile Addition
 
 ```makefile
 else ifeq ($(BACKEND),hip)
@@ -465,7 +352,7 @@ else ifeq ($(BACKEND),hip)
 endif
 ```
 
-### 4.7 Implementation Order
+### 3.7 Implementation Order
 
 1. Add `LATTICE_DEVICE` macro to ~17 headers (~30 min)
 2. Simple kernels: zero, copy, axpy, etc. (~1 hr)
@@ -476,7 +363,7 @@ endif
 7. Ghost exchange (7 kernels) (~3 hr)
 8. Makefile + test (~2 hr)
 
-### 4.8 Key References
+### 3.8 Key References
 
 - ROCm HIP Programming Guide: rocm.docs.amd.com
 - AthenaK (arXiv:2409.10383) — GPU NR with Kokkos targeting HIP
@@ -484,12 +371,12 @@ endif
 
 ---
 
-## 5. HOBC
+## 4. HOBC
 
 **Status:** Not implemented. Current Sommerfeld is the "weakest link."
 **Effort:** Depends on approach (0 to 3 weeks).
 
-### 5.1 Three Paths (Pick One)
+### 4.1 Three Paths (Pick One)
 
 #### Path A: Larger Domain — Zero Code Changes (Recommended First)
 
@@ -526,7 +413,7 @@ CCZ4** — only SpEC (generalized harmonic) has this. Research contribution.
 
 Not recommended unless needed for sub-dominant mode accuracy.
 
-### 5.2 What Production Codes Use
+### 4.2 What Production Codes Use
 
 | Code | Formulation | BCs |
 |------|------------|-----|
@@ -538,13 +425,13 @@ Not recommended unless needed for sub-dominant mode accuracy.
 
 **No BSSN/CCZ4 code has full HOBC.** All rely on Sommerfeld + large domains.
 
-### 5.3 Recommendation
+### 4.3 Recommendation
 
 1. **Now:** Larger domain with AMR. Zero effort, solves the problem.
 2. **Phase 3:** Constraint-preserving Sommerfeld (Path B) for long runs (>10⁴M).
 3. **Only if needed:** Full HOBC (Path C) — research project.
 
-### 5.4 Key References
+### 4.4 Key References
 
 - arXiv:0811.3593 (Buchman, Rinne, Sarbach 2009) — HOBC implementation
 - arXiv:1010.0523 (Ruiz, Hilditch, Bernuzzi 2011) — CP BCs for Z4c
@@ -552,14 +439,12 @@ Not recommended unless needed for sub-dominant mode accuracy.
 
 ---
 
-## 6. Priority & Dependencies
+## 5. Priority & Dependencies
 
 ### Dependency Chain
 
 ```
-Psi4 (DONE)
-  ├─→ PHE (1-2 weeks) ───→ production waveforms at scri+
-  └─→ CCE worldtube (2-3 weeks) ───→ gold-standard via SpECTRE
+Psi4 (DONE) ──→ CCE worldtube (DONE) ──→ SpECTRE CCE → strain at scri+
 
 HIP backend (1-2 weeks) ─── independent, no blockers
 
@@ -569,18 +454,10 @@ CP-Sommerfeld (2-3 weeks) ─── independent, nice-to-have
 
 ### Recommended Order
 
-| # | Item | Effort | Why first? |
-|---|------|--------|------------|
-| 1 | **Psi4 extraction** | Done | Blocks everything else |
-| 2 | **PHE** | 1-2 weeks | Fast path to publishable waveforms |
-| 3 | **HIP backend** | 1-2 weeks | Can run in parallel with PHE |
+| # | Item | Effort | Why? |
+|---|------|--------|------|
+| 1 | **Psi4 extraction** | Done | Table stakes |
+| 2 | **CCE worldtube** | Done | Gold-standard waveforms via SpECTRE |
+| 3 | **HIP backend** | 1-2 weeks | AMD + NVIDIA GPU support |
 | 4 | **Larger domain** | 0 days | Just use `--L 4000` |
-| 5 | **CCE worldtube** | 2-3 weeks | Gold standard, needs HDF5 |
-| 6 | **CP-Sommerfeld** | 2-3 weeks | Nice-to-have for very long runs |
-
-### Fast Path to First Publishable Waveforms
-
-**Psi4 (done) + PHE (2 weeks) = ~2 weeks remaining.**
-
-No HDF5, no external tools, pure C17. Produces waveforms at null infinity with
-< 0.05 rad phase accuracy — sufficient for current and next-gen detectors.
+| 5 | **CP-Sommerfeld** | 2-3 weeks | Nice-to-have for very long runs |
