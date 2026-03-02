@@ -997,15 +997,17 @@ static void smooth_block_4field(block_t *blk, int color)
  * non-leaf blocks' ghost zones contain stale data, corrupting the FD
  * operator evaluation and tau correction.
  *
- * We do NOT use ghost_exchange_multilevel() because Phase 4 (coarse→fine
- * prolongation) overwrites the solver's zero Dirichlet BCs with non-zero
- * interpolated values, preventing convergence.
+ * Uses ghost_exchange_multilevel_all() to correctly handle cross-level
+ * ghost zones at AMR refinement boundaries via the coarse-buffer protocol.
+ * Direct memcpy between different-level neighbors (ghost_exchange_all_blocks)
+ * copies data at wrong physical resolution, causing V-cycle divergence.
  *
  * After exchange, re-apply solver BCs on all blocks to ensure
- * domain-boundary ghost zones are zero. */
+ * domain-boundary ghost zones are zero (Phase 4 prolongation may
+ * overwrite zero Dirichlet BCs with non-zero interpolated values). */
 static void solver_ghost_exchange(mesh_t *m, int four_field)
 {
-    ghost_exchange_all_blocks(m);
+    ghost_exchange_multilevel_all(m);
 
     /* Re-apply zero-Dirichlet BCs on domain-boundary blocks at all levels */
     for (int b = 0; b < m->num_blocks; b++) {

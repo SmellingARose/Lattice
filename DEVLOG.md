@@ -3,26 +3,35 @@
 > **Note:** When adding/removing/renaming files or functions, also update
 > `docs/architecture.html` — the living map of the codebase structure.
 
-## 2026-03-02: Fix uninitialized rhs in AMR composite multigrid solver
+## 2026-03-02: Fix 3 AMR bugs: composite multigrid divergence + evolution blowup
 
-**Bug:** All 4 AMR multigrid solver entry points (`relaxation_solve_amr`,
-`relaxation_solve_coupled_amr`, `relaxation_solve_amr_mesh`,
-`relaxation_solve_coupled_amr_mesh`) had uninitialized `rhs` arrays on mesh
-blocks. `posix_memalign` (used by `grid_alloc_ex`) does NOT zero memory.
-The finest-level equation is L(u) = 0, so `rhs` must be 0, but it contained
-garbage.
+**Bug 1 (PRIMARY): Cross-level ghost exchange in multigrid solver.**
+`solver_ghost_exchange()` called `ghost_exchange_all_blocks()`, which does
+direct `memcpy` between blocks regardless of AMR level. When a fine block
+(level L) has a coarser neighbor (level L-1), data is copied at wrong physical
+resolution (coarser block covers 2x the physical extent, same cell count).
+This corrupts FD stencils near refinement boundaries, compounding each V-cycle
+(8 colors × 8 sweeps = 64 bad ghost exchanges per level per cycle).
 
-**Symptoms:** With 3 AMR levels, V-cycles diverged (2x growth per cycle).
-With 5 levels, the smoother partially masked the garbage (0.85/cycle convergence
-— very slow but not divergent), leading to 159 V-cycles in the binary inspiral
-test. Root cause of the inspiral blowup at t=5.5M.
+With 3 AMR levels: V-cycles diverged (2x/cycle). With 5 levels: divergence
+damped by multi-level structure → very slow convergence (0.85/cycle, 159
+V-cycles). The wrong initial data then caused evolution blowup at t=5.5M.
 
-**Fix:** Added `memset(rhs[SOL_*], 0, ...)` in all 4 solver init paths in
-`src/initial_data/relaxation_amr.c`. Also zeroes `fields[SOL_*]` for safety.
+**Fix:** Added `ghost_exchange_multilevel_all()` in `ghost_exchange.c` — same
+coarse-buffer protocol as `ghost_exchange_multilevel()` but processes ALL blocks
+(not just leaves). Solver now uses this + re-applies zero Dirichlet BCs.
+Result: convergence factor ~0.24 per V-cycle (excellent).
 
-**Also:** Updated `test_binary_inspiral.c` parameters for a viable inspiral:
-L=64 (was 20), N_ROOT=3 (was 2), N_BLOCK=32 (was 16), MAX_LEVEL=3 (was 5),
-PSI4_RADIUS=20 (was 8), disabled SSL.
+**Bug 2: Uninitialized rhs arrays (latent, defense-in-depth).**
+`posix_memalign` does not guarantee zero memory. On Linux large allocations
+use `mmap` (zero pages), masking the bug, but on other platforms rhs could
+contain garbage. Added `memset(rhs[SOL_*], 0, ...)` in all 4 solver entry
+points. Also zeroes `fields[SOL_*]` for consistency.
+
+**Bug 3: Inspiral test parameters too aggressive.**
+L=20 domain too small (boundaries 5M from BHs), 5 AMR levels gave gauge CFL
+violation (speed ~31c, CFL ~8x). Updated to L=64, N_ROOT=3, N_BLOCK=32,
+MAX_LEVEL=3, PSI4_RADIUS=20, disabled SSL.
 
 ## 2026-03-02: Optimization pass (CPU + GPU + dead code)
 

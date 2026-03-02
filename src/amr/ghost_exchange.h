@@ -57,6 +57,14 @@ void ghost_exchange_all_blocks(mesh_t *m);
 void ghost_exchange_multilevel(mesh_t *m);
 
 /*
+ * Like ghost_exchange_multilevel() but processes ALL blocks (not just leaves).
+ * Required for composite multigrid solvers where the V-cycle operates on
+ * both leaf and non-leaf blocks. Uses the coarse-buffer protocol to correctly
+ * interpolate ghost zones at coarse-fine refinement boundaries.
+ */
+void ghost_exchange_multilevel_all(mesh_t *m);
+
+/*
  * Fill fine-level ghost zones from time-interpolated coarse neighbors.
  * For each fine leaf at `fine_level`, finds coarser neighbors, interpolates
  * their fields between t_old and t_new using frac = (t_fine - t_old)/dt_coarse,

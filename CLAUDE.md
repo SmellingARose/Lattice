@@ -199,10 +199,13 @@ work on AMR meshes.
   (memset default), disabling KO dissipation in all AMR runs; fixed in both backends.
   Subcycling frac drift: replaced floating-point `floor(t/dt)` computation with
   integer `sub_step` parameter (latent bug in long-duration runs). AMR composite
-  multigrid solver: uninitialized `rhs` arrays on mesh blocks (`posix_memalign` does
-  not zero memory). Caused V-cycle divergence (2x/cycle) with 3 AMR levels, or very
-  slow convergence (0.85/cycle, 159 V-cycles) with 5 levels. Fixed by zeroing `rhs`
-  and `fields` in all 4 solver entry points.
+  multigrid solver: `solver_ghost_exchange()` used `ghost_exchange_all_blocks()`,
+  which does direct `memcpy` between blocks regardless of AMR level — cross-level
+  copies corrupt FD stencils at refinement boundaries. Caused V-cycle divergence
+  (2x/cycle) with 3 AMR levels, or very slow convergence (0.85/cycle, 159 V-cycles)
+  with 5 levels. Fixed by adding `ghost_exchange_multilevel_all()` (coarse-buffer
+  protocol for all blocks) + re-applying solver BCs. Also zeroed `rhs` and `fields`
+  in all 4 solver entry points (defense-in-depth for non-Linux platforms).
 - **Default integrator:** Changed from CK45 to classic RK4 (`RK_CLASSIC`). Classic is
   faster (4 stages vs 5) but uses 25% more memory. All test allocations updated.
 - **Tests:** Flat spacetime, convergence (order 6.5), Bowen-York (33/33 + N-body),

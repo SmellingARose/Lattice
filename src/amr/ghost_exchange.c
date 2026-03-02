@@ -770,3 +770,103 @@ void ghost_exchange_multilevel(mesh_t *m)
         prolongate_from_own_coarse_buf(b);
     }
 }
+
+/*
+ * Like ghost_exchange_multilevel() but processes ALL blocks (not just leaves).
+ * Required for composite multigrid solvers where the V-cycle operates on
+ * both leaf and non-leaf blocks at each level. Without the is_leaf filter,
+ * non-leaf (parent) blocks that hold restricted data also get proper
+ * cross-level ghost zone interpolation via the coarse-buffer protocol.
+ */
+void ghost_exchange_multilevel_all(mesh_t *m)
+{
+    /* Fast path for uniform grids */
+    if (m->max_level == 0) {
+        ghost_exchange_all_blocks(m);
+        return;
+    }
+
+    /* Phase 0+1: Same-level exchange at each level (all blocks) */
+    for (int L = 0; L <= m->max_level; L++) {
+        #pragma omp parallel for schedule(dynamic)
+        for (int bid = 0; bid < m->num_blocks; bid++) {
+            block_t *b = m->blocks[bid];
+            if (!b || b->loc.level != L) continue;
+
+            for (int n = 0; n < NUM_NEIGHBORS; n++) {
+                int nbr_id = b->neighbor_ids[n];
+                if (nbr_id < 0) continue;
+
+                block_t *nbr = m->blocks[nbr_id];
+                if (!nbr || nbr->loc.level != L) continue;
+
+                exchange_neighbor(b, nbr,
+                                  nbr_offset[n][0],
+                                  nbr_offset[n][1],
+                                  nbr_offset[n][2],
+                                  0);
+            }
+        }
+    }
+
+    /* Phase 2: Restrict all level > 0 blocks → own coarse_buf */
+    #pragma omp parallel for schedule(dynamic)
+    for (int bid = 0; bid < m->num_blocks; bid++) {
+        block_t *b = m->blocks[bid];
+        if (!b || b->loc.level == 0) continue;
+        restrict_to_coarse_buf(b);
+    }
+
+    /* Phase 3: Fill coarse_buf ghost zones (all level > 0 blocks) */
+    #pragma omp parallel for schedule(dynamic)
+    for (int bid = 0; bid < m->num_blocks; bid++) {
+        block_t *b = m->blocks[bid];
+        if (!b || b->loc.level == 0) continue;
+        if (!b->coarse_buf) continue;
+
+        for (int n = 0; n < NUM_NEIGHBORS; n++) {
+            int ox = nbr_offset[n][0];
+            int oy = nbr_offset[n][1];
+            int oz = nbr_offset[n][2];
+            int nlev = b->nblevel[oz + 1][oy + 1][ox + 1];
+
+            if (nlev == b->loc.level) {
+                /* Same-level neighbor: exchange coarse_buf ↔ coarse_buf */
+                int nbr_id = b->neighbor_ids[n];
+                if (nbr_id < 0) continue;
+                block_t *nbr = m->blocks[nbr_id];
+                if (!nbr || !nbr->coarse_buf) continue;
+
+                exchange_grid_pair(b->coarse_buf, nbr->coarse_buf,
+                                   ox, oy, oz);
+
+            } else if (nlev >= 0 && nlev == b->loc.level - 1) {
+                /* Coarser neighbor: copy from coarse neighbor's grid */
+                int nbr_id = b->neighbor_ids[n];
+                if (nbr_id < 0) continue;
+                block_t *nbr = m->blocks[nbr_id];
+                if (!nbr || !nbr->grid) continue;
+
+                copy_from_coarse_grid(b->coarse_buf, b->origin,
+                                      nbr->grid, nbr->origin,
+                                      ox, oy, oz);
+            }
+        }
+    }
+
+    /* Phase 3.5: Fill coarse_buf boundary ghost cells by extrapolation */
+    #pragma omp parallel for schedule(dynamic)
+    for (int bid = 0; bid < m->num_blocks; bid++) {
+        block_t *b = m->blocks[bid];
+        if (!b || b->loc.level == 0) continue;
+        fill_coarse_buf_boundary(b);
+    }
+
+    /* Phase 4: Prolongate coarse_buf → fine ghost zones */
+    #pragma omp parallel for schedule(dynamic)
+    for (int bid = 0; bid < m->num_blocks; bid++) {
+        block_t *b = m->blocks[bid];
+        if (!b || b->loc.level == 0) continue;
+        prolongate_from_own_coarse_buf(b);
+    }
+}
