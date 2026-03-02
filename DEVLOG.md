@@ -3,6 +3,27 @@
 > **Note:** When adding/removing/renaming files or functions, also update
 > `docs/architecture.html` — the living map of the codebase structure.
 
+## 2026-03-02: Remove N_ROOT > 1 + full inspiral test (T=700M)
+
+**N_ROOT removal:** Hardcoded single root block (N_ROOT=1). Multi-root meshes
+caused V-cycle divergence in the composite multigrid solver (cross-block coupling
+only via ghost exchange, which doesn't work correctly across root blocks). With
+N_ROOT=1, all multi-block topology comes from AMR refinement — the solver sees
+the whole domain as one block at the coarsest level, and uniform MG converges
+correctly. Removed `N_root` from `mesh_t`, `amr_params_t`, `mesh_create` API,
+CLI `--N_root` flag, and all test files. Higher MAX_LEVEL compensates: e.g.,
+N_BLOCK=32, MAX_LEVEL=4 gives dx_fine = 0.125M (was N_ROOT=3, MAX_LEVEL=3,
+dx_fine ≈ 0.083M — comparable resolution, far simpler code path).
+
+**Inspiral test upgrade:** Updated `test_binary_inspiral.c` for full inspiral +
+merger + ringdown. N_BLOCK=32, MAX_LEVEL=4, T_FINAL=700M (~3-4 orbits + merger
++ ringdown for D=10M binary, Peters estimate ~781M). Added diagnostics CSV
+(`build/inspiral_diagnostics.csv`) with time series of Ham/Mom L2, lapse, BH
+separation, Psi4 (2,2) mode, AH masses and spins. All diagnostics flush after
+every write for crash resilience.
+
+Refs: BAM D=6.5M → 160M merger (gr-qc/0610128), D=11M → 1000M (0706.0904).
+
 ## 2026-03-02: Fix 3 AMR bugs: composite multigrid divergence + evolution blowup
 
 **Bug 1 (PRIMARY): Cross-level ghost exchange in multigrid solver.**

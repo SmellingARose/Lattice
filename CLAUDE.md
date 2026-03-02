@@ -215,7 +215,8 @@ work on AMR meshes.
 - **Tests:** Flat spacetime, convergence (order 6.5), Bowen-York (33/33 + N-body),
   HiSpID (26/26), AH finder (13/13), Maxwell (15/15), Psi4 (15/15), CCE (49/49),
   CP-BC (30/30), pack_evolve (8/8), amr_prolong (15/15), binary inspiral (full
-  system validation: BY+AMR+CCZ4+Psi4+AH+constraints). N-body smoke tests:
+  inspiral+merger+ringdown T=700M: BY+AMR+CCZ4+Psi4+AH+constraints+CSV diagnostics).
+  N-body smoke tests:
   3-BH line, 5-BH pentagon. Total: 31 evolved fields (25 CCZ4 + 6 EM).
 
 Update as milestones are reached.
@@ -298,7 +299,7 @@ lattice/
 │   ├── test_psi4.c          # Psi4 gravitational wave extraction tests (15/15)
 │   ├── test_cce_worldtube.c # CCE worldtube HDF5 output tests (49/49, requires HDF5)
 │   ├── test_cp_bc.c         # Constraint-preserving BC tests (30/30)
-│   ├── test_binary_inspiral.c  # Full binary inspiral system validation (10 subsystems)
+│   ├── test_binary_inspiral.c  # Full inspiral+merger+ringdown (T=700M, 10 subsystems, CSV diagnostics)
 │   ├── test_inspiral_convergence.c  # AMR binary inspiral convergence (3 resolutions)
 │   ├── test_gpu_debug.c       # GPU kernel isolation test (per-kernel sync barriers)
 │   └── convergence.sh          # 3-resolution convergence check

@@ -109,7 +109,7 @@ static double *run_resolution(int res_idx, int n_block)
     puncture_data_t bhs[2];
     setup_punctures(bhs);
 
-    printf("  Solving initial data (FAS multigrid, N_eff=%d)...\n", n_eff);
+    printf("  Solving initial data (FAS multigrid, N_block=%d)...\n", n_block);
     fflush(stdout);
     time_t t0 = time(NULL);
 

@@ -5,7 +5,7 @@
  * ====================================================================
  *
  * This test evolves an equal-mass, non-spinning, quasi-circular binary
- * black hole system through approximately half an orbit.  It exercises
+ * black hole system through inspiral, merger, and ringdown.  It exercises
  * every major subsystem simultaneously:
  *
  *   1. Bowen-York initial data with FAS multigrid constraint solver
@@ -29,8 +29,8 @@
  * Grid configuration:
  *
  *   Domain:     [-32, 32]^3 M
- *   Root mesh:  3^3 blocks x 32^3 cells = 96^3 effective, dx_base = 0.667 M
- *   AMR:        max_level = 3  →  dx_fine = 0.083 M near punctures
+ *   Root mesh:  1 block x 32^3 cells, dx_base = 2.0 M
+ *   AMR:        max_level = 4  →  dx_fine = 0.125 M near punctures
  *   CFL:        0.25
  *   Integrator: classic RK4
  *   BCs:        constraint-preserving (BAM-style, arXiv:1212.2901)
@@ -45,8 +45,8 @@
  *
  *   Hyperbolic flow finder attempts to locate each BH's AH every 20
  *   steps, extracting irreducible mass M_irr and dimensionless spin chi.
- *   With AMR refinement (dx_fine = 0.083 M), the AH radius (~0.12 M)
- *   spans ~1.4 cells — marginal but detectable.
+ *   With AMR refinement (dx_fine = 0.125 M), the AH radius (~0.12 M)
+ *   spans ~1 cell — marginal but detectable.
  *
  * Pass criteria:
  *
@@ -105,18 +105,18 @@ extern void output_mesh_1d_slice(const mesh_t *m, int step, double time);
  * ==================================================================== */
 #define L_DOMAIN    64.0
 #define N_BLOCK     32
-#define MAX_LEVEL   5
+#define MAX_LEVEL   4
 #define CFL_FACTOR  0.25
-#define T_FINAL     20.0
+#define T_FINAL     700.0
 
 /* ====================================================================
  * Diagnostic schedule
  * ==================================================================== */
-#define DIAG_EVERY    5
+#define DIAG_EVERY    10
 #define REGRID_EVERY  50
 #define SLICE_EVERY   200
-#define PSI4_EVERY    20
-#define AH_EVERY      20
+#define PSI4_EVERY    10
+#define AH_EVERY      10
 
 /* ====================================================================
  * Wave extraction parameters
@@ -415,6 +415,17 @@ int main(void)
     int    ah1_found = 0, ah2_found = 0;
     int    crashed = 0;
 
+    /* ── Diagnostics CSV file ─────────────────────────────────────── */
+    FILE *diag_fp = fopen("build/inspiral_diagnostics.csv", "w");
+    if (diag_fp) {
+        fprintf(diag_fp, "time,ham_l2,mom_l2,alpha_min,separation,"
+                "leaves,psi4_22_re,psi4_22_im,psi4_22_amp,"
+                "ah1_mass,ah1_spin,ah2_mass,ah2_spin\n");
+        fprintf(diag_fp, "%.6f,%.6e,%.6e,%.6f,%.6f,%d,0,0,0,-1,-1,-1,-1\n",
+                0.0, ham, mom, ml, sep0, mesh_num_leaves(m));
+        fflush(diag_fp);
+    }
+
     /* ── Evolution loop ────────────────────────────────────────────── */
     p.time = 0.0;
 
@@ -474,6 +485,7 @@ int main(void)
 
             /* Apparent horizons */
             double ah1_m = -1.0, ah2_m = -1.0;
+            double ah1_spin = -1.0, ah2_spin = -1.0;
             if (step % AH_EVERY == 0) {
                 /* Update AH centers to track moving punctures */
                 ah1->center[0] = bh1_pos[0];
@@ -487,6 +499,7 @@ int main(void)
                     ah_result_t r1 = ah_compute_diagnostics_amr(ah1, m);
                     if (r1.converged) {
                         ah1_m = r1.mass_irr;
+                        ah1_spin = r1.chi_spin;
                         ah1_mass_last = ah1_m;
                         ah1_found = 1;
                     }
@@ -495,6 +508,7 @@ int main(void)
                     ah_result_t r2 = ah_compute_diagnostics_amr(ah2, m);
                     if (r2.converged) {
                         ah2_m = r2.mass_irr;
+                        ah2_spin = r2.chi_spin;
                         ah2_mass_last = ah2_m;
                         ah2_found = 1;
                     }
@@ -511,6 +525,22 @@ int main(void)
             else           printf("          -");
             printf("  %7.1f\n", step_wall);
             fflush(stdout);
+
+            /* Write diagnostics CSV row */
+            if (diag_fp) {
+                double p22_re = 0.0, p22_im = 0.0;
+                int mi22_csv = 4;
+                if (mi22_csv < psi4_ws->n_modes) {
+                    p22_re = psi4_ws->mode_re[mi22_csv];
+                    p22_im = psi4_ws->mode_im[mi22_csv];
+                }
+                fprintf(diag_fp,
+                    "%.6f,%.6e,%.6e,%.6f,%.6f,%d,%.6e,%.6e,%.6e,%.6f,%.6f,%.6f,%.6f\n",
+                    p.time, ham, mom, ml, sep, mesh_num_leaves(m),
+                    p22_re, p22_im, psi4_22_amp,
+                    ah1_m, ah1_spin, ah2_m, ah2_spin);
+                fflush(diag_fp);
+            }
         }
 
         /* ── 1D slice output ───────────────────────────────────────── */
@@ -580,8 +610,9 @@ int main(void)
         printf("    Avg sec/step: %.2f\n", wall_sec / num_steps);
 
     printf("\n  Output files:\n");
-    printf("    build/inspiral_psi4.csv    — Psi4 mode coefficients vs time\n");
-    printf("    build/slice_*.csv          — 1D lapse/chi/K profiles\n");
+    printf("    build/inspiral_diagnostics.csv — time series (Ham, Mom, sep, lapse, Psi4, AH)\n");
+    printf("    build/inspiral_psi4.csv        — Psi4 mode coefficients vs time\n");
+    printf("    build/slice_*.csv              — 1D lapse/chi/K profiles\n");
 
     int all_passed = t1 && t2 && t3 && t4 && t5;
     printf("\n  ════════════════════════════════════════════\n");
@@ -590,6 +621,7 @@ int main(void)
     printf("  ════════════════════════════════════════════\n\n");
 
     /* ── Cleanup ───────────────────────────────────────────────────── */
+    if (diag_fp) fclose(diag_fp);
     psi4_free(psi4_ws);
     ah_free(ah1);
     ah_free(ah2);
