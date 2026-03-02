@@ -16,10 +16,12 @@
 #ifndef LATTICE_DEVICE_H
 #define LATTICE_DEVICE_H
 
-#ifdef LATTICE_HIP
+#if defined(LATTICE_HIP) && (defined(__HIPCC__) || defined(__cplusplus))
+  /* Device/mixed compilation (hipcc or C++) — full HIP annotations */
   #include <hip/hip_runtime.h>
   #define LATTICE_DEVICE __host__ __device__
 #else
+  /* Host-only C compilation — no HIP header needed */
   #define LATTICE_DEVICE
 #endif
 

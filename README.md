@@ -43,50 +43,54 @@ make test
 
 ### Ubuntu / Debian (GPU — NVIDIA H100/H200/A100/V100)
 
+The GPU backend uses HIP headers from ROCm + NVIDIA's nvcc compiler.
+On NVIDIA, `make BACKEND=gpu` uses nvcc directly (not hipcc) with HIP
+compatibility headers for portability.
+
 ```bash
-# 1. Install ROCm (provides hipcc with NVIDIA backend)
-#    Follow: https://rocm.docs.amd.com/projects/install-on-linux/en/latest/
-#    Or use the quick install script:
-sudo apt install wget gnupg2
-wget https://repo.radeon.com/rocm/rocm.gpg.key -O - | sudo apt-key add -
-echo 'deb [arch=amd64] https://repo.radeon.com/rocm/apt/latest/ ubuntu main' | \
-  sudo tee /etc/apt/sources.list.d/rocm.list
+# 1. Install CUDA toolkit + ROCm HIP headers
 sudo apt update
-sudo apt install rocm-dev hip-runtime-nvidia hip-dev
+sudo apt install -y nvidia-cuda-toolkit
+# Install ROCm (for HIP headers — the Makefile uses nvcc directly)
+wget -q https://repo.radeon.com/amdgpu-install/6.3.3/ubuntu/noble/amdgpu-install_6.3.60303-1_all.deb -O /tmp/amdgpu-install.deb
+sudo apt install -y /tmp/amdgpu-install.deb
+sudo apt install -y hip-dev rocm-hip-sdk
 
-# 2. Verify hipcc is available
-hipcc --version
+# 2. Set environment variables (add to ~/.bashrc for persistence)
+export HIP_PLATFORM=nvidia
+export CUDA_PATH=/usr   # or /usr/local/cuda if using NVIDIA's CUDA installer
 
-# 3. Build and run
+# 3. Verify
+nvcc --version           # should show CUDA compiler
+ls /opt/rocm/include/hip/hip_runtime.h  # HIP headers present
+
+# 4. Build and run
 git clone https://github.com/SmellingARose/Lattice.git
 cd Lattice
 make clean
-make BACKEND=gpu
+make BACKEND=gpu         # uses nvcc + HIP headers automatically
 make test
 
-# 4. Run binary inspiral (full merger, ~2-3 hours on H200)
+# 5. Run binary inspiral (full merger, ~2-3 hours on H200)
 nohup build/test_binary_inspiral > inspiral.log 2>&1 &
 tail -f inspiral.log
 ```
 
-**Note:** If ROCm's NVIDIA backend is not available on your cloud provider,
-an alternative is to install AMD's HIP-on-CUDA directly. The key requirement
-is that `hipcc` can compile `.cpp` files targeting your GPU. Verify with:
-
-```bash
-hipcc --version
-hipconfig --platform   # should show "nvidia" for NVIDIA GPUs
-```
+**How it works:** On NVIDIA, `make BACKEND=gpu` detects `HIP_PLATFORM=nvidia`
+and uses `nvcc` directly with `-x cu` to compile device code. HIP API calls
+(hipMalloc, hipMemcpy, etc.) are thin wrappers around CUDA, provided by the
+ROCm HIP headers at `/opt/rocm/include`. Host C files are compiled with gcc
+as usual — they never see HIP headers.
 
 ### Ubuntu / Debian (GPU — AMD MI250X/MI300X)
 
 ```bash
-# ROCm is native for AMD GPUs
-sudo apt install rocm-dev
+# ROCm is native for AMD GPUs — hipcc compiles directly
+sudo apt install rocm-dev hip-dev
 git clone https://github.com/SmellingARose/Lattice.git
 cd Lattice
 make clean
-make BACKEND=gpu
+make BACKEND=gpu    # uses hipcc natively
 make test
 ```
 
@@ -103,17 +107,24 @@ make
 make test
 ```
 
-### Cloud Quick Setup (copy-paste)
+### Cloud Quick Setup (copy-paste for NVIDIA GPU)
 
-For a fresh Ubuntu cloud instance with an NVIDIA GPU:
+For a fresh Ubuntu 24.04 cloud instance with an NVIDIA GPU (H100/H200/A100):
 
 ```bash
-# All-in-one: install deps, clone, build GPU, run inspiral
-sudo apt update && sudo apt install -y build-essential libomp-dev git
+# 1. System deps
+sudo apt update && sudo apt install -y build-essential libomp-dev git nvidia-cuda-toolkit
 
-# Install ROCm for NVIDIA HIP backend (see ROCm docs for your distro)
-# ... or if hipcc is already available in your cloud image, skip this step
+# 2. ROCm HIP headers (for HIP API portability layer)
+wget -q https://repo.radeon.com/amdgpu-install/6.3.3/ubuntu/noble/amdgpu-install_6.3.60303-1_all.deb -O /tmp/amdgpu-install.deb
+sudo apt install -y /tmp/amdgpu-install.deb
+sudo apt install -y hip-dev rocm-hip-sdk
 
+# 3. Environment (add to ~/.bashrc)
+export HIP_PLATFORM=nvidia
+export CUDA_PATH=/usr
+
+# 4. Build + run
 git clone https://github.com/SmellingARose/Lattice.git
 cd Lattice
 make clean && make BACKEND=gpu

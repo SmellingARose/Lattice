@@ -54,6 +54,9 @@ else ifeq ($(BACKEND),gpu)
     # HIP GPU backend — works on AMD (ROCm) and NVIDIA (HIP CUDA backend).
     # Two-phase compilation: gcc compiles host C files, hipcc compiles
     # device-side C files (as C++) and backend_hip.cpp, then link all.
+    #
+    # NVIDIA: set HIP_PLATFORM=nvidia CUDA_PATH=/usr (or wherever nvcc lives)
+    # AMD:    default (HIP_PLATFORM=amd)
     HIPCC ?= hipcc
     BACKEND_SRC = src/backend/backend_hip.cpp
     HIP_DEVICE_SRC = src/evolution/ccz4_rhs.c src/evolution/maxwell_rhs.c \
@@ -62,6 +65,16 @@ else ifeq ($(BACKEND),gpu)
     HIP_FLAGS = -DLATTICE_HIP -DLATTICE_GPU
     BACKEND_FLAGS = -fopenmp
     BACKEND_LIBS =
+    # NVIDIA platform: hipcc needs CUDA_PATH; host linker needs -lcudart
+    # Auto-detect ROCm path for HIP headers
+    ROCM_PATH ?= $(wildcard /opt/rocm)
+    ifeq ($(ROCM_PATH),)
+        ROCM_PATH := $(firstword $(wildcard /opt/rocm-*))
+    endif
+    ifeq ($(HIP_PLATFORM),nvidia)
+        CUDA_PATH ?= /usr/local/cuda
+        BACKEND_LIBS += -L$(CUDA_PATH)/lib64 -lcudart
+    endif
 else
     $(error Unknown BACKEND=$(BACKEND). Use cpu or gpu)
 endif
@@ -122,7 +135,19 @@ HOST_OBJS = $(patsubst %.c,$(BUILD)/host/%.o,$(HOST_SRC) $(MAIN_SRC))
 DEVICE_C_OBJS = $(patsubst %.c,$(BUILD)/device/%.o,$(HIP_DEVICE_SRC))
 DEVICE_CXX_OBJS = $(BUILD)/device/src/backend/backend_hip.o
 
-HIP_CXXFLAGS = -std=c++17 -Wall -Wextra -O3 -DFD_ORDER=$(FD_ORDER) $(EM_FLAGS) $(HDF5_FLAGS) $(INCLUDES) $(HIP_FLAGS) -Wno-unused-parameter -Wno-unused-but-set-variable
+# NVIDIA hipcc wraps nvcc which has different flag syntax
+ifeq ($(HIP_PLATFORM),nvidia)
+    HIP_CXXFLAGS = -std=c++17 -O3 -DFD_ORDER=$(FD_ORDER) $(EM_FLAGS) $(HDF5_FLAGS) $(INCLUDES) $(HIP_FLAGS) \
+                   -I$(ROCM_PATH)/include -D__HIP_PLATFORM_NVIDIA__ -rdc=true \
+                   --compiler-options -Wall,-Wextra,-Wno-unused-parameter,-Wno-unused-but-set-variable
+    HIP_LANG_FLAG = -x cu
+    # Use nvcc directly (hipcc wrapper adds flags that break with Ubuntu CUDA toolkit)
+    HIPCC := nvcc
+else
+    HIP_CXXFLAGS = -std=c++17 -Wall -Wextra -O3 -DFD_ORDER=$(FD_ORDER) $(EM_FLAGS) $(HDF5_FLAGS) $(INCLUDES) $(HIP_FLAGS) \
+                   -Wno-unused-parameter -Wno-unused-but-set-variable
+    HIP_LANG_FLAG = -x hip
+endif
 
 $(BUILD)/host/%.o: %.c
 	@mkdir -p $(dir $@)
@@ -130,15 +155,19 @@ $(BUILD)/host/%.o: %.c
 
 $(BUILD)/device/%.o: %.c
 	@mkdir -p $(dir $@)
-	$(HIPCC) $(HIP_CXXFLAGS) -x hip -c -o $@ $<
+	$(HIPCC) $(HIP_CXXFLAGS) $(HIP_LANG_FLAG) -c -o $@ $<
 
 $(BUILD)/device/src/backend/backend_hip.o: src/backend/backend_hip.cpp
 	@mkdir -p $(dir $@)
-	$(HIPCC) $(HIP_CXXFLAGS) -c -o $@ $<
+	$(HIPCC) $(HIP_CXXFLAGS) $(HIP_LANG_FLAG) -c -o $@ $<
 
 $(BUILD)/lattice: $(HOST_OBJS) $(DEVICE_C_OBJS) $(DEVICE_CXX_OBJS)
 	@mkdir -p $(BUILD)
+ifeq ($(HIP_PLATFORM),nvidia)
+	$(HIPCC) -rdc=true -o $@ $^ $(HDF5_LIBS) -lm -lgomp -lcudadevrt -lcudart
+else
 	$(HIPCC) -fopenmp -o $@ $^ $(HDF5_LIBS) -lm
+endif
 	@echo "Built: $@ (HIP GPU)"
 else
 # CPU build: single-phase gcc compilation.

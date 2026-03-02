@@ -86,13 +86,15 @@ typedef struct {
     double shift[3], B[3];
 } ccz4_gauge_rhs_t;
 
-/* Field indices for symmetric tensor components (file-scope for sub-functions) */
-static const int h_idx[3][3] = {
+/* Field indices for symmetric tensor components (file-scope for sub-functions).
+ * LATTICE_DEVICE needed for nvcc which doesn't auto-promote static const
+ * arrays to device code (clang/hipcc does). */
+LATTICE_DEVICE static const int h_idx[3][3] = {
     {FIELD_H11, FIELD_H12, FIELD_H13},
     {FIELD_H12, FIELD_H22, FIELD_H23},
     {FIELD_H13, FIELD_H23, FIELD_H33}
 };
-static const int A_idx[3][3] = {
+LATTICE_DEVICE static const int A_idx[3][3] = {
     {FIELD_A11, FIELD_A12, FIELD_A13},
     {FIELD_A12, FIELD_A22, FIELD_A23},
     {FIELD_A13, FIELD_A23, FIELD_A33}

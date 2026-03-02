@@ -41,7 +41,7 @@
 #include <math.h>
 
 /* Levi-Civita symbol epsilon_{ijk} (fully antisymmetric, values +1/-1/0) */
-static const int levi_civita[3][3][3] = {
+LATTICE_DEVICE static const int levi_civita[3][3][3] = {
     {{ 0, 0, 0}, { 0, 0, 1}, { 0,-1, 0}},
     {{ 0, 0,-1}, { 0, 0, 0}, { 1, 0, 0}},
     {{ 0, 1, 0}, {-1, 0, 0}, { 0, 0, 0}}

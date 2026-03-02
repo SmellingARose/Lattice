@@ -25,7 +25,7 @@
  * C++ (hipcc) doesn't support C99 designated initializers, so we use
  * positional initialization for C++ builds. Both produce the same array. */
 #ifdef __cplusplus
-static const double asym_values[NUM_FIELDS] = {
+LATTICE_DEVICE static const double asym_values[NUM_FIELDS] = {
     /* chi */ 1.0,
     /* h11 */ 1.0, /* h12 */ 0.0, /* h13 */ 0.0,
     /* h22 */ 1.0, /* h23 */ 0.0, /* h33 */ 1.0,
@@ -41,7 +41,7 @@ static const double asym_values[NUM_FIELDS] = {
     /* BM1 */ 0.0, /* BM2 */ 0.0, /* BM3 */ 0.0,
 };
 #else
-static const double asym_values[NUM_FIELDS] = {
+LATTICE_DEVICE static const double asym_values[NUM_FIELDS] = {
     [FIELD_CHI]   = 1.0,
     [FIELD_H11]   = 1.0, [FIELD_H22] = 1.0, [FIELD_H33] = 1.0,
     [FIELD_LAPSE] = 1.0
