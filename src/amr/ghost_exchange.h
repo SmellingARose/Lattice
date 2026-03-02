@@ -37,6 +37,15 @@
 void ghost_exchange(mesh_t *m);
 
 /*
+ * Like ghost_exchange() but includes non-leaf blocks.
+ * Required for composite multigrid solvers where the V-cycle operates
+ * on ALL blocks at each level (not just leaves).  Without this, non-leaf
+ * blocks in multi-root meshes have unfilled ghost zones, causing the FD
+ * operator to read stale data and the solver to diverge.
+ */
+void ghost_exchange_all_blocks(mesh_t *m);
+
+/*
  * Fill ghost zones for a specific field array (not necessarily fields[]).
  * Used during RK stages when operating on intermediate states.
  * src_field selects which array to exchange: 0 = fields, 1 = scratch.

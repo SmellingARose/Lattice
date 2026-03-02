@@ -3,6 +3,46 @@
 > **Note:** When adding/removing/renaming files or functions, also update
 > `docs/architecture.html` — the living map of the codebase structure.
 
+## 2026-03-02: Binary inspiral system validation test
+
+Added `tests/test_binary_inspiral.c` — a comprehensive integration test that
+exercises all 10 major subsystems simultaneously: Bowen-York initial data with
+FAS multigrid, CCZ4 evolution with CP BCs, RK4 integration, KO dissipation,
+constraint monitoring, Psi4 extraction, AH finder, lapse/separation tracking,
+and 1D slice output.
+
+**Physical setup:** Equal-mass non-spinning quasi-circular binary (Brugmann et
+al. 2008, arXiv:0709.0838). Bare masses m=0.4824, separation d=10M, tangential
+momentum P_y=±0.0939 (3PN). Domain [-32,32]^3 M, 4^3×16^3 = 64^3 effective
+resolution, uniform mesh (dx=1.0M), constraint-preserving BCs.
+
+**Pass criteria (5/5):** stability (no NaN/Inf), constraints bounded (Ham < 1.0),
+Psi4(2,2) signal > 1e-6, gauge collapse (lapse < 0.8), inspiral motion
+(separation decreasing).
+
+**Results:** All 5 pass in 2.3 min on CPU. Constraints monotonically decrease
+(7.5e-3 → 1.7e-4). Psi4(2,2) mode amplitude ~2.6e-5. Separation 9.0→2.24M
+(binary inspiraling). Lapse min 0.5859. AH finder attempted but not found at
+this resolution (expected — AH radius ~0.12M vs dx=1M; tested separately in
+`test_ah_finder.c` at finer grids).
+
+**Bug fixes:**
+- `refine_mesh_near_punctures` AABB fix: was checking block-center-to-puncture
+  distance, now checks minimum distance from puncture to block bounding box.
+  The old check failed for large blocks (16M wide) where `r_refine = 8*dx = 8M`
+  was smaller than the block half-diagonal.
+- Two-pass BH separation tracker: the old single-pass algorithm had a bug where
+  the "push-down" from BH1 to BH2 slot didn't check the 2M minimum distance
+  requirement, causing adjacent cells to fill the BH2 slot and report separation
+  ~1M regardless of true BH distance.
+
+**Known limitation:** AMR initial data requires solving the constraint equation
+on the refined mesh. The composite FMG solver diverges on multi-root meshes
+(N_ROOT > 1) with AMR levels > 0. Prolongation of solved CCZ4 fields from
+coarse to fine produces negative chi near the puncture singularity (Runge
+phenomenon from polynomial interpolation of 1/r^4). Future work: solve on fine
+mesh directly or use monotone prolongation near singularities.
+
 ## 2026-03-02: Native HIP GPU backend (replaces OpenMP target)
 
 Replaced OpenMP target offloading (`#pragma omp target teams distribute`) with

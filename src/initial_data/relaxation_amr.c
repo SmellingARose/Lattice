@@ -984,17 +984,22 @@ static void smooth_block_4field(block_t *blk, int color)
 
 /* Ghost exchange for solver fields.
  *
- * IMPORTANT: We use ghost_exchange() (same-level leaf exchange only),
- * NOT ghost_exchange_multilevel().  The multilevel version includes
- * Phase 4 which prolongates from coarse_buf into fine ghost zones at
- * domain boundaries.  This overwrites the solver's zero Dirichlet BCs
- * with non-zero interpolated values, preventing convergence.
+ * Uses ghost_exchange_all_blocks() which includes non-leaf blocks.
+ * The composite V-cycle operates on ALL blocks at each level (not just
+ * leaves), so non-leaf blocks need their ghost zones filled from
+ * same-level neighbors.  Without this, multi-root meshes diverge because
+ * non-leaf blocks' ghost zones contain stale data, corrupting the FD
+ * operator evaluation and tau correction.
  *
- * After same-level exchange, re-apply solver BCs on all blocks to
- * ensure domain-boundary ghost zones are zero. */
+ * We do NOT use ghost_exchange_multilevel() because Phase 4 (coarse→fine
+ * prolongation) overwrites the solver's zero Dirichlet BCs with non-zero
+ * interpolated values, preventing convergence.
+ *
+ * After exchange, re-apply solver BCs on all blocks to ensure
+ * domain-boundary ghost zones are zero. */
 static void solver_ghost_exchange(mesh_t *m, int four_field)
 {
-    ghost_exchange(m);
+    ghost_exchange_all_blocks(m);
 
     /* Re-apply zero-Dirichlet BCs on domain-boundary blocks at all levels */
     for (int b = 0; b < m->num_blocks; b++) {
@@ -1457,8 +1462,36 @@ static void composite_vcycle(mg_amr_t *mg, int amr_level)
     compute_operator_level(m, amr_level, mg->four_field);
     compute_residual_level(m, amr_level, mg->four_field);
 
-    /* Restrict fine solution + residual to coarser level */
+    /* Restrict fine solution + residual to coarser level.
+     * restrict_to_coarser_amr OVERWRITES fields[s] and rhs[s] on coarse
+     * blocks that have fine children.  Leaf blocks (no children at
+     * amr_level) are NOT touched — their rhs[s] would accumulate stale
+     * L(u) terms across V-cycles, causing divergence.
+     *
+     * Fix: zero rhs on leaf blocks at the target level before tau
+     * correction.  After tau, they get rhs = 0 + L(u) = L(u), which
+     * is the correct FAS target for blocks with no fine-level residual
+     * (the coarse solve returns delta = 0, i.e., no change). */
     restrict_to_coarser_amr(m, amr_level, mg->four_field);
+
+    /* Zero rhs on leaf blocks at amr_level-1 (no fine children).
+     * Non-leaf blocks had rhs overwritten by restriction above. */
+    {
+        int n_sol = mg->four_field ? 4 : 1;
+        for (int b = 0; b < m->num_blocks; b++) {
+            block_t *blk = m->blocks[b];
+            if (!blk || blk->loc.level != amr_level - 1) continue;
+            /* Check if this block has children at amr_level */
+            int has_children = 0;
+            for (int c = 0; c < 8; c++)
+                if (blk->child_ids[c] >= 0) { has_children = 1; break; }
+            if (has_children) continue;  /* non-leaf: rhs set by restriction */
+            /* Leaf: zero rhs to prevent stale accumulation */
+            grid_t *g = blk->grid;
+            for (int s = 0; s < n_sol; s++)
+                memset(g->rhs[s], 0, g->npoints * sizeof(double));
+        }
+    }
 
     /* Save restricted solution (FAS: correction = u_new - u_restricted) */
     save_level_solution(m, amr_level - 1, mg->four_field);
@@ -1648,18 +1681,28 @@ void refine_mesh_near_punctures(mesh_t *m, int n_amr_levels,
             block_t *blk = m->blocks[b];
             if (!blk || !blk->is_leaf || blk->loc.level != level) continue;
 
-            /* Check if block center is near any puncture */
+            /* Check if block bounding box is near any puncture.
+             * Use AABB-point distance (min distance from puncture to block
+             * extent) instead of block-center distance. This handles large
+             * blocks correctly — a puncture inside a block has dist = 0. */
             double block_dx = blk->grid->dx;
             int N_blk = blk->grid->N;
-            double bx = blk->origin[0] + 0.5 * N_blk * block_dx;
-            double by = blk->origin[1] + 0.5 * N_blk * block_dx;
-            double bz = blk->origin[2] + 0.5 * N_blk * block_dx;
+            double bx_min = blk->origin[0];
+            double by_min = blk->origin[1];
+            double bz_min = blk->origin[2];
+            double bx_max = bx_min + N_blk * block_dx;
+            double by_max = by_min + N_blk * block_dx;
+            double bz_max = bz_min + N_blk * block_dx;
 
             for (int p = 0; p < n_bh; p++) {
-                double ddx = bx - bhs[p].center[0];
-                double ddy = by - bhs[p].center[1];
-                double ddz = bz - bhs[p].center[2];
-                double dist = sqrt(ddx*ddx + ddy*ddy + ddz*ddz);
+                double cx = bhs[p].center[0];
+                double cy = bhs[p].center[1];
+                double cz = bhs[p].center[2];
+                /* Clamp puncture position to block bounds */
+                double nx = (cx < bx_min) ? bx_min : (cx > bx_max) ? bx_max : cx;
+                double ny = (cy < by_min) ? by_min : (cy > by_max) ? by_max : cy;
+                double nz = (cz < bz_min) ? bz_min : (cz > bz_max) ? bz_max : cz;
+                double dist = sqrt((nx-cx)*(nx-cx) + (ny-cy)*(ny-cy) + (nz-cz)*(nz-cz));
                 if (dist < r_refine) {
                     refine_ids[n_to_refine++] = blk->id;
                     break;

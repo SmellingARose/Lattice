@@ -179,7 +179,8 @@ work on AMR meshes.
   faster (4 stages vs 5) but uses 25% more memory. All test allocations updated.
 - **Tests:** Flat spacetime, convergence (order 6.5), Bowen-York (29/29 + N-body),
   HiSpID (26/26), AH finder (13/13), Maxwell (15/15), Psi4 (15/15), CCE (49/49),
-  CP-BC (30/30), pack_evolve (8/8), amr_prolong (15/15). N-body smoke tests:
+  CP-BC (30/30), pack_evolve (8/8), amr_prolong (15/15), binary inspiral (full
+  system validation: BY+AMR+CCZ4+Psi4+AH+constraints). N-body smoke tests:
   3-BH line, 5-BH pentagon. Total: 31 evolved fields (25 CCZ4 + 6 EM).
 
 Update as milestones are reached.
@@ -258,6 +259,7 @@ lattice/
 │   ├── test_psi4.c          # Psi4 gravitational wave extraction tests (15/15)
 │   ├── test_cce_worldtube.c # CCE worldtube HDF5 output tests (49/49, requires HDF5)
 │   ├── test_cp_bc.c         # Constraint-preserving BC tests (30/30)
+│   ├── test_binary_inspiral.c  # Full binary inspiral system validation (10 subsystems)
 │   ├── test_inspiral_convergence.c  # AMR binary inspiral convergence (3 resolutions)
 │   ├── test_gpu_debug.c       # GPU kernel isolation test (per-kernel sync barriers)
 │   └── convergence.sh          # 3-resolution convergence check
@@ -290,6 +292,7 @@ make test-maxwell      # Einstein-Maxwell (flat EM, plane wave, charged BH, cons
 make test-psi4         # Psi4 extraction (GL quadrature, harmonics, modes, flat, Schwarzschild)
 make HDF5=on test-cce  # CCE worldtube HDF5 output (requires libhdf5-dev)
 make test-cp-bc        # Constraint-preserving BCs (speeds, formula, flat, single BH)
+make test-inspiral     # Binary inspiral full system validation (all 10 subsystems)
 make test-inspiral-convergence  # AMR binary inspiral convergence (long run, ~hours)
 make test-gpu-debug    # GPU kernel isolation test (requires BACKEND=gpu)
 make clean

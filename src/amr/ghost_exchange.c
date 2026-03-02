@@ -683,6 +683,32 @@ void ghost_exchange(mesh_t *m)
     }
 }
 
+void ghost_exchange_all_blocks(mesh_t *m)
+{
+    /* Like ghost_exchange() but includes non-leaf blocks.
+     * Required for composite multigrid solvers where the V-cycle
+     * operates on ALL blocks at each level, not just leaves.
+     * Without this, non-leaf blocks' ghost zones are never filled,
+     * causing FD operator evaluations to read stale data. */
+    for (int bid = 0; bid < m->num_blocks; bid++) {
+        block_t *b = m->blocks[bid];
+        if (!b) continue;
+
+        for (int n = 0; n < NUM_NEIGHBORS; n++) {
+            int nbr_id = b->neighbor_ids[n];
+            if (nbr_id < 0) continue;
+
+            block_t *nbr = m->blocks[nbr_id];
+            if (!nbr) continue;
+            exchange_neighbor(b, nbr,
+                              nbr_offset[n][0],
+                              nbr_offset[n][1],
+                              nbr_offset[n][2],
+                              0);
+        }
+    }
+}
+
 void ghost_exchange_array(mesh_t *m, int src_field)
 {
     for (int bid = 0; bid < m->num_blocks; bid++) {

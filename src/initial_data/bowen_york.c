@@ -22,6 +22,7 @@
 #include "../numerics/finite_diff.h"
 #include "../geometry/tensor_utils.h"
 #include "../amr/ghost_exchange.h"
+#include "../amr/restriction.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -735,6 +736,63 @@ void set_bowen_york_mesh(mesh_t *m, int n_bh, const puncture_data_t *bhs,
         }
     }
 
-    /* Ghost exchange for CCZ4 fields across blocks */
+    /* Restrict leaf CCZ4 data into non-leaf parent blocks.
+     * After CCZ4 conversion, only leaf blocks have valid data.  Non-leaf
+     * parents still contain solver residuals / junk.  During subcycled
+     * evolution, ghost_fill_from_coarser() reads non-leaf block data to
+     * fill fine-level ghost zones — if that data is garbage, the evolution
+     * blows up immediately.  Restricting from fine → coarse ensures ALL
+     * blocks (leaf and non-leaf) have valid CCZ4 data.
+     *
+     * Restrict from finest level down, same order as subcycle post-step.
+     * Ref: Berger & Oliger (1984) — restrict at level boundaries. */
+    for (int L = m->max_level; L >= 1; L--) {
+        for (int bid = 0; bid < m->num_blocks; bid++) {
+            block_t *blk = m->blocks[bid];
+            if (!blk || blk->loc.level != L - 1 || blk->is_leaf) continue;
+
+            /* blk is a non-leaf parent at level L-1: restrict children */
+            grid_t *pg = blk->grid;
+            int ghost_w = pg->ghost;
+            int half_N  = pg->N / 2;
+
+            for (int cz = 0; cz < 2; cz++)
+            for (int cy = 0; cy < 2; cy++)
+            for (int cx = 0; cx < 2; cx++) {
+                int octant = cx + (cy << 1) + (cz << 2);
+                int cid = blk->child_ids[octant];
+                if (cid < 0 || !m->blocks[cid]) continue;
+
+                const block_t *child = m->blocks[cid];
+                const grid_t  *cg    = child->grid;
+
+                int p_off_i = cx * half_N;
+                int p_off_j = cy * half_N;
+                int p_off_k = cz * half_N;
+
+                for (int f = 0; f < nf; f++)
+                for (int pk = 0; pk < half_N; pk++)
+                for (int pj = 0; pj < half_N; pj++)
+                for (int pi = 0; pi < half_N; pi++) {
+                    int fi = cg->ghost + 2 * pi;
+                    int fj = cg->ghost + 2 * pj;
+                    int fk = cg->ghost + 2 * pk;
+                    int pii = ghost_w + p_off_i + pi;
+                    int pjj = ghost_w + p_off_j + pj;
+                    int pkk = ghost_w + p_off_k + pk;
+                    pg->fields[f][IDX(pg, pii, pjj, pkk)] =
+                        restrict_cell(cg->fields[f], cg, fi, fj, fk);
+                }
+            }
+        }
+    }
+
+    /* Ghost exchange for CCZ4 fields across blocks.
+     * Use ghost_exchange_all_blocks so non-leaf parents also get valid
+     * ghost zones (needed by ghost_fill_from_coarser during subcycling). */
+    ghost_exchange_all_blocks(m);
+
+    /* Prolongation phase: fill fine ghost zones from coarser data.
+     * ghost_exchange_multilevel handles restrict→coarse_buf→prolongate. */
     ghost_exchange_multilevel(m);
 }
