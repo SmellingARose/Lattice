@@ -15,7 +15,7 @@
  *   5. ccz4_compute_gauge          — gauge RHS: lapse, shift, B
  *
  * Top-level ccz4_rhs_point() dispatches these 5 + add_ko_dissipation().
- * All sub-functions are static inline with omp declare target: compiler
+ * All sub-functions are static inline with LATTICE_DEVICE: compiler
  * inlines them into a single GPU kernel with zero call overhead.
  *
  * Ref: arXiv:1106.2254 (CCZ4 equations)

@@ -67,6 +67,7 @@ static void set_bl_point(grid_t *g, int idx, double x, double y, double z,
 
 void set_flat_spacetime(grid_t *g)
 {
+    #pragma omp parallel for collapse(3)
     for (int k = 0; k < g->Ntotal; k++) {
         for (int j = 0; j < g->Ntotal; j++) {
             for (int i = 0; i < g->Ntotal; i++) {
@@ -114,6 +115,7 @@ void set_brill_lindquist(grid_t *g, int n_bh,
                          const double *masses,
                          const double centers[][3])
 {
+    #pragma omp parallel for collapse(3)
     for (int k = 0; k < g->Ntotal; k++) {
         for (int j = 0; j < g->Ntotal; j++) {
             for (int i = 0; i < g->Ntotal; i++) {
@@ -131,6 +133,7 @@ void set_brill_lindquist_global(grid_t *g, const double origin[3],
                                 int n_bh, const double *masses,
                                 const double centers[][3])
 {
+    #pragma omp parallel for collapse(3)
     for (int k = 0; k < g->Ntotal; k++) {
         for (int j = 0; j < g->Ntotal; j++) {
             for (int i = 0; i < g->Ntotal; i++) {

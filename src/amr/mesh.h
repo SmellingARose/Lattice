@@ -139,14 +139,4 @@ block_t *mesh_find_block_at(const mesh_t *m, double x, double y, double z);
  */
 void mesh_rebuild_neighbors(mesh_t *m);
 
-/*
- * Find the leaf block containing physical coordinates (x, y, z).
- * Linear scan of leaf blocks; returns finest-level block when multiple
- * blocks (coarse overlapping fine) contain the point.
- * Returns NULL if point is outside the domain.
- *
- * Fine for <1000 blocks (same as mesh_find_block).
- */
-block_t *mesh_find_block_at(const mesh_t *m, double x, double y, double z);
-
 #endif /* LATTICE_MESH_H */

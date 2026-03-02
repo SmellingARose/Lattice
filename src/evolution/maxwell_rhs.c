@@ -74,7 +74,7 @@ void em_stress_energy(const double *const * restrict src, const grid_t *g,
                       double S_em_dd[3][3], double *S_em_trace)
 {
     (void)g;
-    (void)h_UU;  /* used indirectly via j_em computation below */
+    (void)h_UU;  /* stress-energy uses h (lower) only; h_UU kept in API for future use */
 
     /* Load conformal EM fields */
     double Eu[3] = { src[FIELD_E1][idx], src[FIELD_E2][idx], src[FIELD_E3][idx] };

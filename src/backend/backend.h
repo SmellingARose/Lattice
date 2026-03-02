@@ -6,10 +6,10 @@
  *     backend_*_packed() — one kernel per operation across ALL blocks.
  *     All data stays on device; ghost exchange is device-to-device.
  *     CPU backend: OpenMP parallel for mirrors of all packed functions.
- *     GPU backend: OpenMP target teams distribute parallel for.
+ *     GPU backend: HIP kernels on AMD/NVIDIA GPUs (via backend_hip.cpp).
  *
  * CPU backend = OpenMP parallel loops calling the C RHS function.
- * GPU backend = OpenMP target offloading (same C kernels on device).
+ * GPU backend = HIP kernels (same C physics code with LATTICE_DEVICE annotations).
  *
  * Ref: AthenaK meshblock_pack pattern (Grete et al. 2024, arXiv:2409.16053)
  */
@@ -77,7 +77,7 @@ void backend_zero_packed(meshblock_pack_t *pack, int which);
 /*
  * Batched RHS evaluation for all interior cells of all blocks in one
  * kernel launch. Dispatches to ccz4_maxwell_rhs_point when p->em_enabled,
- * otherwise ccz4_rhs_point (both are omp declare target).
+ * otherwise ccz4_rhs_point (both are LATTICE_DEVICE annotated).
  *
  * For each block b, constructs per-field pointer arrays into the pack
  * layout and a minimal grid_t (N, ghost, Ntotal, dx) for the RHS
