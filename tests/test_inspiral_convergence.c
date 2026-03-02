@@ -6,7 +6,7 @@
  * 2008, arXiv:0709.0838):  m_bare = 0.4824, d = 10M, P_y = ±0.0939 (3PN).
  *
  * Self-convergence test: run 3 resolutions with N_block = 32, 48, 64
- * (ratio 1.5x, N_root=3, effective grids 96/144/192).  Uniform AMR mesh
+ * (ratio 1.5x, effective grids 32/48/64).  Uniform AMR mesh
  * (max_level=0): no refinement, but exercises the full AMR infrastructure
  * (block decomposition, packed kernels, ghost exchange).  Classic RK4.
  *
@@ -52,7 +52,7 @@
 #define NUM_STEPS  6000
 
 /* ── AMR parameters (fixed across resolutions) ────────────────────── */
-#define N_ROOT       3
+/* N_ROOT removed: single root block per mesh */
 #define MAX_LEVEL    0      /* uniform mesh — no refinement             */
 
 /* ── Resolution triplet (ratio 1.5x) ─────────────────────────────── */
@@ -78,17 +78,15 @@ static void setup_punctures(puncture_data_t bhs[2])
 static double *run_resolution(int res_idx, int n_block)
 {
     const char *label = RES_LABELS[res_idx];
-    int n_eff = N_ROOT * n_block;
-
     printf("\n");
     printf("================================================================\n");
-    printf("  RESOLUTION %s: N_block=%d, N_eff=%d, dx=%.6f\n",
-           label, n_block, n_eff, L_DOMAIN / n_eff);
+    printf("  RESOLUTION %s: N_block=%d, dx=%.6f\n",
+           label, n_block, L_DOMAIN / n_block);
     printf("================================================================\n");
     fflush(stdout);
 
     /* Create uniform AMR mesh (max_level=0, no refinement) */
-    mesh_t *m = mesh_create(N_ROOT, n_block, L_DOMAIN, RK_CLASSIC);
+    mesh_t *m = mesh_create(n_block, L_DOMAIN, RK_CLASSIC);
 
     sim_params_t p = default_params();
     p.L = L_DOMAIN;
@@ -227,7 +225,7 @@ int main(void)
     printf("  Physics: equal-mass non-spinning, d=10M, P_y=%.4f (3PN)\n", P_Y);
     printf("  Ref: Brugmann et al. 2008, arXiv:0709.0838\n");
     printf("  Resolutions: N_block = 32, 48, 64 (ratio 1.5x)\n");
-    printf("  N_root=%d, max_level=%d (uniform AMR mesh)\n", N_ROOT, MAX_LEVEL);
+    printf("  max_level=%d (uniform AMR mesh)\n", MAX_LEVEL);
     printf("  Integrator: classic RK4, CFL=%.2f\n", CFL_FACTOR);
     printf("  Steps: %d per resolution\n", NUM_STEPS);
     printf("================================================================\n");

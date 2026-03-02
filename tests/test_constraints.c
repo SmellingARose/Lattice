@@ -98,7 +98,7 @@ int main(void)
         p.dx = p.L / p.N; p.dt = p.CFL * p.dx;
         int steps = (int)(2.0 / p.dt + 0.5);
 
-        mesh_t *m = mesh_create_ex(1, p.N, p.L, p.rk_method, NUM_CCZ4_FIELDS);
+        mesh_t *m = mesh_create_ex(p.N, p.L, p.rk_method, NUM_CCZ4_FIELDS);
         grid_t *g = m->blocks[0]->grid;
         p.N = g->N; p.dx = g->dx; p.dt = p.CFL * p.dx;
         steps = (int)(2.0 / p.dt + 0.5);
@@ -141,7 +141,7 @@ int main(void)
             p.dx = p.L / p.N; p.dt = p.CFL * p.dx;
             int steps = (int)(2.0 / p.dt + 0.5);
 
-            mesh_t *m = mesh_create_ex(1, p.N, p.L, p.rk_method, NUM_CCZ4_FIELDS);
+            mesh_t *m = mesh_create_ex(p.N, p.L, p.rk_method, NUM_CCZ4_FIELDS);
             grid_t *g = m->blocks[0]->grid;
             p.N = g->N; p.dx = g->dx; p.dt = p.CFL * p.dx;
             steps = (int)(2.0 / p.dt + 0.5);

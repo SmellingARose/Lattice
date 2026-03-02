@@ -70,7 +70,6 @@ static void print_usage(void)
     fprintf(stderr, "  --ssl_total_mass <float>  SSL total mass M (default 1.0)\n");
     fprintf(stderr, "\nAMR:\n");
     fprintf(stderr, "  --amr                  Enable adaptive mesh refinement\n");
-    fprintf(stderr, "  --N_root <int>         Root blocks per side (default 4)\n");
     fprintf(stderr, "  --N_block <int>        Cells per block side (default 32)\n");
     fprintf(stderr, "  --block-size <int>     Alias for --N_block\n");
     fprintf(stderr, "  --max_level <int>      Max refinement depth (default 6)\n");
@@ -195,8 +194,6 @@ int main(int argc, char **argv)
             }
         } else if (strcmp(argv[a], "--amr") == 0) {
             p.amr.enabled = 1;
-        } else if (strcmp(argv[a], "--N_root") == 0 && a + 1 < argc) {
-            p.amr.N_root = atoi(argv[++a]);
         } else if ((strcmp(argv[a], "--N_block") == 0 ||
                     strcmp(argv[a], "--block-size") == 0) && a + 1 < argc) {
             p.amr.N_block = atoi(argv[++a]);
@@ -348,14 +345,13 @@ int main(int argc, char **argv)
         if (p.amr.solver_levels < 0)
             p.amr.solver_levels = p.amr.max_level;
 
-        mesh_t *m = mesh_create_ex(p.amr.N_root, p.amr.N_block, p.L, p.rk_method,
+        mesh_t *m = mesh_create_ex(p.amr.N_block, p.L, p.rk_method,
                                     p.em_enabled ? NUM_FIELDS : NUM_CCZ4_FIELDS);
         p.dx = m->dx_base;
         p.dt = p.CFL * p.dx;
-        int N_eff = p.amr.N_root * p.amr.N_block;
 
-        printf("  AMR mode: N_root=%d, N_block=%d, N_eff=%d, max_level=%d\n",
-               p.amr.N_root, p.amr.N_block, N_eff, p.amr.max_level);
+        printf("  AMR mode: N_block=%d, max_level=%d\n",
+               p.amr.N_block, p.amr.max_level);
         printf("  L = %.1f, dx = %.6f, dt = %.6f\n", p.L, p.dx, p.dt);
         printf("  steps = %d, sigma = %.2f, CFL = %.2f, rk = %s\n",
                p.num_steps, p.sigma, p.CFL,
@@ -481,7 +477,7 @@ int main(int argc, char **argv)
     } else {
         /* === Single-grid path (via 1-block mesh) === */
         int n_fields = p.em_enabled ? NUM_FIELDS : NUM_CCZ4_FIELDS;
-        mesh_t *m = mesh_create_ex(1, p.N, p.L, p.rk_method, n_fields);
+        mesh_t *m = mesh_create_ex(p.N, p.L, p.rk_method, n_fields);
         grid_t *g = m->blocks[0]->grid;
 
         /* mesh_create_ex may pad N — refresh derived quantities */

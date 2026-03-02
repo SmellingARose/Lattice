@@ -36,7 +36,7 @@ int main(void)
     p.dt = p.CFL * p.dx;
 
     backend_init();
-    mesh_t *m = mesh_create_ex(1, p.N, p.L, p.rk_method, NUM_CCZ4_FIELDS);
+    mesh_t *m = mesh_create_ex(p.N, p.L, p.rk_method, NUM_CCZ4_FIELDS);
     grid_t *g = m->blocks[0]->grid;
 
     /* Recompute after possible padding */

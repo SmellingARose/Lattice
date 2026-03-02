@@ -60,7 +60,7 @@ static void test_interpolation(void)
 
     int N = 32;
     double L = 10.0;
-    mesh_t *m = mesh_create_ex(1, N, L, RK_CLASSIC, NUM_FIELDS);
+    mesh_t *m = mesh_create_ex(N, L, RK_CLASSIC, NUM_FIELDS);
     grid_t *g = m->blocks[0]->grid;
 
     /* f(x,y,z) = x^2 + 2y + 3z: exact for 4th-order Lagrange */
@@ -121,7 +121,7 @@ static void test_schwarzschild_ah(void)
     int N = 64;
     double L = 16.0;
 
-    mesh_t *m = mesh_create_ex(1, N, L, RK_CLASSIC, NUM_FIELDS);
+    mesh_t *m = mesh_create_ex(N, L, RK_CLASSIC, NUM_FIELDS);
     grid_t *g = m->blocks[0]->grid;
     double masses[1] = { M };
     double centers_bl[1][3] = { {0.0, 0.0, 0.0} };
@@ -160,7 +160,7 @@ static void test_expansion_sign(void)
     int N = 64;
     double L = 16.0;
 
-    mesh_t *m = mesh_create_ex(1, N, L, RK_CLASSIC, NUM_FIELDS);
+    mesh_t *m = mesh_create_ex(N, L, RK_CLASSIC, NUM_FIELDS);
     grid_t *g = m->blocks[0]->grid;
     double masses[1] = { M };
     double centers_bl[1][3] = { {0.0, 0.0, 0.0} };
@@ -210,7 +210,7 @@ static void test_schwarzschild_area(void)
     int N = 64;
     double L = 16.0;
 
-    mesh_t *m = mesh_create_ex(1, N, L, RK_CLASSIC, NUM_FIELDS);
+    mesh_t *m = mesh_create_ex(N, L, RK_CLASSIC, NUM_FIELDS);
     grid_t *g = m->blocks[0]->grid;
     double masses[1] = { M };
     double centers_bl[1][3] = { {0.0, 0.0, 0.0} };
@@ -245,7 +245,7 @@ static void test_mass_extraction(void)
     int N = 64;
     double L = 16.0;
 
-    mesh_t *m = mesh_create_ex(1, N, L, RK_CLASSIC, NUM_FIELDS);
+    mesh_t *m = mesh_create_ex(N, L, RK_CLASSIC, NUM_FIELDS);
     grid_t *g = m->blocks[0]->grid;
     double masses[1] = { M };
     double centers_bl[1][3] = { {0.0, 0.0, 0.0} };
@@ -287,7 +287,7 @@ static void test_angular_convergence(void)
     int N = 64;
     double L = 16.0;
 
-    mesh_t *m = mesh_create_ex(1, N, L, RK_CLASSIC, NUM_FIELDS);
+    mesh_t *m = mesh_create_ex(N, L, RK_CLASSIC, NUM_FIELDS);
     grid_t *g = m->blocks[0]->grid;
     double masses[1] = { M };
     double centers_bl[1][3] = { {0.0, 0.0, 0.0} };
@@ -334,7 +334,7 @@ static void test_boosted_bh(void)
     int N = 64;
     double L = 16.0;
 
-    mesh_t *m = mesh_create_ex(1, N, L, RK_CLASSIC, NUM_FIELDS);
+    mesh_t *m = mesh_create_ex(N, L, RK_CLASSIC, NUM_FIELDS);
 
     puncture_data_t bhs[1];
     memset(bhs, 0, sizeof(bhs));

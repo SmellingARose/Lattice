@@ -3,7 +3,7 @@
  * AMR Stage 1 test: mesh infrastructure verification.
  *
  * Tests:
- *   1. Single-block mesh (N_root=1, N_block=32) produces identical
+ *   1. Single-block mesh (N_block=32) produces identical
  *      results to grid_t for flat spacetime evolution.
  *   2. Mesh topology: neighbor IDs, nblevel tables, boundary flags.
  *   3. MeshBlockPack load/store round-trip preserves data to roundoff.
@@ -94,16 +94,14 @@ static void test_morton(void)
  * ====================================================================== */
 static void test_mesh_topology(void)
 {
-    printf("\n--- Test: Mesh topology (2x2x2 = 8 blocks) ---\n");
+    printf("\n--- Test: Mesh topology (single root block) ---\n");
 
-    /* Use N_block=16 to keep memory low (~5 MB/block, 40 MB total) */
-    mesh_t *m = mesh_create(2, 16, 10.0, RK_CLASSIC);
+    mesh_t *m = mesh_create(16, 10.0, RK_CLASSIC);
 
-    check(m->num_blocks == 8, "8 blocks created");
-    check(m->N_root == 2, "N_root = 2");
+    check(m->num_blocks == 1, "1 root block created");
     check(m->N_block == 16, "N_block = 16");
     check(m->max_level == 0, "max_level = 0");
-    check(mesh_num_leaves(m) == 8, "8 leaf blocks");
+    check(mesh_num_leaves(m) == 1, "1 leaf block");
 
     /* Check all blocks have correct level and are leaves */
     int all_leaves = 1;
@@ -115,59 +113,25 @@ static void test_mesh_topology(void)
     check(all_leaves, "All blocks are leaves");
     check(all_level0, "All blocks at level 0");
 
-    /* Check neighbor topology for corner block (0,0,0):
-     * Should have 3 face neighbors, 3 edge, 1 corner = 7 neighbors,
-     * and 19 boundaries. */
-    block_t *corner = NULL;
-    for (int i = 0; i < m->num_blocks; i++) {
-        block_t *b = m->blocks[i];
-        if (b->loc.lx1 == 0 && b->loc.lx2 == 0 && b->loc.lx3 == 0) {
-            corner = b;
-            break;
-        }
-    }
-    check(corner != NULL, "Found corner block (0,0,0)");
+    /* Single root block: all 26 neighbors are physical boundaries */
+    block_t *root = m->blocks[0];
+    check(root != NULL, "Root block exists");
 
-    if (corner) {
+    if (root) {
         int nbr_count = 0;
-        int bdy_count = 0;
         for (int n = 0; n < NUM_NEIGHBORS; n++) {
-            if (corner->neighbor_ids[n] >= 0) nbr_count++;
-            else bdy_count++;
+            if (root->neighbor_ids[n] >= 0) nbr_count++;
         }
-        check(nbr_count == 7, "Corner block has 7 neighbors (3F+3E+1C)");
-        check(bdy_count == 19, "Corner block has 19 boundary faces");
+        check(nbr_count == 0, "Root block has 0 neighbors (all boundary)");
 
-        /* Boundary flags: x-, y-, z- are boundaries; x+, y+, z+ are not */
-        check(corner->on_boundary[0] == 1, "Corner: x- is boundary");
-        check(corner->on_boundary[1] == 0, "Corner: x+ is not boundary");
-        check(corner->on_boundary[2] == 1, "Corner: y- is boundary");
-        check(corner->on_boundary[3] == 0, "Corner: y+ is not boundary");
-        check(corner->on_boundary[4] == 1, "Corner: z- is boundary");
-        check(corner->on_boundary[5] == 0, "Corner: z+ is not boundary");
+        /* All 6 faces are domain boundaries */
+        for (int f = 0; f < 6; f++)
+            check(root->on_boundary[f] == 1, "Root: all faces are boundary");
 
-        /* nblevel: self = 0, x+ neighbor = 0, x- = -1 (boundary) */
-        check(corner->nblevel[1][1][1] == 0, "nblevel: self = 0");
-        check(corner->nblevel[1][1][0] == -1, "nblevel: x- = -1 (boundary)");
-        check(corner->nblevel[1][1][2] == 0, "nblevel: x+ = 0 (neighbor)");
-    }
-
-    /* Check interior block in 2x2x2: block (1,1,1) should have no boundaries.
-     * Wait — in 2x2x2, the max index is 1, so (1,1,1) is also a corner
-     * of the domain! All blocks in 2x2x2 touch at least 3 boundaries.
-     * Let's verify that. */
-    block_t *b111 = NULL;
-    for (int i = 0; i < m->num_blocks; i++) {
-        block_t *b = m->blocks[i];
-        if (b->loc.lx1 == 1 && b->loc.lx2 == 1 && b->loc.lx3 == 1) {
-            b111 = b;
-            break;
-        }
-    }
-    if (b111) {
-        /* (1,1,1) in 2x2x2: x+, y+, z+ are boundaries */
-        check(b111->on_boundary[0] == 0 && b111->on_boundary[1] == 1,
-              "Block (1,1,1): x- interior, x+ boundary");
+        /* nblevel: self = 0, all neighbors = -1 (boundary) */
+        check(root->nblevel[1][1][1] == 0, "nblevel: self = 0");
+        check(root->nblevel[1][1][0] == -1, "nblevel: x- = -1 (boundary)");
+        check(root->nblevel[1][1][2] == -1, "nblevel: x+ = -1 (boundary)");
     }
 
     mesh_free(m);
@@ -190,7 +154,7 @@ static void test_single_block_evolution(void)
     p.dt = p.CFL * p.dx;
 
     /* Create 1-block mesh (N_block=16 to save RAM) */
-    mesh_t *m = mesh_create(1, 16, p.L, p.rk_method);
+    mesh_t *m = mesh_create(16, p.L, p.rk_method);
     block_t *b = mesh_get_block(m, 0);
     grid_t *g = b->grid;
 
@@ -246,7 +210,7 @@ static void test_meshblock_pack(void)
     printf("\n--- Test: MeshBlockPack round-trip ---\n");
 
     /* Create a 1-block mesh with some non-trivial data */
-    mesh_t *m = mesh_create(1, 32, 10.0, RK_CLASSIC);
+    mesh_t *m = mesh_create(32, 10.0, RK_CLASSIC);
     block_t *b = mesh_get_block(m, 0);
     grid_t *g = b->grid;
 
@@ -293,7 +257,7 @@ static void test_multiblock_pack(void)
 {
     printf("\n--- Test: MeshBlockPack with 8 blocks ---\n");
 
-    mesh_t *m = mesh_create(2, 16, 10.0, RK_CLASSIC);
+    mesh_t *m = mesh_create(16, 10.0, RK_CLASSIC);
 
     check(m->num_blocks == 8, "8 blocks created (2^3)");
 

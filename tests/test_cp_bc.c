@@ -163,7 +163,7 @@ static void test_flat_stability_cp(void)
     p.dx = p.L / p.N;
     p.dt = p.CFL * p.dx;
 
-    mesh_t *m = mesh_create_ex(1, p.N, p.L, p.rk_method, NUM_CCZ4_FIELDS);
+    mesh_t *m = mesh_create_ex(p.N, p.L, p.rk_method, NUM_CCZ4_FIELDS);
     grid_t *g = m->blocks[0]->grid;
     p.N  = g->N;
     p.dx = g->dx;
@@ -206,7 +206,7 @@ static void test_single_bh_comparison(void)
     p_som.bc_type = BC_SOMMERFELD;
     p_som.dx = L / N; p_som.dt = CFL * p_som.dx;
 
-    mesh_t *m_som = mesh_create_ex(1, N, L, p_som.rk_method, NUM_CCZ4_FIELDS);
+    mesh_t *m_som = mesh_create_ex(N, L, p_som.rk_method, NUM_CCZ4_FIELDS);
     p_som.N = m_som->blocks[0]->grid->N;
     p_som.dx = m_som->blocks[0]->grid->dx;
     p_som.dt = CFL * p_som.dx;
@@ -228,7 +228,7 @@ static void test_single_bh_comparison(void)
     p_cp.bc_type = BC_CONSTRAINT_PRESERVING;
     p_cp.dx = L / N; p_cp.dt = CFL * p_cp.dx;
 
-    mesh_t *m_cp = mesh_create_ex(1, N, L, p_cp.rk_method, NUM_CCZ4_FIELDS);
+    mesh_t *m_cp = mesh_create_ex(N, L, p_cp.rk_method, NUM_CCZ4_FIELDS);
     p_cp.N = m_cp->blocks[0]->grid->N;
     p_cp.dx = m_cp->blocks[0]->grid->dx;
     p_cp.dt = CFL * p_cp.dx;

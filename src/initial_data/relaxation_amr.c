@@ -1708,7 +1708,7 @@ void refine_mesh_near_punctures(mesh_t *m, int n_amr_levels,
     int base_level = m->max_level;
 
     for (int level = base_level; level < base_level + n_amr_levels; level++) {
-        double dx_level = m->L / (double)(m->N_block * m->N_root * (1 << level));
+        double dx_level = m->L / (double)(m->N_block * (1 << level));
         double r_refine = 8.0 * dx_level;
 
         /* Find leaf blocks at current max_level that are near punctures */
@@ -1765,16 +1765,13 @@ void refine_mesh_near_punctures(mesh_t *m, int n_amr_levels,
 
 /*
  * Create AMR solver mesh with refinement near punctures.
- * Level 0: full-domain N_root=1 root block at base resolution.
+ * Level 0: single root block at base resolution.
  * Level 1+: refine blocks within r_refine of any puncture.
  */
 static mesh_t *create_solver_mesh(int N_base, double L, int n_amr_levels,
                                    int n_bh, const puncture_data_t *bhs)
 {
-    /* For the solver mesh, we use N_root=1 (single root block) with
-     * N_block = N_base.  This gives a single level-0 block covering
-     * the full domain at the same resolution as the uniform solver. */
-    mesh_t *m = mesh_create_ex(1, N_base, L, RK_CLASSIC, MG_AMR_N_FIELDS);
+    mesh_t *m = mesh_create_ex(N_base, L, RK_CLASSIC, MG_AMR_N_FIELDS);
 
     refine_mesh_near_punctures(m, n_amr_levels, n_bh, bhs);
 
@@ -2159,7 +2156,7 @@ double relaxation_solve_amr_mesh(mesh_t *m, int n_bh, const puncture_data_t *bhs
     mg.bhs = bhs;
 
     /* Build uniform MG hierarchy below level 0 */
-    int N_eff = m->N_root * m->N_block;
+    int N_eff = m->N_block;
     mg.n_mg_levels = 1;
     {
         int N = N_eff;
@@ -2261,7 +2258,7 @@ double relaxation_solve_coupled_amr_mesh(mesh_t *m, int n_bh,
     mg.n_bh = n_bh;
     mg.bhs = bhs;
 
-    int N_eff = m->N_root * m->N_block;
+    int N_eff = m->N_block;
     mg.n_mg_levels = 1;
     {
         int N = N_eff;

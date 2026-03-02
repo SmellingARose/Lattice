@@ -93,7 +93,7 @@ int main(void)
 
     printf("  Allocating mesh (N=%d, L=%.1f)...\n", p.N, p.L);
     fflush(stdout);
-    mesh_t *m = mesh_create_ex(1, p.N, p.L, p.rk_method, NUM_CCZ4_FIELDS);
+    mesh_t *m = mesh_create_ex(p.N, p.L, p.rk_method, NUM_CCZ4_FIELDS);
     grid_t *g = m->blocks[0]->grid;
 
     /* Recompute after possible padding */

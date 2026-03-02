@@ -61,7 +61,7 @@ static void test_packed_multilevel(void)
     p.CFL = 0.25;
     int nsteps = 20;
 
-    mesh_t *m = mesh_create(2, 16, p.L, RK_CLASSIC);
+    mesh_t *m = mesh_create(16, p.L, RK_CLASSIC);
     p.dx = m->dx_base;
     p.dt = p.CFL * p.dx;
     p.amr.chi_refine  = 0.05;
@@ -130,7 +130,7 @@ static void test_packed_flat_stability(void)
     p.CFL = 0.25;
     int nsteps = 100;
 
-    mesh_t *m = mesh_create(2, 16, p.L, RK_CLASSIC);
+    mesh_t *m = mesh_create(16, p.L, RK_CLASSIC);
     p.dx = m->dx_base;
     p.dt = p.CFL * p.dx;
 

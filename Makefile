@@ -310,6 +310,10 @@ test-cp-bc: $(BUILD)/test_cp_bc
 	@echo "=== Running CP-BC test ==="
 	$(BUILD)/test_cp_bc
 
+test-solver-multiroot: $(BUILD)/test_solver_multiroot
+	@echo "=== Running multi-root solver test ==="
+	$(BUILD)/test_solver_multiroot
+
 test-inspiral: $(BUILD)/test_binary_inspiral
 	@echo "=== Running binary inspiral test ==="
 	$(BUILD)/test_binary_inspiral

@@ -234,7 +234,7 @@ static void test_cako_flat(void)
     p.rk_method = RK_CLASSIC;
 
     /* Run without CAKO */
-    mesh_t *m1 = mesh_create_ex(1, p.N, p.L, p.rk_method, NUM_FIELDS);
+    mesh_t *m1 = mesh_create_ex(p.N, p.L, p.rk_method, NUM_FIELDS);
     grid_t *g1 = m1->blocks[0]->grid;
     set_flat_spacetime(g1);
     p.time = 0.0;
@@ -247,7 +247,7 @@ static void test_cako_flat(void)
     /* Run with CAKO enabled (chi=1 on flat, so sqrt(1)=1, no effect) */
     sim_params_t p2 = p;
     p2.noise.use_cako = 1;
-    mesh_t *m2 = mesh_create_ex(1, p2.N, p2.L, p2.rk_method, NUM_FIELDS);
+    mesh_t *m2 = mesh_create_ex(p2.N, p2.L, p2.rk_method, NUM_FIELDS);
     grid_t *g2 = m2->blocks[0]->grid;
     set_flat_spacetime(g2);
     p2.time = 0.0;
@@ -296,7 +296,7 @@ static void test_per_field_sigma(void)
     p.dt = p.CFL * p.dx;
     p.noise.use_per_field_sigma = 1;
 
-    mesh_t *m = mesh_create_ex(1, p.N, p.L, p.rk_method, NUM_FIELDS);
+    mesh_t *m = mesh_create_ex(p.N, p.L, p.rk_method, NUM_FIELDS);
     grid_t *g = m->blocks[0]->grid;
     set_flat_spacetime(g);
     p.time = 0.0;
@@ -327,7 +327,7 @@ static void test_cahd_single_bh(void)
     /* Without CAHD */
     double mass = 1.0;
     double center[1][3] = {{0.0, 0.0, 0.0}};
-    mesh_t *m1 = mesh_create_ex(1, p.N, p.L, p.rk_method, NUM_FIELDS);
+    mesh_t *m1 = mesh_create_ex(p.N, p.L, p.rk_method, NUM_FIELDS);
     grid_t *g1 = m1->blocks[0]->grid;
     set_brill_lindquist(g1, 1, &mass, center);
     p.time = 0.0;
@@ -340,7 +340,7 @@ static void test_cahd_single_bh(void)
     /* With CAHD */
     sim_params_t p2 = p;
     p2.noise.use_cahd = 1;
-    mesh_t *m2 = mesh_create_ex(1, p2.N, p2.L, p2.rk_method, NUM_FIELDS);
+    mesh_t *m2 = mesh_create_ex(p2.N, p2.L, p2.rk_method, NUM_FIELDS);
     grid_t *g2 = m2->blocks[0]->grid;
     set_brill_lindquist(g2, 1, &mass, center);
     p2.time = 0.0;
@@ -382,7 +382,7 @@ static void test_ssl_single_bh(void)
     p.noise.use_ssl = 0;
     double mass = 1.0;
     double center[1][3] = {{0.0, 0.0, 0.0}};
-    mesh_t *m1 = mesh_create_ex(1, p.N, p.L, p.rk_method, NUM_FIELDS);
+    mesh_t *m1 = mesh_create_ex(p.N, p.L, p.rk_method, NUM_FIELDS);
     grid_t *g1 = m1->blocks[0]->grid;
     set_brill_lindquist(g1, 1, &mass, center);
     for (int step = 0; step < steps; step++) {
@@ -395,7 +395,7 @@ static void test_ssl_single_bh(void)
     p2.time = 0.0;
     p2.noise.use_ssl = 1;
     p2.noise.ssl_total_mass = 1.0;
-    mesh_t *m2 = mesh_create_ex(1, p2.N, p2.L, p2.rk_method, NUM_FIELDS);
+    mesh_t *m2 = mesh_create_ex(p2.N, p2.L, p2.rk_method, NUM_FIELDS);
     grid_t *g2 = m2->blocks[0]->grid;
     set_brill_lindquist(g2, 1, &mass, center);
     for (int step = 0; step < steps; step++) {

@@ -333,7 +333,7 @@ static void test_high_spin_evolve(void)
 
     int N = 32;
     double L = 20.0;
-    mesh_t *m = mesh_create_ex(1, N, L, RK_CLASSIC, NUM_CCZ4_FIELDS);
+    mesh_t *m = mesh_create_ex(N, L, RK_CLASSIC, NUM_CCZ4_FIELDS);
     grid_t *g = m->blocks[0]->grid;
 
     printf("  Setting up HiSpID initial data (chi=0.9)...\n");

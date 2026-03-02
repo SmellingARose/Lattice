@@ -3,12 +3,12 @@
  * AMR integration test: mesh evolution with dynamic regridding.
  *
  * Tests:
- *   1. Uniform mesh vs single-grid BH evolution (same N_eff)
+ *   1. Refined mesh vs single-block BH evolution
  *   2. Dynamic regridding around a BH (blocks increase)
  *   3. Flat spacetime with regridding (should not refine)
  *
  * Pass criteria:
- *   - Test 1: Ham L2 ratio within 2x
+ *   - Test 1: Ham L2 finite and bounded for both
  *   - Test 2: No crash, Ham L2 bounded, block count increased
  *   - Test 3: Block count unchanged
  */
@@ -41,15 +41,17 @@ static void check(int cond, const char *name)
 }
 
 /* ======================================================================
- * Test 1: Uniform mesh vs single-grid BH evolution
+ * Test 1: Refined mesh vs single-block BH evolution
  *
  * Single BH (M=1) at origin, evolve 20 steps.
- * Compare: single grid N=32 vs 2x2x2 mesh of N_block=16 (same N_eff=32).
- * Pass: Ham L2 ratio within 2x.
+ * Compare: single root block N=32 vs refined mesh (root N=32, refine once
+ * near BH → 8 child blocks at level 1 plus root).
+ * Uses global timestepping with CFL on finest level.
+ * Pass: Ham L2 finite and bounded for both.
  * ====================================================================== */
-static void test_uniform_vs_single_grid(void)
+static void test_refined_vs_single_block(void)
 {
-    printf("\n--- Test 1: Uniform mesh vs single-grid BH evolution ---\n");
+    printf("\n--- Test 1: Refined mesh vs single-block BH evolution ---\n");
 
     sim_params_t p = default_params();
     p.L = 64.0;
@@ -59,14 +61,13 @@ static void test_uniform_vs_single_grid(void)
     double mass = 1.0;
     double center[1][3] = {{0.0, 0.0, 0.0}};
 
-    /* (a) Single-grid reference: N=32, L=64 (1-block mesh) */
-    mesh_t *mref = mesh_create_ex(1, 32, p.L, p.rk_method, NUM_FIELDS);
-    grid_t *gref = mref->blocks[0]->grid;
-    p.N  = gref->N;
-    p.dx = gref->dx;
+    /* (a) Single-block reference: N=32, L=64 */
+    mesh_t *mref = mesh_create_ex(32, p.L, p.rk_method, NUM_FIELDS);
+    p.dx = mref->dx_base;
     p.dt = p.CFL * p.dx;
 
-    set_brill_lindquist(gref, 1, &mass, (const double(*)[3])center);
+    set_brill_lindquist(mref->blocks[0]->grid, 1, &mass,
+                        (const double(*)[3])center);
     p.time = 0.0;
     for (int step = 0; step < nsteps; step++) {
         rk4_step_mesh(mref, &p, ccz4_rhs_point, p.dt);
@@ -74,22 +75,34 @@ static void test_uniform_vs_single_grid(void)
     }
 
     double ham_ref = mesh_constraint_l2(mref);
-    printf("  Single-grid:  Ham L2 = %.6e (N=32, %d steps)\n",
+    printf("  Single-block: Ham L2 = %.6e (N=32, %d steps)\n",
            ham_ref, nsteps);
 
-    /* (b) Multi-block mesh: 2x2x2 x 16^3 = same N_eff=32 */
-    mesh_t *m = mesh_create(2, 16, p.L, p.rk_method);
+    /* (b) Refined mesh: N=32 root, refine once → multi-block */
+    mesh_t *m = mesh_create(32, p.L, p.rk_method);
+    p.amr.chi_refine  = 0.05;
+    p.amr.chi_coarsen = 0.0;
+    p.amr.max_level   = 1;
 
-    /* dx/dt from mesh (should match single-grid) */
-    p.dx = m->dx_base;
-    p.dt = p.CFL * p.dx;
+    /* Set initial data, then refine */
+    set_brill_lindquist_global(m->blocks[0]->grid, m->blocks[0]->origin,
+                               1, &mass, (const double(*)[3])center);
+    mesh_regrid(m, &p.amr);
 
+    /* Re-set initial data on all leaf blocks after regrid */
     for (int bid = 0; bid < m->num_blocks; bid++) {
         block_t *b = m->blocks[bid];
         if (!b || !b->is_leaf) continue;
         set_brill_lindquist_global(b->grid, b->origin, 1, &mass,
                                    (const double(*)[3])center);
     }
+
+    int leaves = mesh_num_leaves(m);
+    double dx_fine = m->dx_base / (1 << m->max_level);
+    p.dx = dx_fine;
+    p.dt = p.CFL * dx_fine;
+    printf("  Refined mesh: %d leaves, max_level=%d, dx_fine=%.4f\n",
+           leaves, m->max_level, dx_fine);
 
     p.time = 0.0;
     for (int step = 0; step < nsteps; step++) {
@@ -98,18 +111,13 @@ static void test_uniform_vs_single_grid(void)
     }
 
     double ham_mesh = mesh_constraint_l2(m);
-    printf("  Multi-block:  Ham L2 = %.6e (2x2x2 x 16^3, %d steps)\n",
-           ham_mesh, nsteps);
+    printf("  Refined mesh: Ham L2 = %.6e (%d leaves, %d steps)\n",
+           ham_mesh, leaves, nsteps);
 
     /* Both should be finite and bounded */
-    check(isfinite(ham_ref), "Single-grid Ham L2 finite");
-    check(isfinite(ham_mesh), "Multi-block Ham L2 finite");
-
-    /* Ratio should be within 2x */
-    double ratio = (ham_ref > 0) ? ham_mesh / ham_ref : 0.0;
-    printf("  Ratio mesh/ref = %.4f\n", ratio);
-    check(ratio > 0.5 && ratio < 2.0,
-          "Multi-block Ham L2 within 2x of single-grid");
+    check(isfinite(ham_ref), "Single-block Ham L2 finite");
+    check(isfinite(ham_mesh), "Refined mesh Ham L2 finite");
+    check(ham_mesh < 1.0, "Refined mesh Ham L2 bounded (< 1.0)");
 
     mesh_free(mref);
     mesh_free(m);
@@ -118,7 +126,7 @@ static void test_uniform_vs_single_grid(void)
 /* ======================================================================
  * Test 2: Dynamic regridding around a BH
  *
- * Single BH (M=1), 2x2x2 mesh of N_block=16, L=64.
+ * Single BH (M=1), single root block N_block=16, L=64.
  * Set chi_refine=0.05 (triggers near BH), regrid_every=5.
  * Evolve 20 steps with regridding.
  * After regridding, dt is recalculated from the finest-level dx to
@@ -134,7 +142,7 @@ static void test_dynamic_regridding(void)
     p.CFL = 0.25;
     int nsteps = 20;
 
-    mesh_t *m = mesh_create(2, 16, p.L, p.rk_method);
+    mesh_t *m = mesh_create(16, p.L, p.rk_method);
     p.dx = m->dx_base;
     p.dt = p.CFL * p.dx;
     p.amr.chi_refine  = 0.05;
@@ -192,7 +200,7 @@ static void test_dynamic_regridding(void)
 /* ======================================================================
  * Test 3: Flat spacetime with regridding (should not refine)
  *
- * Flat spacetime, 2x2x2 mesh of N_block=16, L=10, regrid_every=5.
+ * Flat spacetime, single root block N_block=16, L=10, regrid_every=5.
  * Pass: Block count unchanged (chi-gradient = 0 -> no refinement).
  * ====================================================================== */
 static void test_flat_no_refinement(void)
@@ -204,7 +212,7 @@ static void test_flat_no_refinement(void)
     p.CFL = 0.25;
     int nsteps = 20;
 
-    mesh_t *m = mesh_create(2, 16, p.L, p.rk_method);
+    mesh_t *m = mesh_create(16, p.L, p.rk_method);
     p.dx = m->dx_base;
     p.dt = p.CFL * p.dx;
     p.amr.chi_refine  = 0.1;
@@ -252,7 +260,7 @@ int main(void)
 
     backend_init();
 
-    test_uniform_vs_single_grid();
+    test_refined_vs_single_block();
     test_dynamic_regridding();
     test_flat_no_refinement();
 

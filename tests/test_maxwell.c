@@ -131,7 +131,7 @@ static void test_em_flat(void)
     p.dx = p.L / p.N;
     p.dt = p.CFL * p.dx;
 
-    mesh_t *m = mesh_create_ex(1, p.N, p.L, p.rk_method, NUM_FIELDS);
+    mesh_t *m = mesh_create_ex(p.N, p.L, p.rk_method, NUM_FIELDS);
     grid_t *g = m->blocks[0]->grid;
     p.N  = g->N;
     p.dx = g->dx;
@@ -180,7 +180,7 @@ static void test_em_wave(void)
     p.dx = p.L / p.N;
     p.dt = p.CFL * p.dx;
 
-    mesh_t *m = mesh_create_ex(1, p.N, p.L, p.rk_method, NUM_FIELDS);
+    mesh_t *m = mesh_create_ex(p.N, p.L, p.rk_method, NUM_FIELDS);
     grid_t *g = m->blocks[0]->grid;
     p.N  = g->N;
     p.dx = g->dx;
@@ -253,7 +253,7 @@ static void test_charged_bh(void)
     p.dx = p.L / p.N;
     p.dt = p.CFL * p.dx;
 
-    mesh_t *m = mesh_create_ex(1, p.N, p.L, p.rk_method, NUM_FIELDS);
+    mesh_t *m = mesh_create_ex(p.N, p.L, p.rk_method, NUM_FIELDS);
     grid_t *g = m->blocks[0]->grid;
     p.N  = g->N;
     p.dx = g->dx;
@@ -309,7 +309,7 @@ static void test_constraint_damping(void)
     p.dx = p.L / p.N;
     p.dt = p.CFL * p.dx;
 
-    mesh_t *m = mesh_create_ex(1, p.N, p.L, p.rk_method, NUM_FIELDS);
+    mesh_t *m = mesh_create_ex(p.N, p.L, p.rk_method, NUM_FIELDS);
     grid_t *g = m->blocks[0]->grid;
     p.N  = g->N;
     p.dx = g->dx;
@@ -373,7 +373,7 @@ static void test_energy_conservation(void)
     p.dx = p.L / p.N;
     p.dt = p.CFL * p.dx;
 
-    mesh_t *m = mesh_create_ex(1, p.N, p.L, p.rk_method, NUM_FIELDS);
+    mesh_t *m = mesh_create_ex(p.N, p.L, p.rk_method, NUM_FIELDS);
     grid_t *g = m->blocks[0]->grid;
     p.N  = g->N;
     p.dx = g->dx;

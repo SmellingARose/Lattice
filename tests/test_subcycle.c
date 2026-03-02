@@ -69,8 +69,8 @@ static void test_uniform_identity(void)
     double center[1][3] = {{0.0, 0.0, 0.0}};
 
     /* Create two identical meshes */
-    mesh_t *m1 = mesh_create(2, 16, p.L, RK_CLASSIC);
-    mesh_t *m2 = mesh_create(2, 16, p.L, RK_CLASSIC);
+    mesh_t *m1 = mesh_create(16, p.L, RK_CLASSIC);
+    mesh_t *m2 = mesh_create(16, p.L, RK_CLASSIC);
 
     p.dx = m1->dx_base;
     p.dt = p.CFL * p.dx;
@@ -152,7 +152,7 @@ static void test_subcycled_flat_stability(void)
     p.CFL = 0.25;
     int nsteps = 50;
 
-    mesh_t *m = mesh_create(2, 16, p.L, RK_CLASSIC);
+    mesh_t *m = mesh_create(16, p.L, RK_CLASSIC);
     p.dx = m->dx_base;
 
     /* Set flat spacetime on all blocks */
@@ -240,7 +240,7 @@ static void test_subcycled_bh(void)
     p.CFL = 0.25;
     int nsteps = 20;
 
-    mesh_t *m = mesh_create(2, 16, p.L, RK_CLASSIC);
+    mesh_t *m = mesh_create(16, p.L, RK_CLASSIC);
     p.dx = m->dx_base;
     p.amr.chi_refine = 0.05;
     p.amr.chi_coarsen = 0.0;

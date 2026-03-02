@@ -86,7 +86,7 @@ int main(void)
 
     printf("\nCreating mesh: N=%d, L=%.1f, nf=%d\n", N, L, nf);
     fflush(stdout);
-    mesh_t *m = mesh_create_ex(1, N, L, RK_CLASSIC, nf);
+    mesh_t *m = mesh_create_ex(N, L, RK_CLASSIC, nf);
     grid_t *g = m->blocks[0]->grid;
 
     /* Set flat spacetime initial data (simplest possible) */

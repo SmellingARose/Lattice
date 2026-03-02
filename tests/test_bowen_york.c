@@ -279,7 +279,7 @@ static void test_zero_momentum(void)
 
     int N = 32;
     double L = 20.0;
-    mesh_t *m = mesh_create_ex(1, N, L, RK_CLASSIC, NUM_CCZ4_FIELDS);
+    mesh_t *m = mesh_create_ex(N, L, RK_CLASSIC, NUM_CCZ4_FIELDS);
     grid_t *g = m->blocks[0]->grid;
 
     set_bowen_york_mesh(m, 1, &bh, 0);
@@ -444,7 +444,7 @@ static void test_binary_orbit(void)
 
     int N = 32;
     double L = 20.0;
-    mesh_t *m = mesh_create_ex(1, N, L, RK_CLASSIC, NUM_CCZ4_FIELDS);
+    mesh_t *m = mesh_create_ex(N, L, RK_CLASSIC, NUM_CCZ4_FIELDS);
     grid_t *g = m->blocks[0]->grid;
 
     printf("  Setting up binary BY initial data...\n");
@@ -520,7 +520,7 @@ static void test_nbody(void)
 
         int N = 32;
         double L = 20.0;
-        mesh_t *m = mesh_create_ex(1, N, L, RK_CLASSIC, NUM_CCZ4_FIELDS);
+        mesh_t *m = mesh_create_ex(N, L, RK_CLASSIC, NUM_CCZ4_FIELDS);
         grid_t *g = m->blocks[0]->grid;
 
         set_bowen_york_mesh(m, 3, bhs, 0);
@@ -566,7 +566,7 @@ static void test_nbody(void)
 
         int N = 32;
         double L = 20.0;
-        mesh_t *m = mesh_create_ex(1, N, L, RK_CLASSIC, NUM_CCZ4_FIELDS);
+        mesh_t *m = mesh_create_ex(N, L, RK_CLASSIC, NUM_CCZ4_FIELDS);
         grid_t *g = m->blocks[0]->grid;
 
         set_bowen_york_mesh(m, 5, bhs, 0);

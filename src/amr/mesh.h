@@ -2,11 +2,10 @@
  * Lattice — 3D Numerical Relativity
  * AMR mesh: manages collection of blocks in an oct-tree.
  *
- * Stage 1: uniform level-0 decomposition (N_root^3 blocks).
- * Later stages add refinement, multi-level, subcycling.
+ * Single root block at level 0, refined by oct-tree AMR.
  *
  * Follows Athena++ Mesh pattern (Stone et al. 2020, ApJS 249, 4):
- *   - Root grid of N_root^3 blocks at level 0
+ *   - Single root block at level 0
  *   - Blocks sorted by Morton (Z-order) for cache locality
  *   - 26 neighbors computed from logical coordinates
  *   - nblevel[3][3][3] table set per block
@@ -32,8 +31,7 @@ typedef struct mesh_s {
 
     int         N_block;      /* interior cells per block side (e.g. 32)   */
     double      L;            /* physical domain size                      */
-    double      dx_base;      /* coarsest dx = L / (N_root * N_block)      */
-    int         N_root;       /* root blocks per side                      */
+    double      dx_base;      /* coarsest dx = L / N_block                 */
     rk_method_t rk_method;    /* time integrator for block allocation      */
     int         n_fields;     /* active fields per block (<= NUM_FIELDS)   */
 
@@ -53,27 +51,23 @@ typedef struct mesh_s {
 } mesh_t;
 
 /*
- * Create a uniform mesh with explicit field count.
- *   N_root:   root blocks per side (e.g. 1 for single block, 4 for 64 blocks)
+ * Create a mesh with a single root block.
  *   N_block:  interior cells per block side (e.g. 32)
  *   L:        physical domain size
  *   method:   RK method (determines memory allocation per block)
  *   n_fields: active field count (<= NUM_FIELDS)
  *
- * Blocks are created in Morton (Z-order) and assigned sequential IDs.
- * All 26 neighbors + nblevel tables are computed.
- * Boundary faces flagged for Sommerfeld BCs.
- *
- * Effective resolution: N_eff = N_root * N_block per side.
+ * The root block is assigned ID 0 with all 6 faces on the boundary.
+ * AMR refinement adds child blocks via oct-tree splitting.
  */
-mesh_t *mesh_create_ex(int N_root, int N_block, double L, rk_method_t method,
+mesh_t *mesh_create_ex(int N_block, double L, rk_method_t method,
                        int n_fields);
 
-/* Backward-compatible wrapper: creates mesh with all NUM_FIELDS fields. */
-static inline mesh_t *mesh_create(int N_root, int N_block, double L,
+/* Wrapper: creates mesh with all NUM_FIELDS fields. */
+static inline mesh_t *mesh_create(int N_block, double L,
                                   rk_method_t method)
 {
-    return mesh_create_ex(N_root, N_block, L, method, NUM_FIELDS);
+    return mesh_create_ex(N_block, L, method, NUM_FIELDS);
 }
 
 /* Free mesh and all its blocks */

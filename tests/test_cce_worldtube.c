@@ -96,7 +96,7 @@ static void test_flat_extraction(void)
 
     /* Domain must be large enough to contain extraction sphere at R=50.
      * L=128 gives domain [-64, 64], so R=50 fits. */
-    mesh_t *m = mesh_create_ex(1, 32, 128.0, RK_CLASSIC, NUM_CCZ4_FIELDS);
+    mesh_t *m = mesh_create_ex(32, 128.0, RK_CLASSIC, NUM_CCZ4_FIELDS);
     grid_t *g = m->blocks[0]->grid;
     set_flat_spacetime(g);
 
@@ -223,7 +223,7 @@ static void test_schwarzschild_derivatives(void)
     double M_bh = 1.0;
     double R_ext = 50.0;
 
-    mesh_t *m = mesh_create_ex(1, N, L, RK_CLASSIC, NUM_CCZ4_FIELDS);
+    mesh_t *m = mesh_create_ex(N, L, RK_CLASSIC, NUM_CCZ4_FIELDS);
     double masses[1] = {M_bh};
     double centers[1][3] = {{0, 0, 0}};
     set_brill_lindquist(m->blocks[0]->grid, 1, masses, centers);
@@ -549,7 +549,7 @@ static void test_multiple_rows(void)
 {
     printf("\n=== Test 7: Multiple time rows ===\n");
 
-    mesh_t *m = mesh_create_ex(1, 32, 128.0, RK_CLASSIC, NUM_CCZ4_FIELDS);
+    mesh_t *m = mesh_create_ex(32, 128.0, RK_CLASSIC, NUM_CCZ4_FIELDS);
     set_flat_spacetime(m->blocks[0]->grid);
 
     double center[3] = {0, 0, 0};

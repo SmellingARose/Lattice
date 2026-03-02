@@ -104,9 +104,8 @@ extern void output_mesh_1d_slice(const mesh_t *m, int step, double time);
  * Grid and evolution parameters
  * ==================================================================== */
 #define L_DOMAIN    64.0
-#define N_ROOT      3
 #define N_BLOCK     32
-#define MAX_LEVEL   3
+#define MAX_LEVEL   5
 #define CFL_FACTOR  0.25
 #define T_FINAL     20.0
 
@@ -288,11 +287,10 @@ int main(void)
     printf("\n");
     printf("  Grid:\n");
     printf("    Domain:     [-%.0f, %.0f]^3 M\n", L_DOMAIN / 2.0, L_DOMAIN / 2.0);
-    printf("    Root mesh:  %d^3 x %d^3 = %d^3 effective\n",
-           N_ROOT, N_BLOCK, N_ROOT * N_BLOCK);
-    printf("    AMR levels: %d  (dx_base = %.2f, dx_fine = %.2f M)\n",
-           MAX_LEVEL, L_DOMAIN / (N_ROOT * N_BLOCK),
-           L_DOMAIN / (N_ROOT * N_BLOCK) / (1 << MAX_LEVEL));
+    printf("    Root mesh:  %d^3\n", N_BLOCK);
+    printf("    AMR levels: %d  (dx_base = %.2f, dx_fine = %.4f M)\n",
+           MAX_LEVEL, L_DOMAIN / N_BLOCK,
+           L_DOMAIN / N_BLOCK / (1 << MAX_LEVEL));
     printf("    BCs:        constraint-preserving (arXiv:1212.2901)\n");
     printf("\n");
     printf("  Diagnostics:\n");
@@ -310,7 +308,7 @@ int main(void)
 
     /* ── Initialize ────────────────────────────────────────────────── */
     backend_init();
-    mesh_t *m = mesh_create(N_ROOT, N_BLOCK, L_DOMAIN, RK_CLASSIC);
+    mesh_t *m = mesh_create(N_BLOCK, L_DOMAIN, RK_CLASSIC);
 
     sim_params_t p = default_params();
     p.L         = L_DOMAIN;

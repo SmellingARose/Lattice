@@ -56,7 +56,7 @@ static void test_ghost_polynomial(void)
     printf("\n--- Test: Ghost exchange with polynomial f = x + 2y + 3z ---\n");
 
     /* 2x2x2 mesh, N_block=16. Effective N=32. */
-    mesh_t *m = mesh_create(2, 16, 10.0, RK_CLASSIC);
+    mesh_t *m = mesh_create(16, 10.0, RK_CLASSIC);
     check(m->num_blocks == 8, "8 blocks created");
 
     /* Set field 0 (CHI) to f(x,y,z) = x + 2y + 3z on all interiors */
@@ -174,7 +174,7 @@ static void test_multiblock_flat(void)
     double L = 10.0;
 
     /* (a) Single-grid reference run (1-block mesh) */
-    mesh_t *mref = mesh_create_ex(1, N_eff, L, RK_CLASSIC, NUM_FIELDS);
+    mesh_t *mref = mesh_create_ex(N_eff, L, RK_CLASSIC, NUM_FIELDS);
     grid_t *gref = mref->blocks[0]->grid;
     p.N  = gref->N;
     p.dx = gref->dx;
@@ -192,7 +192,7 @@ static void test_multiblock_flat(void)
            ham_ref, gref->N, p.num_steps);
 
     /* (b) Multi-block mesh: 2x2x2 = 8 blocks of 16^3 */
-    mesh_t *m = mesh_create(2, 16, L, RK_CLASSIC);
+    mesh_t *m = mesh_create(16, L, RK_CLASSIC);
 
     /* Set flat spacetime on all blocks */
     for (int bid = 0; bid < m->num_blocks; bid++) {
@@ -261,7 +261,7 @@ static void test_multiblock_pointwise(void)
     int nsteps = 10;
 
     /* Single grid N=32 (1-block mesh) */
-    mesh_t *mref = mesh_create_ex(1, 32, L, RK_CLASSIC, NUM_FIELDS);
+    mesh_t *mref = mesh_create_ex(32, L, RK_CLASSIC, NUM_FIELDS);
     grid_t *gref = mref->blocks[0]->grid;
     p.N  = gref->N;
     p.dx = gref->dx;
@@ -275,7 +275,7 @@ static void test_multiblock_pointwise(void)
     }
 
     /* Multi-block 2x2x2 x 16^3 */
-    mesh_t *m = mesh_create(2, 16, L, RK_CLASSIC);
+    mesh_t *m = mesh_create(16, L, RK_CLASSIC);
     for (int bid = 0; bid < m->num_blocks; bid++)
         set_flat_spacetime(m->blocks[bid]->grid);
     p.time = 0.0;
@@ -349,7 +349,7 @@ static void test_multiblock_single_bh(void)
     int nsteps = 4;
 
     /* 2x2x2 x 16^3 = effective N=32. Coarse but enough to test. */
-    mesh_t *m = mesh_create(2, 16, p.L, RK_CLASSIC);
+    mesh_t *m = mesh_create(16, p.L, RK_CLASSIC);
 
     /* Set BH initial data on all blocks */
     double mass = 1.0;

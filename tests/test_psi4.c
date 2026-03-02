@@ -350,7 +350,7 @@ static void test_flat_spacetime(void)
 
     int N = 32;
     double L = 10.0;
-    mesh_t *m = mesh_create_ex(1, N, L, RK_CLASSIC, NUM_CCZ4_FIELDS);
+    mesh_t *m = mesh_create_ex(N, L, RK_CLASSIC, NUM_CCZ4_FIELDS);
     grid_t *g = m->blocks[0]->grid;
 
     set_flat_spacetime(g);
@@ -398,7 +398,7 @@ static void test_schwarzschild(void)
     int N = 64;
     double L = 32.0;
     double M = 1.0;
-    mesh_t *m = mesh_create_ex(1, N, L, RK_CLASSIC, NUM_CCZ4_FIELDS);
+    mesh_t *m = mesh_create_ex(N, L, RK_CLASSIC, NUM_CCZ4_FIELDS);
 
     puncture_data_t bh;
     memset(&bh, 0, sizeof(bh));
