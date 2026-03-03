@@ -31,22 +31,34 @@
  * Field index tables (file-scope, same as constraints.c)
  * ================================================================ */
 
-static const int h_idx[3][3] = {
+LATTICE_DEVICE static const int p4_h_idx[3][3] = {
     {FIELD_H11, FIELD_H12, FIELD_H13},
     {FIELD_H12, FIELD_H22, FIELD_H23},
     {FIELD_H13, FIELD_H23, FIELD_H33}
 };
 
-static const int A_idx[3][3] = {
+LATTICE_DEVICE static const int p4_A_idx[3][3] = {
     {FIELD_A11, FIELD_A12, FIELD_A13},
     {FIELD_A12, FIELD_A22, FIELD_A23},
     {FIELD_A13, FIELD_A23, FIELD_A33}
 };
 
 /* Levi-Civita antisymmetric symbol: e_{ijk} = (i-j)(j-k)(k-i)/2 */
-static inline int levi_civita(int i, int j, int k)
+LATTICE_DEVICE static inline int psi4_levi_civita(int i, int j, int k)
 {
     return (i - j) * (j - k) * (k - i) / 2;
+}
+
+/* Physical-metric inner product: <u, v>_gamma = gamma_{ij} u^i v^j
+ * = h_{ij} u^i v^j / chi.  Used for Gram-Schmidt tetrad. */
+LATTICE_DEVICE static inline double psi4_dot_phys(
+    const double h[3][3], double chi, const double *u, const double *v)
+{
+    double d = 0.0;
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < 3; j++)
+            d += h[i][j] * u[i] * v[j] / chi;
+    return d;
 }
 
 /* Mode index: l ranges from 2 to l_max, m from -l to l.
@@ -180,7 +192,7 @@ psi4_workspace_t *psi4_alloc(int n_theta, int n_phi, int l_max,
 {
     init_factorial();
 
-    psi4_workspace_t *ws = calloc(1, sizeof(psi4_workspace_t));
+    psi4_workspace_t *ws = (psi4_workspace_t *)calloc(1, sizeof(psi4_workspace_t));
     ws->n_theta = n_theta;
     ws->n_phi   = n_phi;
     ws->l_max   = l_max;
@@ -190,9 +202,9 @@ psi4_workspace_t *psi4_alloc(int n_theta, int n_phi, int l_max,
     ws->center[2] = center[2];
 
     /* Gauss-Legendre nodes on [-1, 1] → theta = arccos(x) */
-    double *gl_x = malloc((size_t)n_theta * sizeof(double));
-    ws->theta      = malloc((size_t)n_theta * sizeof(double));
-    ws->gl_weights = malloc((size_t)n_theta * sizeof(double));
+    double *gl_x = (double *)malloc((size_t)n_theta * sizeof(double));
+    ws->theta      = (double *)malloc((size_t)n_theta * sizeof(double));
+    ws->gl_weights = (double *)malloc((size_t)n_theta * sizeof(double));
     gauss_legendre_nodes(n_theta, gl_x, ws->gl_weights);
     for (int i = 0; i < n_theta; i++)
         ws->theta[i] = acos(gl_x[i]);
@@ -200,14 +212,14 @@ psi4_workspace_t *psi4_alloc(int n_theta, int n_phi, int l_max,
 
     /* Sphere data */
     int np = n_theta * n_phi;
-    ws->re_psi4 = calloc((size_t)np, sizeof(double));
-    ws->im_psi4 = calloc((size_t)np, sizeof(double));
+    ws->re_psi4 = (double *)calloc((size_t)np, sizeof(double));
+    ws->im_psi4 = (double *)calloc((size_t)np, sizeof(double));
 
     /* Mode coefficients: l from 2 to l_max, m from -l to l
      * n_modes = (l_max+1)^2 - 4 */
     ws->n_modes = (l_max + 1) * (l_max + 1) - 4;
-    ws->mode_re = calloc((size_t)ws->n_modes, sizeof(double));
-    ws->mode_im = calloc((size_t)ws->n_modes, sizeof(double));
+    ws->mode_re = (double *)calloc((size_t)ws->n_modes, sizeof(double));
+    ws->mode_im = (double *)calloc((size_t)ws->n_modes, sizeof(double));
 
     return ws;
 }
@@ -243,6 +255,7 @@ void psi4_free(psi4_workspace_t *ws)
  * ================================================================ */
 
 /* Internal version taking explicit physical position for AMR support */
+LATTICE_DEVICE
 static void psi4_compute(const double *const *fields, const grid_t *g,
                           int ii, int jj, int kk,
                           const double pos[3], const double center[3],
@@ -278,16 +291,16 @@ static void psi4_compute(const double *const *fields, const grid_t *g,
     FOR1(dir) {
         int s = strides[dir];
         fd_d1_d2(fields[FIELD_CHI], idx, s, inv_dx, &d1_chi[dir], &d2_chi_diag[dir]);
-        fd_d1_d2(fields[FIELD_K], idx, s, inv_dx, &d1_K[dir], &(double){0}); /* d2_K not needed */
+        { double d2_K_unused; fd_d1_d2(fields[FIELD_K], idx, s, inv_dx, &d1_K[dir], &d2_K_unused); }
         FOR2(a, b) {
             if (b < a) {
                 d1_h[a][b][dir] = d1_h[b][a][dir];
                 d2_h_diag[a][b][dir] = d2_h_diag[b][a][dir];
                 d1_A[a][b][dir] = d1_A[b][a][dir];
             } else {
-                fd_d1_d2(fields[h_idx[a][b]], idx, s, inv_dx,
+                fd_d1_d2(fields[p4_h_idx[a][b]], idx, s, inv_dx,
                          &d1_h[a][b][dir], &d2_h_diag[a][b][dir]);
-                d1_A[a][b][dir] = fd_d1(fields[A_idx[a][b]], idx, s, inv_dx);
+                d1_A[a][b][dir] = fd_d1(fields[p4_A_idx[a][b]], idx, s, inv_dx);
             }
         }
     }
@@ -306,7 +319,7 @@ static void psi4_compute(const double *const *fields, const grid_t *g,
             d2_chi[d2][d1] = d2_chi[d1][d2];
             for (int a = 0; a < 3; a++) {
                 for (int b = a; b < 3; b++) {
-                    d2_h[a][b][d1][d2] = fd_d2_mixed(fields[h_idx[a][b]], idx, s1, s2, inv_dx);
+                    d2_h[a][b][d1][d2] = fd_d2_mixed(fields[p4_h_idx[a][b]], idx, s1, s2, inv_dx);
                     d2_h[a][b][d2][d1] = d2_h[a][b][d1][d2];
                     d2_h[b][a][d1][d2] = d2_h[a][b][d1][d2];
                     d2_h[b][a][d2][d1] = d2_h[a][b][d1][d2];
@@ -469,7 +482,7 @@ static void psi4_compute(const double *const *fields, const grid_t *g,
     FOR2(i, j) {
         double sum_i = 0.0, sum_j = 0.0;
         FOR3(m, k, l) {
-            int e_mkl = levi_civita(m, k, l);
+            int e_mkl = psi4_levi_civita(m, k, l);
             if (e_mkl == 0) continue;
             sum_i += h[i][m] * e_mkl * covd_K[k][l][j];
             sum_j += h[j][m] * e_mkl * covd_K[k][l][i];
@@ -519,38 +532,30 @@ static void psi4_compute(const double *const *fields, const grid_t *g,
         phi_hat[0] = 0.0; phi_hat[1] = 1.0; phi_hat[2] = 0.0;
     }
 
-    /* Inner product w.r.t. physical metric: <u, v>_gamma = gamma_{ij} u^i v^j = h_{ij} u^i v^j / chi */
-    #define DOT_PHYS(u, v) ({ \
-        double _d = 0.0; \
-        for (int _i = 0; _i < 3; _i++) \
-            for (int _j = 0; _j < 3; _j++) \
-                _d += h[_i][_j] * (u)[_i] * (v)[_j] / chi; \
-        _d; })
+    /* Gram-Schmidt: orthonormalize {r_hat, theta_hat, phi_hat}
+     * w.r.t. physical metric gamma_ij = h_ij/chi */
 
-    /* Gram-Schmidt: orthonormalize {r_hat, theta_hat, phi_hat} */
     /* Step 1: normalize r_hat */
-    double nr = sqrt(DOT_PHYS(r_hat, r_hat));
+    double nr = sqrt(psi4_dot_phys(h, chi, r_hat, r_hat));
     double e_r[3];
     FOR1(i) e_r[i] = r_hat[i] / nr;
 
     /* Step 2: theta_hat → v = theta_hat - <theta_hat, e_r>*e_r, normalize */
-    double proj = DOT_PHYS(theta_hat, e_r);
+    double proj = psi4_dot_phys(h, chi, theta_hat, e_r);
     double v[3];
     FOR1(i) v[i] = theta_hat[i] - proj * e_r[i];
-    double nv = sqrt(DOT_PHYS(v, v));
+    double nv = sqrt(psi4_dot_phys(h, chi, v, v));
     if (nv < 1e-12) { out[0] = 0.0; out[1] = 0.0; return; }
     FOR1(i) v[i] /= nv;
 
     /* Step 3: phi_hat → w = phi_hat - <phi_hat, e_r>*e_r - <phi_hat, v>*v, normalize */
-    double proj_r = DOT_PHYS(phi_hat, e_r);
-    double proj_v = DOT_PHYS(phi_hat, v);
+    double proj_r = psi4_dot_phys(h, chi, phi_hat, e_r);
+    double proj_v = psi4_dot_phys(h, chi, phi_hat, v);
     double w[3];
     FOR1(i) w[i] = phi_hat[i] - proj_r * e_r[i] - proj_v * v[i];
-    double nw = sqrt(DOT_PHYS(w, w));
+    double nw = sqrt(psi4_dot_phys(h, chi, w, w));
     if (nw < 1e-12) { out[0] = 0.0; out[1] = 0.0; return; }
     FOR1(i) w[i] /= nw;
-
-    #undef DOT_PHYS
 
     /* --- Project Weyl tensors onto tetrad ---
      * Re(Psi4) = (E_vv - E_ww)/2 + B_vw
@@ -571,6 +576,7 @@ static void psi4_compute(const double *const *fields, const grid_t *g,
     out[1] = 0.5 * (B_vv - B_ww) - E_vw;
 }
 
+LATTICE_DEVICE
 void psi4_at_point(const double *const *fields, const grid_t *g,
                    int i, int j, int k,
                    const double center[3], double out[2])
@@ -669,12 +675,20 @@ void psi4_extract(psi4_workspace_t *ws, const struct mesh_s *m)
         }
     }
 
-    /* --- Mode decomposition ---
-     * a_{lm} = integral of Psi4 * conj(_{-2}Y_{lm}) sin(theta) dtheta dphi
-     *
-     * GL nodes handle sin(theta) dtheta → dx (x = cos(theta)).
-     * Trapezoidal rule for phi (spectrally accurate for periodic functions).
-     */
+    psi4_decompose_modes(ws);
+}
+
+/* ================================================================
+ * 5b. Mode decomposition (separated for GPU path)
+ *
+ * a_{lm} = integral of Psi4 * conj(_{-2}Y_{lm}) sin(theta) dtheta dphi
+ *
+ * GL nodes handle sin(theta) dtheta → dx (x = cos(theta)).
+ * Trapezoidal rule for phi (spectrally accurate for periodic functions).
+ * ================================================================ */
+
+void psi4_decompose_modes(psi4_workspace_t *ws)
+{
     double dphi_w = 2.0 * M_PI / ws->n_phi;
 
     for (int mi = 0; mi < ws->n_modes; mi++) {

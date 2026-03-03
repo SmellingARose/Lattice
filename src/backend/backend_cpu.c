@@ -1158,6 +1158,248 @@ void backend_enforce_algebraic_packed(meshblock_pack_t *pack)
 int backend_is_gpu(void) { return 0; }
 
 /* ========================================================================
+ * GPU diagnostic kernels — CPU implementations
+ *
+ * Map/unmap are no-ops. Diagnostic functions reuse the pack's host data
+ * directly, mirroring the GPU kernel logic with OpenMP parallel loops.
+ * ======================================================================== */
+
+void backend_map_pack_diag(meshblock_pack_t *pack) { (void)pack; }
+void backend_unmap_pack_diag(meshblock_pack_t *pack) { (void)pack; }
+
+#include "../diagnostics/constraints.h"
+
+double backend_constraint_l2_packed(meshblock_pack_t *pack)
+{
+    int nb = pack->n_blocks;
+    int N = pack->N;
+    int ghost = pack->ghost;
+    int Nt = pack->Ntotal;
+    size_t npts = pack->npts;
+    int nf = pack->n_fields;
+
+    double sum = 0.0;
+    int count = 0;
+
+    #pragma omp parallel for schedule(static) reduction(+:sum,count)
+    for (int bpt = 0; bpt < nb * N * N * N; bpt++) {
+        int b = bpt / (N * N * N);
+        int pt = bpt % (N * N * N);
+        int i = ghost + pt % N;
+        int j = ghost + (pt / N) % N;
+        int k = ghost + pt / (N * N);
+
+        const double *src_ptrs[NUM_FIELDS];
+        for (int f = 0; f < nf; f++)
+            src_ptrs[f] = pack->data + (size_t)f * nb * npts + (size_t)b * npts;
+
+        grid_t g_local;
+        memset(&g_local, 0, sizeof(grid_t));
+        g_local.N = N;
+        g_local.ghost = ghost;
+        g_local.Ntotal = Nt;
+        g_local.npoints = npts;
+        g_local.n_fields = nf;
+        g_local.dx = pack->dx_per_block[b];
+        g_local.inv_dx = 1.0 / pack->dx_per_block[b];
+
+        double H = compute_hamiltonian_at(
+            (const double *const *)src_ptrs, &g_local, i, j, k);
+        sum += H * H;
+        count++;
+    }
+
+    return (count > 0) ? sqrt(sum / count) : 0.0;
+}
+
+double backend_momentum_l2_packed(meshblock_pack_t *pack)
+{
+    int nb = pack->n_blocks;
+    int N = pack->N;
+    int ghost = pack->ghost;
+    int Nt = pack->Ntotal;
+    size_t npts = pack->npts;
+    int nf = pack->n_fields;
+
+    double sum = 0.0;
+    int count = 0;
+
+    #pragma omp parallel for schedule(static) reduction(+:sum,count)
+    for (int bpt = 0; bpt < nb * N * N * N; bpt++) {
+        int b = bpt / (N * N * N);
+        int pt = bpt % (N * N * N);
+        int i = ghost + pt % N;
+        int j = ghost + (pt / N) % N;
+        int k = ghost + pt / (N * N);
+
+        const double *src_ptrs[NUM_FIELDS];
+        for (int f = 0; f < nf; f++)
+            src_ptrs[f] = pack->data + (size_t)f * nb * npts + (size_t)b * npts;
+
+        grid_t g_local;
+        memset(&g_local, 0, sizeof(grid_t));
+        g_local.N = N;
+        g_local.ghost = ghost;
+        g_local.Ntotal = Nt;
+        g_local.npoints = npts;
+        g_local.n_fields = nf;
+        g_local.dx = pack->dx_per_block[b];
+        g_local.inv_dx = 1.0 / pack->dx_per_block[b];
+
+        double mom[3];
+        compute_momentum_at(
+            (const double *const *)src_ptrs, &g_local, i, j, k, mom);
+        sum += mom[0]*mom[0] + mom[1]*mom[1] + mom[2]*mom[2];
+        count++;
+    }
+
+    return (count > 0) ? sqrt(sum / (3 * count)) : 0.0;
+}
+
+double backend_min_lapse_packed(meshblock_pack_t *pack,
+                                 double *out_x, double *out_y, double *out_z)
+{
+    int nb = pack->n_blocks;
+    int N = pack->N;
+    int ghost = pack->ghost;
+    int Nt = pack->Ntotal;
+    size_t npts = pack->npts;
+
+    double global_min = 1.0e30;
+    double gx = 0.0, gy = 0.0, gz = 0.0;
+
+    #pragma omp parallel
+    {
+        double local_min = 1.0e30;
+        double lx = 0.0, ly = 0.0, lz = 0.0;
+
+        #pragma omp for schedule(static)
+        for (int bpt = 0; bpt < nb * N * N * N; bpt++) {
+            int b = bpt / (N * N * N);
+            int pt = bpt % (N * N * N);
+            int i = ghost + pt % N;
+            int j = ghost + (pt / N) % N;
+            int k = ghost + pt / (N * N);
+
+            int idx = k * Nt * Nt + j * Nt + i;
+            size_t off = (size_t)FIELD_LAPSE * nb * npts + (size_t)b * npts + idx;
+            double a = pack->data[off];
+
+            if (a < local_min) {
+                local_min = a;
+                double dx = pack->dx_per_block[b];
+                lx = pack->origins[b * 3 + 0] + (i - ghost + 0.5) * dx;
+                ly = pack->origins[b * 3 + 1] + (j - ghost + 0.5) * dx;
+                lz = pack->origins[b * 3 + 2] + (k - ghost + 0.5) * dx;
+            }
+        }
+
+        #pragma omp critical
+        {
+            if (local_min < global_min) {
+                global_min = local_min;
+                gx = lx; gy = ly; gz = lz;
+            }
+        }
+    }
+
+    *out_x = gx; *out_y = gy; *out_z = gz;
+    return global_min;
+}
+
+double backend_bh_separation_packed(meshblock_pack_t *pack, double excl_radius,
+                                      double *x1, double *y1, double *z1,
+                                      double *x2, double *y2, double *z2)
+{
+    /* Pass 1: find global lapse minimum (BH #1) */
+    double px1, py1, pz1;
+    (void)backend_min_lapse_packed(pack, &px1, &py1, &pz1);
+    *x1 = px1; *y1 = py1; *z1 = pz1;
+
+    /* Pass 2: find deepest minimum at least excl_radius from BH #1 */
+    int nb = pack->n_blocks;
+    int N = pack->N;
+    int ghost = pack->ghost;
+    int Nt = pack->Ntotal;
+    size_t npts = pack->npts;
+
+    double best2 = 1.0e30;
+    double px2 = 0.0, py2 = 0.0, pz2 = 0.0;
+
+    #pragma omp parallel
+    {
+        double local_min = 1.0e30;
+        double lx = 0.0, ly = 0.0, lz = 0.0;
+
+        #pragma omp for schedule(static)
+        for (int bpt = 0; bpt < nb * N * N * N; bpt++) {
+            int b = bpt / (N * N * N);
+            int pt = bpt % (N * N * N);
+            int i = ghost + pt % N;
+            int j = ghost + (pt / N) % N;
+            int k = ghost + pt / (N * N);
+
+            int idx = k * Nt * Nt + j * Nt + i;
+            size_t off = (size_t)FIELD_LAPSE * nb * npts + (size_t)b * npts + idx;
+            double a = pack->data[off];
+
+            if (a < local_min) {
+                double dx = pack->dx_per_block[b];
+                double cx = pack->origins[b * 3 + 0] + (i - ghost + 0.5) * dx;
+                double cy = pack->origins[b * 3 + 1] + (j - ghost + 0.5) * dx;
+                double cz = pack->origins[b * 3 + 2] + (k - ghost + 0.5) * dx;
+                double dr = sqrt((cx - px1) * (cx - px1) +
+                                 (cy - py1) * (cy - py1) +
+                                 (cz - pz1) * (cz - pz1));
+                if (dr > excl_radius) {
+                    local_min = a;
+                    lx = cx; ly = cy; lz = cz;
+                }
+            }
+        }
+
+        #pragma omp critical
+        {
+            if (local_min < best2) {
+                best2 = local_min;
+                px2 = lx; py2 = ly; pz2 = lz;
+            }
+        }
+    }
+
+    *x2 = px2; *y2 = py2; *z2 = pz2;
+
+    if (best2 > 0.99) return 0.0;
+    return sqrt((px1 - px2) * (px1 - px2) +
+                (py1 - py2) * (py1 - py2) +
+                (pz1 - pz2) * (pz1 - pz2));
+}
+
+int backend_check_finite_packed(meshblock_pack_t *pack)
+{
+    size_t total = (size_t)pack->n_fields * pack->n_blocks * pack->npts;
+    int ok = 1;
+
+    #pragma omp parallel for schedule(static) reduction(min:ok)
+    for (size_t i = 0; i < total; i++) {
+        if (!isfinite(pack->data[i]))
+            ok = 0;
+    }
+
+    return ok;
+}
+
+#include "../diagnostics/psi4.h"
+
+void backend_psi4_extract_packed(meshblock_pack_t *pack,
+                                   psi4_workspace_t *ws,
+                                   const struct mesh_s *m)
+{
+    (void)pack;  /* CPU: pack unused, operate on mesh blocks directly */
+    psi4_extract(ws, m);
+}
+
+/* ========================================================================
  * Multigrid solver packed kernel API — CPU implementations
  *
  * All operations use OpenMP parallel loops calling the shared point

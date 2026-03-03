@@ -19,10 +19,13 @@
 #define LATTICE_PSI4_H
 
 #include "../core/grid.h"
+#include "../core/device.h"
+
+EXTERN_C_BEGIN
 
 struct mesh_s;  /* forward declaration */
 
-typedef struct {
+typedef struct psi4_workspace_s {
     int    n_theta, n_phi, l_max;
     double radius, center[3];
     double *theta, *gl_weights;     /* Gauss-Legendre nodes/weights [n_theta] */
@@ -46,6 +49,7 @@ void psi4_free(psi4_workspace_t *ws);
  * out[0] = Re(Psi4), out[1] = Im(Psi4).
  * center[3] = coordinate center for the null tetrad construction.
  * Ref: B&S Eq. (8.53)-(8.55) */
+LATTICE_DEVICE
 void psi4_at_point(const double *const *fields, const grid_t *g,
                    int i, int j, int k,
                    const double center[3], double out[2]);
@@ -55,9 +59,17 @@ void psi4_at_point(const double *const *fields, const grid_t *g,
  * and ws->mode_re, ws->mode_im (mode coefficients). */
 void psi4_extract(psi4_workspace_t *ws, const struct mesh_s *m);
 
+/* Decompose r*Psi4 on sphere into spin-weighted spherical harmonic modes.
+ * Reads ws->re_psi4, ws->im_psi4; fills ws->mode_re, ws->mode_im.
+ * Separated from psi4_extract for GPU path (sphere computed on device,
+ * mode decomposition on host). */
+void psi4_decompose_modes(psi4_workspace_t *ws);
+
 /* Append mode data to CSV file.
  * Format: t, l, m, Re(rPsi4), Im(rPsi4), |rPsi4|, phase */
 void psi4_write_modes(const psi4_workspace_t *ws, double time,
                       const char *filename);
+
+EXTERN_C_END
 
 #endif /* LATTICE_PSI4_H */

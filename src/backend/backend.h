@@ -201,6 +201,84 @@ void backend_enforce_algebraic_packed(meshblock_pack_t *pack);
 int backend_is_gpu(void);
 
 /* ========================================================================
+ * GPU diagnostic kernels
+ *
+ * Lightweight on-device diagnostics: constraints, lapse, separation, NaN.
+ * Data stays on device; only tiny scalar results (~100 bytes) return to host.
+ *
+ * GPU: map pack data with backend_map_pack_diag (data + metadata only, no
+ * rhs/scratch/accum), run ghost exchange, then call diagnostic kernels.
+ * CPU: map/unmap are no-ops; diagnostic functions call existing mesh-level
+ * CPU code directly.
+ * ======================================================================== */
+
+/*
+ * Lightweight diagnostic-only pack mapping (data + metadata, no rhs/scratch).
+ * Saves ~75% transfer vs full backend_map_pack.
+ * CPU backend: no-op.
+ */
+void backend_map_pack_diag(meshblock_pack_t *pack);
+
+/*
+ * Free diagnostic pack device memory WITHOUT syncing data back (read-only).
+ * CPU backend: no-op.
+ */
+void backend_unmap_pack_diag(meshblock_pack_t *pack);
+
+/*
+ * Hamiltonian constraint L2 norm over all interior points on device.
+ * Returns sqrt(sum(H^2) / count).
+ */
+double backend_constraint_l2_packed(meshblock_pack_t *pack);
+
+/*
+ * Momentum constraint L2 norm over all interior points on device.
+ * Returns sqrt(sum(|M_i|^2) / (3 * count)).
+ */
+double backend_momentum_l2_packed(meshblock_pack_t *pack);
+
+/*
+ * Minimum lapse over all interior points on device.
+ * Returns min(alpha) and writes the position to out_x/y/z.
+ */
+double backend_min_lapse_packed(meshblock_pack_t *pack,
+                                 double *out_x, double *out_y, double *out_z);
+
+/*
+ * BH separation from two deepest lapse minima on device.
+ * excl_radius: exclusion zone around BH#1 for finding BH#2 (typically 2.0).
+ * Returns distance and writes both positions to x1/y1/z1, x2/y2/z2.
+ */
+double backend_bh_separation_packed(meshblock_pack_t *pack, double excl_radius,
+                                      double *x1, double *y1, double *z1,
+                                      double *x2, double *y2, double *z2);
+
+/*
+ * Check all evolved fields for NaN/Inf on device. Returns 1 if all finite.
+ */
+int backend_check_finite_packed(meshblock_pack_t *pack);
+
+/*
+ * GPU Psi4 extraction: compute r*Psi4 at pre-mapped angular points on device,
+ * then decompose into spin-weighted spherical harmonic modes on host.
+ *
+ * Fills ws->re_psi4, ws->im_psi4 (r*Psi4 on sphere) and
+ * ws->mode_re, ws->mode_im (mode coefficients).
+ *
+ * The host pre-computes angular-point-to-block mapping using mesh_find_block_at,
+ * uploads the mapping, and launches a GPU kernel calling psi4_compute for each
+ * angular point. Mode decomposition runs on host (trivial arithmetic on 512 values).
+ *
+ * GPU: requires prior backend_map_pack_diag + backend_ghost_exchange_packed.
+ * CPU: calls psi4_extract directly (pack unused).
+ */
+struct psi4_workspace_s;  /* forward declaration */
+struct mesh_s;             /* forward declaration */
+void backend_psi4_extract_packed(meshblock_pack_t *pack,
+                                   struct psi4_workspace_s *ws,
+                                   const struct mesh_s *m);
+
+/* ========================================================================
  * Multigrid solver packed kernel API
  *
  * GPU-accelerated FAS multigrid constraint solver. Separate device state

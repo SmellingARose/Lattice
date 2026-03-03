@@ -167,6 +167,15 @@ work on AMR meshes.
     `ghost_fill_from_coarser()` Pass 1, `restrict_level_to_parents()`,
     `mesh_constraint_l2()`, `mesh_momentum_l2()`, `umg_sweep_1field()`,
     `umg_sweep_4field()`, `umg_compute_operator()`.
+- **GPU diagnostics (all complete):** On-device constraint L2, momentum L2,
+  min lapse with position, BH separation (two-pass lapse minimum), NaN/Inf
+  check, and Psi4 extraction. Diagnostic-only pack mapping
+  (`backend_map_pack_diag`) transfers data + metadata without rhs/scratch/accum
+  (~75% savings). Constraint/momentum kernels use shared-memory block-level
+  reduction. Psi4 kernel: host pre-computes angular-point-to-block mapping
+  via `mesh_find_block_at`, GPU calls `psi4_compute` per point (512 threads),
+  mode decomposition on host. AH finder remains CPU-only.
+  Eliminates ~250s/step diagnostic overhead on large AMR meshes.
 - **Constraint-preserving BCs:** BAM-style CP BCs replace the RHS of constraint
   fields (Theta, K, A_ij, Gamma^i) at boundary points with outgoing-wave equations
   at correct characteristic speeds, while keeping Sommerfeld for metric/gauge fields.

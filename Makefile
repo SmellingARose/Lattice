@@ -60,7 +60,8 @@ else ifeq ($(BACKEND),gpu)
     HIPCC ?= hipcc
     BACKEND_SRC = src/backend/backend_hip.cpp
     HIP_DEVICE_SRC = src/evolution/ccz4_rhs.c src/evolution/maxwell_rhs.c \
-                     src/evolution/dissipation.c src/boundary/sommerfeld.c
+                     src/evolution/dissipation.c src/boundary/sommerfeld.c \
+                     src/diagnostics/constraints.c src/diagnostics/psi4.c
     LTO_FLAGS =
     HIP_FLAGS = -DLATTICE_HIP -DLATTICE_GPU
     BACKEND_FLAGS = -fopenmp

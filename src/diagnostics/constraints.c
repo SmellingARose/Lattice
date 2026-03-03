@@ -20,6 +20,20 @@
 #include "../amr/mesh.h"
 #include <math.h>
 
+/* Field index tables at file scope for device visibility (nvcc cannot
+ * promote static const arrays inside function bodies to __device__). */
+LATTICE_DEVICE static const int c_h_idx[3][3] = {
+    {FIELD_H11, FIELD_H12, FIELD_H13},
+    {FIELD_H12, FIELD_H22, FIELD_H23},
+    {FIELD_H13, FIELD_H23, FIELD_H33}
+};
+LATTICE_DEVICE static const int c_A_idx[3][3] = {
+    {FIELD_A11, FIELD_A12, FIELD_A13},
+    {FIELD_A12, FIELD_A22, FIELD_A23},
+    {FIELD_A13, FIELD_A23, FIELD_A33}
+};
+
+LATTICE_DEVICE
 double compute_hamiltonian_at(const double *const *fields, const grid_t *g,
                               int i, int j, int k)
 {
@@ -40,20 +54,13 @@ double compute_hamiltonian_at(const double *const *fields, const grid_t *g,
     A_loc[1][0] = A_loc[0][1];           A_loc[1][1] = fields[FIELD_A22][idx]; A_loc[1][2] = fields[FIELD_A23][idx];
     A_loc[2][0] = A_loc[0][2];           A_loc[2][1] = A_loc[1][2];           A_loc[2][2] = fields[FIELD_A33][idx];
 
-    /* Field index tables */
-    static const int h_idx[3][3] = {
-        {FIELD_H11, FIELD_H12, FIELD_H13},
-        {FIELD_H12, FIELD_H22, FIELD_H23},
-        {FIELD_H13, FIELD_H23, FIELD_H33}
-    };
-
     /* First derivatives of chi and h */
     double d1_chi[3];
     double d1_h[3][3][3];
     FOR1(dir) {
         int s = strides[dir];
         d1_chi[dir] = fd_d1(fields[FIELD_CHI], idx, s, inv_dx);
-        FOR2(a, b) d1_h[a][b][dir] = fd_d1(fields[h_idx[a][b]], idx, s, inv_dx);
+        FOR2(a, b) d1_h[a][b][dir] = fd_d1(fields[c_h_idx[a][b]], idx, s, inv_dx);
     }
 
     /* Second derivatives of chi and h */
@@ -62,7 +69,7 @@ double compute_hamiltonian_at(const double *const *fields, const grid_t *g,
     FOR1(dir) {
         int s = strides[dir];
         d2_chi[dir][dir] = fd_d2(fields[FIELD_CHI], idx, s, inv_dx);
-        FOR2(a, b) d2_h[a][b][dir][dir] = fd_d2(fields[h_idx[a][b]], idx, s, inv_dx);
+        FOR2(a, b) d2_h[a][b][dir][dir] = fd_d2(fields[c_h_idx[a][b]], idx, s, inv_dx);
     }
     for (int d1 = 0; d1 < 3; d1++) {
         for (int d2 = 0; d2 < d1; d2++) {
@@ -70,7 +77,7 @@ double compute_hamiltonian_at(const double *const *fields, const grid_t *g,
             d2_chi[d1][d2] = fd_d2_mixed(fields[FIELD_CHI], idx, s1, s2, inv_dx);
             d2_chi[d2][d1] = d2_chi[d1][d2];
             FOR2(a, b) {
-                d2_h[a][b][d1][d2] = fd_d2_mixed(fields[h_idx[a][b]], idx, s1, s2, inv_dx);
+                d2_h[a][b][d1][d2] = fd_d2_mixed(fields[c_h_idx[a][b]], idx, s1, s2, inv_dx);
                 d2_h[a][b][d2][d1] = d2_h[a][b][d1][d2];
             }
         }
@@ -204,6 +211,7 @@ double compute_hamiltonian_at(const double *const *fields, const grid_t *g,
  * Ref: GRChombo NewConstraints.impl.hpp:72-99
  * Ref: arXiv:1106.2254 (CCZ4 formulation)
  */
+LATTICE_DEVICE
 void compute_momentum_at(const double *const *fields, const grid_t *g,
                           int ii, int jj, int kk, double mom[3])
 {
@@ -223,17 +231,6 @@ void compute_momentum_at(const double *const *fields, const grid_t *g,
     A_loc[1][0] = A_loc[0][1];           A_loc[1][1] = fields[FIELD_A22][idx]; A_loc[1][2] = fields[FIELD_A23][idx];
     A_loc[2][0] = A_loc[0][2];           A_loc[2][1] = A_loc[1][2];           A_loc[2][2] = fields[FIELD_A33][idx];
 
-    static const int h_idx[3][3] = {
-        {FIELD_H11, FIELD_H12, FIELD_H13},
-        {FIELD_H12, FIELD_H22, FIELD_H23},
-        {FIELD_H13, FIELD_H23, FIELD_H33}
-    };
-    static const int A_idx[3][3] = {
-        {FIELD_A11, FIELD_A12, FIELD_A13},
-        {FIELD_A12, FIELD_A22, FIELD_A23},
-        {FIELD_A13, FIELD_A23, FIELD_A33}
-    };
-
     /* First derivatives: chi, K, h_ij, A_ij */
     double d1_chi[3], d1_K[3];
     double d1_h[3][3][3];   /* d1_h[a][b][dir] */
@@ -243,8 +240,8 @@ void compute_momentum_at(const double *const *fields, const grid_t *g,
         d1_chi[dir] = fd_d1(fields[FIELD_CHI], idx, s, inv_dx);
         d1_K[dir]   = fd_d1(fields[FIELD_K], idx, s, inv_dx);
         FOR2(a, b) {
-            d1_h[a][b][dir] = fd_d1(fields[h_idx[a][b]], idx, s, inv_dx);
-            d1_A[a][b][dir] = fd_d1(fields[A_idx[a][b]], idx, s, inv_dx);
+            d1_h[a][b][dir] = fd_d1(fields[c_h_idx[a][b]], idx, s, inv_dx);
+            d1_A[a][b][dir] = fd_d1(fields[c_A_idx[a][b]], idx, s, inv_dx);
         }
     }
 

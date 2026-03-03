@@ -20,6 +20,9 @@
 #include "block.h"
 #include "meshblock_pack.h"
 #include "../core/params.h"
+#include "../core/device.h"
+
+EXTERN_C_BEGIN
 
 #define MAX_AMR_LEVELS 16
 
@@ -132,5 +135,7 @@ block_t *mesh_find_block_at(const mesh_t *m, double x, double y, double z);
  * Ref: Athena++ bvals_base.cpp SearchAndSetNeighbors
  */
 void mesh_rebuild_neighbors(mesh_t *m);
+
+EXTERN_C_END
 
 #endif /* LATTICE_MESH_H */

@@ -3,6 +3,55 @@
 > **Note:** When adding/removing/renaming files or functions, also update
 > `docs/architecture.html` — the living map of the codebase structure.
 
+## 2026-03-03: GPU diagnostics — constraints, lapse, separation, NaN, Psi4
+
+Moved the heaviest per-step diagnostics from CPU to GPU. The binary inspiral
+test on H100 showed 254s/step with 0% GPU-Util because diagnostics (constraint
+L2, min lapse, BH separation, Psi4) ran every step on CPU, each requiring a
+full D→H sync + CPU grid scan (~250s for constraints at 5.76M points).
+
+**Diagnostic-only pack mapping:** `backend_map_pack_diag()` / `backend_unmap_pack_diag()`
+transfer only data + metadata to device (skips rhs/scratch/accum, ~75% savings).
+Read-only: no D→H sync on unmap. CPU backend: no-op.
+
+**GPU diagnostic kernels (backend_hip.cpp):**
+- `hip_constraint_l2` — Hamiltonian constraint L2 norm via shared-memory reduction
+- `hip_momentum_l2` — momentum constraint L2 norm via shared-memory reduction
+- `hip_min_lapse` — min lapse + position tracking (block-level min reduction)
+- `hip_check_finite` — NaN/Inf check via atomicOr
+- `hip_bh_separation` — two-pass min-lapse with exclusion zone for BH pair
+- `hip_psi4_sphere` — Psi4 extraction: one thread per angular point, calls
+  `psi4_at_point()` on device, host does mode decomposition
+
+**Device-compilable diagnostics:**
+- `constraints.c`: `compute_hamiltonian_at()`, `compute_momentum_at()` annotated
+  `LATTICE_DEVICE`. Static arrays renamed to `c_h_idx`/`c_A_idx` with device annotation.
+- `psi4.c`: `psi4_compute()`, `psi4_at_point()` annotated `LATTICE_DEVICE`.
+  Arrays renamed to `p4_h_idx`/`p4_A_idx`/`psi4_levi_civita`. `DOT_PHYS` macro
+  (GCC statement expression) replaced with `psi4_dot_phys()` inline function.
+  C compound literals and implicit void* casts fixed for nvcc C++ compatibility.
+  Factored out `psi4_decompose_modes()` for host-only mode decomposition.
+- Both added to `HIP_DEVICE_SRC` in Makefile.
+
+**Headers updated for device compilation:**
+- `mesh.h`: Added `EXTERN_C_BEGIN/END` and `device.h` include (nvlink needs
+  C linkage for cross-file device function calls).
+- `psi4.h`, `constraints.h`: Added `EXTERN_C_BEGIN/END`, `device.h` include,
+  `LATTICE_DEVICE` on device-callable functions.
+
+**Backend API (backend.h):** 7 new functions — `backend_map/unmap_pack_diag`,
+`backend_constraint_l2_packed`, `backend_momentum_l2_packed`,
+`backend_min_lapse_packed`, `backend_bh_separation_packed`,
+`backend_check_finite_packed`, `backend_psi4_extract_packed`.
+
+**Inspiral test (test_binary_inspiral.c):** GPU path uses diagnostic pack mapping
+for constraints/lapse/separation/NaN + Psi4 extraction. CPU path unchanged.
+PSI4_EVERY and AH_EVERY tunable for mixed GPU+CPU steps.
+
+**Estimated impact:** Per-step diagnostics drop from ~250s (CPU) to ~50ms (GPU).
+DIAG_EVERY=1 now affordable. Only Psi4 mode decomposition and AH finder remain
+on CPU (infrequent steps).
+
 ## 2026-03-02: Remove N_ROOT > 1 + full inspiral test (T=700M)
 
 **N_ROOT removal:** Hardcoded single root block (N_ROOT=1). Multi-root meshes

@@ -73,6 +73,7 @@
 #include "../src/amr/mesh.h"
 #include "../src/amr/refine.h"
 #include "../src/amr/ghost_exchange.h"
+#include "../src/amr/meshblock_pack.h"
 #include "../src/numerics/rk4.h"
 #include "../src/diagnostics/constraints.h"
 #include "../src/diagnostics/psi4.h"
@@ -264,6 +265,35 @@ static int mesh_check_finite(const mesh_t *m)
     return 1;
 }
 
+/*
+ * Build a temporary meshblock_pack_t containing all leaf blocks for
+ * GPU diagnostics.  Same logic as mesh_build_leaf_pack() in rk4.c.
+ * Allocates data + rhs + scratch + accum (only data is used).
+ */
+static meshblock_pack_t *build_diag_pack(const mesh_t *m)
+{
+    int n_leaves = mesh_num_leaves(m);
+    int *ids = malloc(n_leaves * sizeof(int));
+    int idx = 0;
+    for (int bid = 0; bid < m->num_blocks; bid++) {
+        block_t *b = m->blocks[bid];
+        if (b && b->is_leaf)
+            ids[idx++] = bid;
+    }
+
+    size_t npts = m->blocks[ids[0]]->grid->npoints;
+    meshblock_pack_t *pack = meshblock_pack_create(
+        n_leaves, npts, ids, -1, RK_CLASSIC, m->n_fields);
+    meshblock_pack_load(pack, m->blocks);
+    meshblock_pack_load_meta(pack, m->blocks);
+    meshblock_pack_build_neighbors(pack, m->blocks);
+    if (m->max_level > 0)
+        meshblock_pack_load_coarse(pack, m->blocks);
+
+    free(ids);
+    return pack;
+}
+
 
 /* ====================================================================
  * Main
@@ -445,30 +475,64 @@ int main(void)
 
         /* ── Diagnostics ───────────────────────────────────────────── */
         if (step % DIAG_EVERY == 0 || step == num_steps) {
+            double sep;
 
-            /* Stability check */
-            if (!mesh_check_finite(m)) {
-                printf("\n  *** CRASH: NaN/Inf detected at step %d "
-                       "(t = %.2f M) ***\n\n", step, p.time);
-                crashed = 1;
-                break;
+            if (backend_is_gpu()) {
+                /* GPU diagnostic path: build pack, map data-only to device,
+                 * run ghost exchange + diagnostic kernels on device.
+                 * Only tiny scalar results (~100 bytes) return to host. */
+                meshblock_pack_t *dp = build_diag_pack(m);
+                backend_map_pack_diag(dp);
+                backend_ghost_exchange_packed(dp);
+
+                if (!backend_check_finite_packed(dp)) {
+                    backend_unmap_pack_diag(dp);
+                    meshblock_pack_free(dp);
+                    printf("\n  *** CRASH: NaN/Inf detected at step %d "
+                           "(t = %.2f M) ***\n\n", step, p.time);
+                    crashed = 1;
+                    break;
+                }
+
+                ham = backend_constraint_l2_packed(dp);
+                mom = backend_momentum_l2_packed(dp);
+                ml  = backend_min_lapse_packed(dp, &lx, &ly, &lz);
+                sep = backend_bh_separation_packed(dp, 2.0,
+                          &bh1_pos[0], &bh1_pos[1], &bh1_pos[2],
+                          &bh2_pos[0], &bh2_pos[1], &bh2_pos[2]);
+
+                /* Psi4 on GPU: reuse mapped pack (data already on device) */
+                if (step % PSI4_EVERY == 0)
+                    backend_psi4_extract_packed(dp, psi4_ws, m);
+
+                backend_unmap_pack_diag(dp);
+                meshblock_pack_free(dp);
+            } else {
+                /* CPU diagnostic path (unchanged) */
+                if (!mesh_check_finite(m)) {
+                    printf("\n  *** CRASH: NaN/Inf detected at step %d "
+                           "(t = %.2f M) ***\n\n", step, p.time);
+                    crashed = 1;
+                    break;
+                }
+
+                ham = mesh_constraint_l2(m);
+                mom = mesh_momentum_l2(m);
+                ml  = mesh_min_lapse(m, &lx, &ly, &lz);
+                sep = mesh_bh_separation(m, bh1_pos, bh2_pos);
+
+                /* Psi4 on CPU */
+                if (step % PSI4_EVERY == 0)
+                    psi4_extract(psi4_ws, m);
             }
 
-            /* Constraint norms */
-            ham = mesh_constraint_l2(m);
-            mom = mesh_momentum_l2(m);
             if (ham > ham_peak) ham_peak = ham;
             if (mom > mom_peak) mom_peak = mom;
-
-            /* Lapse and separation */
-            ml = mesh_min_lapse(m, &lx, &ly, &lz);
             if (ml < ml_min) ml_min = ml;
-            double sep = mesh_bh_separation(m, bh1_pos, bh2_pos);
 
-            /* Psi4 extraction */
+            /* Psi4 mode analysis (sphere data already computed above) */
             double psi4_22_amp = 0.0;
             if (step % PSI4_EVERY == 0) {
-                psi4_extract(psi4_ws, m);
                 psi4_write_modes(psi4_ws, p.time,
                                  "build/inspiral_psi4.csv");
 
@@ -549,12 +613,27 @@ int main(void)
     }
 
     /* ── Final state ───────────────────────────────────────────────── */
-    double final_sep = mesh_bh_separation(m, bh1_pos, bh2_pos);
+    double final_sep;
+    if (backend_is_gpu()) {
+        meshblock_pack_t *dp = build_diag_pack(m);
+        backend_map_pack_diag(dp);
+        backend_ghost_exchange_packed(dp);
+        final_sep = backend_bh_separation_packed(dp, 2.0,
+                        &bh1_pos[0], &bh1_pos[1], &bh1_pos[2],
+                        &bh2_pos[0], &bh2_pos[1], &bh2_pos[2]);
+        if (!crashed)
+            backend_psi4_extract_packed(dp, psi4_ws, m);
+        backend_unmap_pack_diag(dp);
+        meshblock_pack_free(dp);
+    } else {
+        final_sep = mesh_bh_separation(m, bh1_pos, bh2_pos);
+        if (!crashed)
+            psi4_extract(psi4_ws, m);
+    }
     double wall_sec  = difftime(time(NULL), wall_start);
 
-    /* Final Psi4 extraction */
+    /* Final Psi4 mode check */
     if (!crashed) {
-        psi4_extract(psi4_ws, m);
         int mi22 = 4;
         if (mi22 < psi4_ws->n_modes) {
             double re = psi4_ws->mode_re[mi22];

@@ -33,6 +33,9 @@ extern "C" {
 #include "../amr/restriction.h"
 #include "../amr/prolongation.h"
 #include "../initial_data/mg_smooth_point.h"
+#include "../diagnostics/constraints.h"
+#include "../diagnostics/psi4.h"
+#include "../amr/mesh.h"
 }
 
 /* ========================================================================
@@ -237,21 +240,21 @@ void backend_map_pack(meshblock_pack_t *pack, const sim_params_t *p)
 /* Free all device memory (shared by unmap and unmap_sync) */
 static void hip_free_device_ptrs(void)
 {
-    hipFree(d_ptrs.data);
-    hipFree(d_ptrs.rhs);
-    hipFree(d_ptrs.scratch);
-    if (d_ptrs.accum) hipFree(d_ptrs.accum);
-    hipFree(d_ptrs.origins);
-    hipFree(d_ptrs.dx_per_block);
-    hipFree(d_ptrs.on_boundary);
-    hipFree(d_ptrs.levels);
-    hipFree(d_ptrs.neighbor_table);
-    hipFree(d_ptrs.refined_map);
-    hipFree(d_ptrs.nblevel_table);
-    if (d_ptrs.coarse_data) hipFree(d_ptrs.coarse_data);
-    if (d_ptrs.coarse_neighbor_table) hipFree(d_ptrs.coarse_neighbor_table);
-    if (d_ptrs.boundary_block_ids) hipFree(d_ptrs.boundary_block_ids);
-    hipFree(d_ptrs.params);
+    (void)hipFree(d_ptrs.data);
+    (void)hipFree(d_ptrs.rhs);
+    (void)hipFree(d_ptrs.scratch);
+    if (d_ptrs.accum) (void)hipFree(d_ptrs.accum);
+    (void)hipFree(d_ptrs.origins);
+    (void)hipFree(d_ptrs.dx_per_block);
+    (void)hipFree(d_ptrs.on_boundary);
+    (void)hipFree(d_ptrs.levels);
+    (void)hipFree(d_ptrs.neighbor_table);
+    (void)hipFree(d_ptrs.refined_map);
+    (void)hipFree(d_ptrs.nblevel_table);
+    if (d_ptrs.coarse_data) (void)hipFree(d_ptrs.coarse_data);
+    if (d_ptrs.coarse_neighbor_table) (void)hipFree(d_ptrs.coarse_neighbor_table);
+    if (d_ptrs.boundary_block_ids) (void)hipFree(d_ptrs.boundary_block_ids);
+    (void)hipFree(d_ptrs.params);
     d_ptrs_valid = 0;
 }
 
@@ -1298,6 +1301,739 @@ extern "C"
 int backend_is_gpu(void) { return 1; }
 
 /* ========================================================================
+ * GPU diagnostic kernels
+ *
+ * Lightweight on-device diagnostics: constraints, lapse, separation, NaN.
+ * Uses the same d_ptrs state as evolution (one mapping at a time).
+ * Data stays on device; only tiny scalar results return to host.
+ * ======================================================================== */
+
+/* ---- Diagnostic-only pack mapping (data + metadata, no rhs/scratch) ---- */
+
+extern "C"
+void backend_map_pack_diag(meshblock_pack_t *pack)
+{
+    int nb = pack->n_blocks;
+    size_t total = (size_t)pack->n_fields * nb * pack->npts;
+    size_t total_bytes = total * sizeof(double);
+
+    memset(&d_ptrs, 0, sizeof(d_ptrs));
+    d_ptrs.total = total;
+    d_ptrs.nb = nb;
+    d_ptrs.n_fields = pack->n_fields;
+
+    /* Data buffer (read-only for diagnostics) */
+    d_ptrs.data = (double *)hip_alloc_copy(pack->data, total_bytes);
+
+    /* Per-block metadata needed by constraint stencils and position */
+    d_ptrs.dx_per_block = (double *)hip_alloc_copy(pack->dx_per_block,
+                           nb * sizeof(double));
+    d_ptrs.origins      = (double *)hip_alloc_copy(pack->origins,
+                           nb * 3 * sizeof(double));
+    d_ptrs.on_boundary  = (int *)hip_alloc_copy(pack->on_boundary,
+                           nb * 6 * sizeof(int));
+    d_ptrs.levels       = (int *)hip_alloc_copy(pack->levels,
+                           nb * sizeof(int));
+    d_ptrs.neighbor_table = (int *)hip_alloc_copy(pack->neighbor_table,
+                             nb * NUM_NEIGHBORS * sizeof(int));
+    d_ptrs.refined_map  = (int *)hip_alloc_copy(pack->refined_map,
+                           nb * sizeof(int));
+    d_ptrs.nblevel_table = (int *)hip_alloc_copy(pack->nblevel_table,
+                            nb * 27 * sizeof(int));
+
+    /* Coarse data for multi-level ghost exchange */
+    d_ptrs.n_refined = pack->n_refined;
+    if (pack->coarse_data && pack->n_refined > 0) {
+        size_t coarse_total = (size_t)pack->n_refined * pack->n_fields
+                            * pack->coarse_npts;
+        d_ptrs.coarse_total = coarse_total;
+        d_ptrs.coarse_data = (double *)hip_alloc_copy(pack->coarse_data,
+                              coarse_total * sizeof(double));
+        d_ptrs.coarse_neighbor_table = (int *)hip_alloc_copy(
+            pack->coarse_neighbor_table,
+            pack->n_refined * NUM_NEIGHBORS * sizeof(int));
+    }
+
+    d_ptrs_valid = 1;
+}
+
+extern "C"
+void backend_unmap_pack_diag(meshblock_pack_t *pack)
+{
+    (void)pack;
+    if (!d_ptrs_valid) return;
+    HIP_CHECK(hipStreamSynchronize(gpu_stream));
+
+    /* Free all device memory — no sync back (read-only mapping) */
+    (void)hipFree(d_ptrs.data);
+    /* No rhs/scratch/accum to free */
+    (void)hipFree(d_ptrs.origins);
+    (void)hipFree(d_ptrs.dx_per_block);
+    (void)hipFree(d_ptrs.on_boundary);
+    (void)hipFree(d_ptrs.levels);
+    (void)hipFree(d_ptrs.neighbor_table);
+    (void)hipFree(d_ptrs.refined_map);
+    (void)hipFree(d_ptrs.nblevel_table);
+    if (d_ptrs.coarse_data) (void)hipFree(d_ptrs.coarse_data);
+    if (d_ptrs.coarse_neighbor_table) (void)hipFree(d_ptrs.coarse_neighbor_table);
+    if (d_ptrs.boundary_block_ids) (void)hipFree(d_ptrs.boundary_block_ids);
+
+    d_ptrs_valid = 0;
+}
+
+/* ---- Kernel: Hamiltonian + Momentum constraint L2 partial reduction ---- */
+
+__global__ void hip_constraint_l2_partial(
+    double *data, double *dx_arr,
+    int nb, size_t npts, int nf, int N, int ghost, int Nt,
+    double *partial_ham, double *partial_mom, int *partial_counts,
+    int total_points)
+{
+    extern __shared__ double sdata[];
+    /* Layout: [blockDim.x] ham sums, [blockDim.x] mom sums, [blockDim.x] counts */
+    double *s_ham = sdata;
+    double *s_mom = &sdata[blockDim.x];
+    int *s_count = (int *)&s_mom[blockDim.x];
+
+    int tid = (int)((size_t)blockIdx.x * blockDim.x + threadIdx.x);
+    int ltid = threadIdx.x;
+
+    double my_ham = 0.0, my_mom = 0.0;
+    int my_count = 0;
+
+    if (tid < total_points) {
+        int interior_per_block = N * N * N;
+        int b = tid / interior_per_block;
+        int pt = tid % interior_per_block;
+
+        int i = ghost + pt % N;
+        int j = ghost + (pt / N) % N;
+        int k = ghost + pt / (N * N);
+
+        /* Build per-field pointer array */
+        const double *src_ptrs[NUM_FIELDS];
+        for (int f = 0; f < nf; f++)
+            src_ptrs[f] = data + (size_t)f * nb * npts + (size_t)b * npts;
+
+        /* Minimal grid_t */
+        grid_t g_local;
+        memset(&g_local, 0, sizeof(grid_t));
+        g_local.N = N;
+        g_local.ghost = ghost;
+        g_local.Ntotal = Nt;
+        g_local.npoints = npts;
+        g_local.n_fields = nf;
+        g_local.dx = dx_arr[b];
+        g_local.inv_dx = 1.0 / dx_arr[b];
+
+        double H = compute_hamiltonian_at(
+            (const double *const *)src_ptrs, &g_local, i, j, k);
+        my_ham = H * H;
+
+        double mom[3];
+        compute_momentum_at(
+            (const double *const *)src_ptrs, &g_local, i, j, k, mom);
+        my_mom = mom[0]*mom[0] + mom[1]*mom[1] + mom[2]*mom[2];
+
+        my_count = 1;
+    }
+
+    s_ham[ltid] = my_ham;
+    s_mom[ltid] = my_mom;
+    s_count[ltid] = my_count;
+    __syncthreads();
+
+    /* Block-level reduction */
+    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+        if (ltid < stride) {
+            s_ham[ltid] += s_ham[ltid + stride];
+            s_mom[ltid] += s_mom[ltid + stride];
+            s_count[ltid] += s_count[ltid + stride];
+        }
+        __syncthreads();
+    }
+
+    if (ltid == 0) {
+        partial_ham[blockIdx.x] = s_ham[0];
+        partial_mom[blockIdx.x] = s_mom[0];
+        partial_counts[blockIdx.x] = s_count[0];
+    }
+}
+
+extern "C"
+double backend_constraint_l2_packed(meshblock_pack_t *pack)
+{
+    if (!d_ptrs_valid) return 0.0;
+
+    int nb = pack->n_blocks;
+    int N = pack->N;
+    int total_points = nb * N * N * N;
+
+    int bs = 64;  /* Smaller block for high-register constraint kernel */
+    int gs = (total_points + bs - 1) / bs;
+
+    double *d_ham, *d_mom;
+    int *d_counts;
+    HIP_CHECK(hipMalloc(&d_ham, gs * sizeof(double)));
+    HIP_CHECK(hipMalloc(&d_mom, gs * sizeof(double)));
+    HIP_CHECK(hipMalloc(&d_counts, gs * sizeof(int)));
+
+    size_t shared_bytes = bs * (2 * sizeof(double) + sizeof(int));
+    hipLaunchKernelGGL(hip_constraint_l2_partial, gs, bs, shared_bytes,
+                       gpu_stream,
+                       d_ptrs.data, d_ptrs.dx_per_block,
+                       nb, (size_t)pack->npts, pack->n_fields,
+                       N, pack->ghost, pack->Ntotal,
+                       d_ham, d_mom, d_counts, total_points);
+
+    /* Copy partial results to host and finalize */
+    double *h_ham = (double *)malloc(gs * sizeof(double));
+    int *h_counts = (int *)malloc(gs * sizeof(int));
+    HIP_CHECK(hipStreamSynchronize(gpu_stream));
+    HIP_CHECK(hipMemcpy(h_ham, d_ham, gs * sizeof(double), hipMemcpyDeviceToHost));
+    HIP_CHECK(hipMemcpy(h_counts, d_counts, gs * sizeof(int), hipMemcpyDeviceToHost));
+
+    double sum = 0.0;
+    int count = 0;
+    for (int i = 0; i < gs; i++) {
+        sum += h_ham[i];
+        count += h_counts[i];
+    }
+
+    free(h_ham);
+    free(h_counts);
+    (void)hipFree(d_ham);
+    (void)hipFree(d_mom);
+    (void)hipFree(d_counts);
+
+    return (count > 0) ? sqrt(sum / count) : 0.0;
+}
+
+extern "C"
+double backend_momentum_l2_packed(meshblock_pack_t *pack)
+{
+    if (!d_ptrs_valid) return 0.0;
+
+    int nb = pack->n_blocks;
+    int N = pack->N;
+    int total_points = nb * N * N * N;
+
+    int bs = 64;
+    int gs = (total_points + bs - 1) / bs;
+
+    double *d_ham, *d_mom;
+    int *d_counts;
+    HIP_CHECK(hipMalloc(&d_ham, gs * sizeof(double)));
+    HIP_CHECK(hipMalloc(&d_mom, gs * sizeof(double)));
+    HIP_CHECK(hipMalloc(&d_counts, gs * sizeof(int)));
+
+    size_t shared_bytes = bs * (2 * sizeof(double) + sizeof(int));
+    hipLaunchKernelGGL(hip_constraint_l2_partial, gs, bs, shared_bytes,
+                       gpu_stream,
+                       d_ptrs.data, d_ptrs.dx_per_block,
+                       nb, (size_t)pack->npts, pack->n_fields,
+                       N, pack->ghost, pack->Ntotal,
+                       d_ham, d_mom, d_counts, total_points);
+
+    /* Copy momentum partial results */
+    double *h_mom = (double *)malloc(gs * sizeof(double));
+    int *h_counts = (int *)malloc(gs * sizeof(int));
+    HIP_CHECK(hipStreamSynchronize(gpu_stream));
+    HIP_CHECK(hipMemcpy(h_mom, d_mom, gs * sizeof(double), hipMemcpyDeviceToHost));
+    HIP_CHECK(hipMemcpy(h_counts, d_counts, gs * sizeof(int), hipMemcpyDeviceToHost));
+
+    double sum = 0.0;
+    int count = 0;
+    for (int i = 0; i < gs; i++) {
+        sum += h_mom[i];
+        count += h_counts[i];
+    }
+
+    free(h_mom);
+    free(h_counts);
+    (void)hipFree(d_ham);
+    (void)hipFree(d_mom);
+    (void)hipFree(d_counts);
+
+    return (count > 0) ? sqrt(sum / (3 * count)) : 0.0;
+}
+
+/* ---- Kernel: Min lapse with position tracking ---- */
+
+__global__ void hip_min_lapse_partial(
+    double *data, double *dx_arr, double *origins,
+    int nb, size_t npts, int nf, int N, int ghost, int Nt,
+    double *partial_min, double *partial_pos, /* [3] per GPU block */
+    int total_points)
+{
+    extern __shared__ double sdata[];
+    /* Layout: [blockDim.x] val, [blockDim.x * 3] pos */
+    double *s_val = sdata;
+    double *s_pos = &sdata[blockDim.x];
+
+    int tid = (int)((size_t)blockIdx.x * blockDim.x + threadIdx.x);
+    int ltid = threadIdx.x;
+
+    double my_val = 1.0e30;
+    double my_pos[3] = {0.0, 0.0, 0.0};
+
+    if (tid < total_points) {
+        int interior_per_block = N * N * N;
+        int b = tid / interior_per_block;
+        int pt = tid % interior_per_block;
+
+        int i = ghost + pt % N;
+        int j = ghost + (pt / N) % N;
+        int k = ghost + pt / (N * N);
+
+        int idx = k * Nt * Nt + j * Nt + i;
+        size_t off = (size_t)FIELD_LAPSE * nb * npts + (size_t)b * npts + idx;
+        my_val = data[off];
+
+        double dx = dx_arr[b];
+        my_pos[0] = origins[b * 3 + 0] + (i - ghost + 0.5) * dx;
+        my_pos[1] = origins[b * 3 + 1] + (j - ghost + 0.5) * dx;
+        my_pos[2] = origins[b * 3 + 2] + (k - ghost + 0.5) * dx;
+    }
+
+    s_val[ltid] = my_val;
+    s_pos[ltid * 3 + 0] = my_pos[0];
+    s_pos[ltid * 3 + 1] = my_pos[1];
+    s_pos[ltid * 3 + 2] = my_pos[2];
+    __syncthreads();
+
+    /* Block-level min reduction with position tracking */
+    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+        if (ltid < stride) {
+            if (s_val[ltid + stride] < s_val[ltid]) {
+                s_val[ltid] = s_val[ltid + stride];
+                s_pos[ltid * 3 + 0] = s_pos[(ltid + stride) * 3 + 0];
+                s_pos[ltid * 3 + 1] = s_pos[(ltid + stride) * 3 + 1];
+                s_pos[ltid * 3 + 2] = s_pos[(ltid + stride) * 3 + 2];
+            }
+        }
+        __syncthreads();
+    }
+
+    if (ltid == 0) {
+        partial_min[blockIdx.x] = s_val[0];
+        partial_pos[blockIdx.x * 3 + 0] = s_pos[0];
+        partial_pos[blockIdx.x * 3 + 1] = s_pos[1];
+        partial_pos[blockIdx.x * 3 + 2] = s_pos[2];
+    }
+}
+
+/* Host helper: launch min-lapse kernel and finalize on host */
+static double hip_find_min_lapse(meshblock_pack_t *pack,
+                                  double *out_x, double *out_y, double *out_z)
+{
+    int nb = pack->n_blocks;
+    int N = pack->N;
+    int total_points = nb * N * N * N;
+
+    int bs = 256;
+    int gs = (total_points + bs - 1) / bs;
+
+    double *d_min, *d_pos;
+    HIP_CHECK(hipMalloc(&d_min, gs * sizeof(double)));
+    HIP_CHECK(hipMalloc(&d_pos, gs * 3 * sizeof(double)));
+
+    size_t shared_bytes = bs * (1 + 3) * sizeof(double);
+    hipLaunchKernelGGL(hip_min_lapse_partial, gs, bs, shared_bytes,
+                       gpu_stream,
+                       d_ptrs.data, d_ptrs.dx_per_block, d_ptrs.origins,
+                       nb, (size_t)pack->npts, pack->n_fields,
+                       N, pack->ghost, pack->Ntotal,
+                       d_min, d_pos, total_points);
+
+    double *h_min = (double *)malloc(gs * sizeof(double));
+    double *h_pos = (double *)malloc(gs * 3 * sizeof(double));
+    HIP_CHECK(hipStreamSynchronize(gpu_stream));
+    HIP_CHECK(hipMemcpy(h_min, d_min, gs * sizeof(double), hipMemcpyDeviceToHost));
+    HIP_CHECK(hipMemcpy(h_pos, d_pos, gs * 3 * sizeof(double), hipMemcpyDeviceToHost));
+
+    double best = 1.0e30;
+    *out_x = *out_y = *out_z = 0.0;
+    for (int i = 0; i < gs; i++) {
+        if (h_min[i] < best) {
+            best = h_min[i];
+            *out_x = h_pos[i * 3 + 0];
+            *out_y = h_pos[i * 3 + 1];
+            *out_z = h_pos[i * 3 + 2];
+        }
+    }
+
+    free(h_min);
+    free(h_pos);
+    (void)hipFree(d_min);
+    (void)hipFree(d_pos);
+
+    return best;
+}
+
+extern "C"
+double backend_min_lapse_packed(meshblock_pack_t *pack,
+                                 double *out_x, double *out_y, double *out_z)
+{
+    if (!d_ptrs_valid) { *out_x = *out_y = *out_z = 0.0; return 1.0; }
+    return hip_find_min_lapse(pack, out_x, out_y, out_z);
+}
+
+/* ---- Kernel: Min lapse with exclusion zone (for BH #2) ---- */
+
+__global__ void hip_min_lapse_excl_partial(
+    double *data, double *dx_arr, double *origins,
+    int nb, size_t npts, int nf, int N, int ghost, int Nt,
+    double ex, double ey, double ez, double excl_r2,
+    double *partial_min, double *partial_pos,
+    int total_points)
+{
+    extern __shared__ double sdata[];
+    double *s_val = sdata;
+    double *s_pos = &sdata[blockDim.x];
+
+    int tid = (int)((size_t)blockIdx.x * blockDim.x + threadIdx.x);
+    int ltid = threadIdx.x;
+
+    double my_val = 1.0e30;
+    double my_pos[3] = {0.0, 0.0, 0.0};
+
+    if (tid < total_points) {
+        int interior_per_block = N * N * N;
+        int b = tid / interior_per_block;
+        int pt = tid % interior_per_block;
+
+        int i = ghost + pt % N;
+        int j = ghost + (pt / N) % N;
+        int k = ghost + pt / (N * N);
+
+        int idx = k * Nt * Nt + j * Nt + i;
+        size_t off = (size_t)FIELD_LAPSE * nb * npts + (size_t)b * npts + idx;
+        double a = data[off];
+
+        double dx = dx_arr[b];
+        double cx = origins[b * 3 + 0] + (i - ghost + 0.5) * dx;
+        double cy = origins[b * 3 + 1] + (j - ghost + 0.5) * dx;
+        double cz = origins[b * 3 + 2] + (k - ghost + 0.5) * dx;
+
+        double dr2 = (cx - ex) * (cx - ex)
+                    + (cy - ey) * (cy - ey)
+                    + (cz - ez) * (cz - ez);
+
+        if (dr2 > excl_r2) {
+            my_val = a;
+            my_pos[0] = cx; my_pos[1] = cy; my_pos[2] = cz;
+        }
+    }
+
+    s_val[ltid] = my_val;
+    s_pos[ltid * 3 + 0] = my_pos[0];
+    s_pos[ltid * 3 + 1] = my_pos[1];
+    s_pos[ltid * 3 + 2] = my_pos[2];
+    __syncthreads();
+
+    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+        if (ltid < stride) {
+            if (s_val[ltid + stride] < s_val[ltid]) {
+                s_val[ltid] = s_val[ltid + stride];
+                s_pos[ltid * 3 + 0] = s_pos[(ltid + stride) * 3 + 0];
+                s_pos[ltid * 3 + 1] = s_pos[(ltid + stride) * 3 + 1];
+                s_pos[ltid * 3 + 2] = s_pos[(ltid + stride) * 3 + 2];
+            }
+        }
+        __syncthreads();
+    }
+
+    if (ltid == 0) {
+        partial_min[blockIdx.x] = s_val[0];
+        partial_pos[blockIdx.x * 3 + 0] = s_pos[0];
+        partial_pos[blockIdx.x * 3 + 1] = s_pos[1];
+        partial_pos[blockIdx.x * 3 + 2] = s_pos[2];
+    }
+}
+
+extern "C"
+double backend_bh_separation_packed(meshblock_pack_t *pack, double excl_radius,
+                                      double *x1, double *y1, double *z1,
+                                      double *x2, double *y2, double *z2)
+{
+    if (!d_ptrs_valid) {
+        *x1 = *y1 = *z1 = *x2 = *y2 = *z2 = 0.0;
+        return 0.0;
+    }
+
+    /* Pass 1: global lapse minimum (BH #1) */
+    double px1, py1, pz1;
+    hip_find_min_lapse(pack, &px1, &py1, &pz1);
+    *x1 = px1; *y1 = py1; *z1 = pz1;
+
+    /* Pass 2: deepest minimum outside exclusion zone (BH #2) */
+    int nb = pack->n_blocks;
+    int N = pack->N;
+    int total_points = nb * N * N * N;
+
+    int bs = 256;
+    int gs = (total_points + bs - 1) / bs;
+
+    double *d_min, *d_pos;
+    HIP_CHECK(hipMalloc(&d_min, gs * sizeof(double)));
+    HIP_CHECK(hipMalloc(&d_pos, gs * 3 * sizeof(double)));
+
+    size_t shared_bytes = bs * (1 + 3) * sizeof(double);
+    hipLaunchKernelGGL(hip_min_lapse_excl_partial, gs, bs, shared_bytes,
+                       gpu_stream,
+                       d_ptrs.data, d_ptrs.dx_per_block, d_ptrs.origins,
+                       nb, (size_t)pack->npts, pack->n_fields,
+                       N, pack->ghost, pack->Ntotal,
+                       px1, py1, pz1, excl_radius * excl_radius,
+                       d_min, d_pos, total_points);
+
+    double *h_min = (double *)malloc(gs * sizeof(double));
+    double *h_pos = (double *)malloc(gs * 3 * sizeof(double));
+    HIP_CHECK(hipStreamSynchronize(gpu_stream));
+    HIP_CHECK(hipMemcpy(h_min, d_min, gs * sizeof(double), hipMemcpyDeviceToHost));
+    HIP_CHECK(hipMemcpy(h_pos, d_pos, gs * 3 * sizeof(double), hipMemcpyDeviceToHost));
+
+    double best = 1.0e30;
+    *x2 = *y2 = *z2 = 0.0;
+    for (int i = 0; i < gs; i++) {
+        if (h_min[i] < best) {
+            best = h_min[i];
+            *x2 = h_pos[i * 3 + 0];
+            *y2 = h_pos[i * 3 + 1];
+            *z2 = h_pos[i * 3 + 2];
+        }
+    }
+
+    free(h_min);
+    free(h_pos);
+    (void)hipFree(d_min);
+    (void)hipFree(d_pos);
+
+    if (best > 0.99) return 0.0;
+    return sqrt((px1 - *x2) * (px1 - *x2) +
+                (py1 - *y2) * (py1 - *y2) +
+                (pz1 - *z2) * (pz1 - *z2));
+}
+
+/* ---- Kernel: NaN/Inf check ---- */
+
+__global__ void hip_check_finite(double *data, size_t total_elements, int *any_bad)
+{
+    size_t tid = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
+    if (tid >= total_elements) return;
+
+    if (!isfinite(data[tid]))
+        atomicOr(any_bad, 1);
+}
+
+extern "C"
+int backend_check_finite_packed(meshblock_pack_t *pack)
+{
+    if (!d_ptrs_valid) return 1;
+
+    size_t total = (size_t)pack->n_fields * pack->n_blocks * pack->npts;
+
+    int *d_bad;
+    HIP_CHECK(hipMalloc(&d_bad, sizeof(int)));
+    HIP_CHECK(hipMemsetAsync(d_bad, 0, sizeof(int), gpu_stream));
+
+    int bs = 256;
+    int gs = (int)((total + bs - 1) / bs);
+    hipLaunchKernelGGL(hip_check_finite, gs, bs, 0, gpu_stream,
+                       d_ptrs.data, total, d_bad);
+
+    int h_bad = 0;
+    HIP_CHECK(hipStreamSynchronize(gpu_stream));
+    HIP_CHECK(hipMemcpy(&h_bad, d_bad, sizeof(int), hipMemcpyDeviceToHost));
+    (void)hipFree(d_bad);
+
+    return (h_bad == 0) ? 1 : 0;
+}
+
+/* ---- Kernel: Psi4 extraction at pre-mapped angular points ---- */
+
+__global__ void hip_psi4_sphere(
+    double *data, double *dx_arr, double *origins,
+    int nb, size_t npts, int nf, int N, int ghost, int Nt,
+    const int *point_block, const int *point_ijk, const double *point_pos,
+    double center_x, double center_y, double center_z, double radius,
+    double *out_re, double *out_im,
+    int n_angular)
+{
+    int tid = (int)((size_t)blockIdx.x * blockDim.x + threadIdx.x);
+    if (tid >= n_angular) return;
+
+    int b = point_block[tid];
+    if (b < 0) {
+        out_re[tid] = 0.0;
+        out_im[tid] = 0.0;
+        return;
+    }
+
+    int gi = point_ijk[tid * 3 + 0];
+    int gj = point_ijk[tid * 3 + 1];
+    int gk = point_ijk[tid * 3 + 2];
+
+    double gpos[3] = { point_pos[tid * 3 + 0],
+                        point_pos[tid * 3 + 1],
+                        point_pos[tid * 3 + 2] };
+    double center[3] = { center_x, center_y, center_z };
+
+    /* Build per-field pointer array into pack data */
+    const double *src_ptrs[NUM_FIELDS];
+    for (int f = 0; f < nf; f++)
+        src_ptrs[f] = data + (size_t)f * nb * npts + (size_t)b * npts;
+
+    /* Minimal grid_t for FD stencils */
+    grid_t g_local;
+    memset(&g_local, 0, sizeof(grid_t));
+    g_local.N = N;
+    g_local.ghost = ghost;
+    g_local.Ntotal = Nt;
+    g_local.npoints = npts;
+    g_local.n_fields = nf;
+    g_local.dx = dx_arr[b];
+    g_local.inv_dx = 1.0 / dx_arr[b];
+
+    double psi4_val[2];
+    psi4_at_point((const double *const *)src_ptrs, &g_local,
+                  gi, gj, gk, center, psi4_val);
+
+    out_re[tid] = radius * psi4_val[0];
+    out_im[tid] = radius * psi4_val[1];
+}
+
+extern "C"
+void backend_psi4_extract_packed(meshblock_pack_t *pack,
+                                   psi4_workspace_t *ws,
+                                   const struct mesh_s *m)
+{
+    if (!d_ptrs_valid) {
+        /* Fallback to CPU */
+        psi4_extract(ws, m);
+        return;
+    }
+
+    int nb = pack->n_blocks;
+    int n_angular = ws->n_theta * ws->n_phi;
+    double r = ws->radius;
+    double dphi = 2.0 * M_PI / ws->n_phi;
+
+    /* --- Host: pre-compute angular-point-to-block mapping --- */
+
+    /* Build reverse map: block_id → pack_index */
+    int max_bid = 0;
+    for (int b = 0; b < nb; b++)
+        if (pack->block_ids[b] > max_bid)
+            max_bid = pack->block_ids[b];
+    int *bid_to_pack = (int *)calloc(max_bid + 1, sizeof(int));
+    for (int i = 0; i <= max_bid; i++) bid_to_pack[i] = -1;
+    for (int b = 0; b < nb; b++)
+        bid_to_pack[pack->block_ids[b]] = b;
+
+    int *h_block = (int *)malloc(n_angular * sizeof(int));
+    int *h_ijk   = (int *)malloc(n_angular * 3 * sizeof(int));
+    double *h_pos = (double *)malloc(n_angular * 3 * sizeof(double));
+
+    for (int ith = 0; ith < ws->n_theta; ith++) {
+        double th = ws->theta[ith];
+        double st = sin(th), ct = cos(th);
+
+        for (int iph = 0; iph < ws->n_phi; iph++) {
+            int aidx = ith * ws->n_phi + iph;
+            double ph = dphi * iph;
+            double sp = sin(ph), cp = cos(ph);
+
+            double x = ws->center[0] + r * st * cp;
+            double y = ws->center[1] + r * st * sp;
+            double z = ws->center[2] + r * ct;
+
+            block_t *blk = mesh_find_block_at(m, x, y, z);
+            if (!blk || blk->id > max_bid || bid_to_pack[blk->id] < 0) {
+                h_block[aidx] = -1;
+                continue;
+            }
+
+            h_block[aidx] = bid_to_pack[blk->id];
+
+            grid_t *g = blk->grid;
+            int ghost = g->ghost;
+            double cix = (x - blk->origin[0]) / g->dx - 0.5 + ghost;
+            double ciy = (y - blk->origin[1]) / g->dx - 0.5 + ghost;
+            double ciz = (z - blk->origin[2]) / g->dx - 0.5 + ghost;
+
+            int gi = (int)round(cix);
+            int gj = (int)round(ciy);
+            int gk = (int)round(ciz);
+
+            int lo = ghost, hi_bound = ghost + g->N - 1;
+            if (gi < lo) gi = lo; if (gi > hi_bound) gi = hi_bound;
+            if (gj < lo) gj = lo; if (gj > hi_bound) gj = hi_bound;
+            if (gk < lo) gk = lo; if (gk > hi_bound) gk = hi_bound;
+
+            h_ijk[aidx * 3 + 0] = gi;
+            h_ijk[aidx * 3 + 1] = gj;
+            h_ijk[aidx * 3 + 2] = gk;
+
+            h_pos[aidx * 3 + 0] = blk->origin[0] + (gi - ghost + 0.5) * g->dx;
+            h_pos[aidx * 3 + 1] = blk->origin[1] + (gj - ghost + 0.5) * g->dx;
+            h_pos[aidx * 3 + 2] = blk->origin[2] + (gk - ghost + 0.5) * g->dx;
+        }
+    }
+
+    free(bid_to_pack);
+
+    /* --- Upload mapping to device --- */
+    int *d_block, *d_ijk;
+    double *d_pos, *d_re, *d_im;
+    HIP_CHECK(hipMalloc(&d_block, n_angular * sizeof(int)));
+    HIP_CHECK(hipMalloc(&d_ijk,   n_angular * 3 * sizeof(int)));
+    HIP_CHECK(hipMalloc(&d_pos,   n_angular * 3 * sizeof(double)));
+    HIP_CHECK(hipMalloc(&d_re,    n_angular * sizeof(double)));
+    HIP_CHECK(hipMalloc(&d_im,    n_angular * sizeof(double)));
+
+    HIP_CHECK(hipMemcpyAsync(d_block, h_block, n_angular * sizeof(int),
+                              hipMemcpyHostToDevice, gpu_stream));
+    HIP_CHECK(hipMemcpyAsync(d_ijk, h_ijk, n_angular * 3 * sizeof(int),
+                              hipMemcpyHostToDevice, gpu_stream));
+    HIP_CHECK(hipMemcpyAsync(d_pos, h_pos, n_angular * 3 * sizeof(double),
+                              hipMemcpyHostToDevice, gpu_stream));
+
+    /* --- Launch kernel --- */
+    int bs = 64;  /* small block for high-register Psi4 kernel */
+    int gs = (n_angular + bs - 1) / bs;
+    hipLaunchKernelGGL(hip_psi4_sphere, gs, bs, 0, gpu_stream,
+                       d_ptrs.data, d_ptrs.dx_per_block, d_ptrs.origins,
+                       nb, (size_t)pack->npts, pack->n_fields,
+                       pack->N, pack->ghost, pack->Ntotal,
+                       d_block, d_ijk, d_pos,
+                       ws->center[0], ws->center[1], ws->center[2], r,
+                       d_re, d_im, n_angular);
+
+    /* --- Download results --- */
+    HIP_CHECK(hipStreamSynchronize(gpu_stream));
+    HIP_CHECK(hipMemcpy(ws->re_psi4, d_re, n_angular * sizeof(double),
+                         hipMemcpyDeviceToHost));
+    HIP_CHECK(hipMemcpy(ws->im_psi4, d_im, n_angular * sizeof(double),
+                         hipMemcpyDeviceToHost));
+
+    /* --- Cleanup device buffers --- */
+    (void)hipFree(d_block);
+    (void)hipFree(d_ijk);
+    (void)hipFree(d_pos);
+    (void)hipFree(d_re);
+    (void)hipFree(d_im);
+
+    free(h_block);
+    free(h_ijk);
+    free(h_pos);
+
+    /* --- Mode decomposition on host --- */
+    psi4_decompose_modes(ws);
+}
+
+/* ========================================================================
  * Multigrid solver — separate device pointer slots
  *
  * The solver uses its own device pointers (d_solver[]) to avoid
@@ -1367,16 +2103,16 @@ void backend_map_solver_pack(meshblock_pack_t *pack, int slot)
 static void hip_free_solver_ptrs(hip_solver_ptrs_t *sp)
 {
     if (!sp->valid) return;
-    hipFree(sp->data);
-    hipFree(sp->rhs);
-    hipFree(sp->scratch);
-    if (sp->accum) hipFree(sp->accum);
-    hipFree(sp->dx_per_block);
-    hipFree(sp->origins);
-    hipFree(sp->on_boundary);
-    hipFree(sp->levels);
-    hipFree(sp->neighbor_table);
-    if (sp->nblevel_table) hipFree(sp->nblevel_table);
+    (void)hipFree(sp->data);
+    (void)hipFree(sp->rhs);
+    (void)hipFree(sp->scratch);
+    if (sp->accum) (void)hipFree(sp->accum);
+    (void)hipFree(sp->dx_per_block);
+    (void)hipFree(sp->origins);
+    (void)hipFree(sp->on_boundary);
+    (void)hipFree(sp->levels);
+    (void)hipFree(sp->neighbor_table);
+    if (sp->nblevel_table) (void)hipFree(sp->nblevel_table);
     sp->valid = 0;
 }
 
@@ -1969,12 +2705,78 @@ void backend_mg_zero_rhs_packed(meshblock_pack_t *pack, int slot, int four_field
 }
 
 /* ========================================================================
- * MG: Restriction, prolongation, L2 norm — host round-trip for v1
+ * MG: Restriction, prolongation, L2 norm — device-side GPU kernels
  *
- * These operations involve cross-level data movement (different packs).
- * V1 strategy: sync both levels to host, run CPU code, sync back.
- * The smoother dominates total time; these are called O(1) per V-cycle.
+ * Cross-slot operations read from d_solver[fine_slot] / d_solver[coarse_slot].
+ * child_map and parent_ids uploaded to device at each call (small, < 4 KB).
  * ======================================================================== */
+
+/* Restriction kernel: fine → coarse (8-child volume average).
+ * Thread per (parent × octant × sol_field × point_in_half_N³). */
+__global__ void hip_mg_restrict_kernel(
+    const double *fine_data, const double *fine_accum,
+    double *coarse_data, double *coarse_rhs,
+    const int *child_map, const int *parent_ids,
+    int n_parents, int n_sol,
+    int f_nb, size_t f_npts, int f_ghost, int f_Nt,
+    int c_nb, size_t c_npts, int c_ghost, int c_Nt,
+    int half_N, int total_threads)
+{
+    int tid = (int)((size_t)blockIdx.x * blockDim.x + threadIdx.x);
+    if (tid >= total_threads) return;
+
+    int pts_per_octant = half_N * half_N * half_N;
+    int pts_per_parent = 8 * n_sol * pts_per_octant;
+
+    int p = tid / pts_per_parent;
+    int rem = tid % pts_per_parent;
+    int octant = rem / (n_sol * pts_per_octant);
+    rem = rem % (n_sol * pts_per_octant);
+    int s = rem / pts_per_octant;
+    int pt = rem % pts_per_octant;
+
+    int f_b = child_map[p * 8 + octant];
+    if (f_b < 0) return;
+    int c_b = parent_ids[p];
+
+    int cx = octant & 1;
+    int cy = (octant >> 1) & 1;
+    int cz = (octant >> 2) & 1;
+
+    int pi = pt % half_N;
+    int pj = (pt / half_N) % half_N;
+    int pk = pt / (half_N * half_N);
+
+    /* Fine indices (2×2×2 block) */
+    int fi = f_ghost + 2 * pi;
+    int fj = f_ghost + 2 * pj;
+    int fk = f_ghost + 2 * pk;
+    int sxf = 1, syf = f_Nt, szf = f_Nt * f_Nt;
+    size_t f_base = (size_t)s * f_nb * f_npts + (size_t)f_b * f_npts;
+    int f000 = fk * f_Nt * f_Nt + fj * f_Nt + fi;
+
+    double sol = 0.125 * (
+        fine_data[f_base + f000] + fine_data[f_base + f000 + sxf]
+      + fine_data[f_base + f000 + syf] + fine_data[f_base + f000 + syf + sxf]
+      + fine_data[f_base + f000 + szf] + fine_data[f_base + f000 + szf + sxf]
+      + fine_data[f_base + f000 + syf + szf] + fine_data[f_base + f000 + syf + szf + sxf]);
+
+    double res = 0.125 * (
+        fine_accum[f_base + f000] + fine_accum[f_base + f000 + sxf]
+      + fine_accum[f_base + f000 + syf] + fine_accum[f_base + f000 + syf + sxf]
+      + fine_accum[f_base + f000 + szf] + fine_accum[f_base + f000 + szf + sxf]
+      + fine_accum[f_base + f000 + syf + szf] + fine_accum[f_base + f000 + syf + szf + sxf]);
+
+    /* Coarse index */
+    int ci = c_ghost + cx * half_N + pi;
+    int cj = c_ghost + cy * half_N + pj;
+    int ck = c_ghost + cz * half_N + pk;
+    size_t c_off = (size_t)s * c_nb * c_npts + (size_t)c_b * c_npts
+                 + (size_t)ck * c_Nt * c_Nt + cj * c_Nt + ci;
+
+    coarse_data[c_off] = sol;
+    coarse_rhs[c_off] = res;
+}
 
 extern "C"
 void backend_mg_restrict_packed(meshblock_pack_t *fine_pack, int fine_slot,
@@ -1983,96 +2785,111 @@ void backend_mg_restrict_packed(meshblock_pack_t *fine_pack, int fine_slot,
                                  const int *child_map, const int *parent_ids,
                                  int n_parents)
 {
-    /* Sync fine data+accum to host */
-    if (fine_slot >= 0 && fine_slot < MAX_SOLVER_SLOTS && d_solver[fine_slot].valid) {
-        HIP_CHECK(hipStreamSynchronize(gpu_stream));
-        hip_solver_ptrs_t *fsp = &d_solver[fine_slot];
-        size_t bytes = fsp->total * sizeof(double);
-        HIP_CHECK(hipMemcpy(fine_pack->data, fsp->data, bytes, hipMemcpyDeviceToHost));
-        HIP_CHECK(hipMemcpy(fine_pack->accum, fsp->accum, bytes, hipMemcpyDeviceToHost));
-    }
+    if (fine_slot < 0 || fine_slot >= MAX_SOLVER_SLOTS || !d_solver[fine_slot].valid) return;
+    if (coarse_slot < 0 || coarse_slot >= MAX_SOLVER_SLOTS || !d_solver[coarse_slot].valid) return;
+    if (n_parents == 0) return;
 
-    /* Sync coarse data+rhs to host (will be overwritten) */
-    if (coarse_slot >= 0 && coarse_slot < MAX_SOLVER_SLOTS && d_solver[coarse_slot].valid) {
-        hip_solver_ptrs_t *csp = &d_solver[coarse_slot];
-        size_t bytes = csp->total * sizeof(double);
-        HIP_CHECK(hipMemcpy(coarse_pack->data, csp->data, bytes, hipMemcpyDeviceToHost));
-        HIP_CHECK(hipMemcpy(coarse_pack->rhs, csp->rhs, bytes, hipMemcpyDeviceToHost));
-    }
-
-    /* Run CPU restriction logic */
+    hip_solver_ptrs_t *fsp = &d_solver[fine_slot];
+    hip_solver_ptrs_t *csp = &d_solver[coarse_slot];
     int n_sol = four_field ? 4 : 1;
-    int f_nb = fine_pack->n_blocks;
-    size_t f_npts = fine_pack->npts;
-    int c_nb = coarse_pack->n_blocks;
-    size_t c_npts = coarse_pack->npts;
-    int ghost = fine_pack->ghost;
     int half_N = coarse_pack->N / 2;
-    int f_Nt = fine_pack->Ntotal;
-    int c_Nt = coarse_pack->Ntotal;
 
-    for (int p = 0; p < n_parents; p++) {
-        int c_b = parent_ids[p];
-        for (int cz = 0; cz < 2; cz++)
-            for (int cy = 0; cy < 2; cy++)
-                for (int cx = 0; cx < 2; cx++) {
-                    int octant = cx + (cy << 1) + (cz << 2);
-                    int f_b = child_map[p * 8 + octant];
-                    if (f_b < 0) continue;
+    /* Upload child_map + parent_ids to device (small, < 4 KB) */
+    int *d_cm, *d_pid;
+    HIP_CHECK(hipMalloc(&d_cm, n_parents * 8 * sizeof(int)));
+    HIP_CHECK(hipMalloc(&d_pid, n_parents * sizeof(int)));
+    HIP_CHECK(hipMemcpyAsync(d_cm, child_map, n_parents * 8 * sizeof(int),
+              hipMemcpyHostToDevice, gpu_stream));
+    HIP_CHECK(hipMemcpyAsync(d_pid, parent_ids, n_parents * sizeof(int),
+              hipMemcpyHostToDevice, gpu_stream));
 
-                    int p_off_i = cx * half_N;
-                    int p_off_j = cy * half_N;
-                    int p_off_k = cz * half_N;
+    int total = n_parents * 8 * n_sol * half_N * half_N * half_N;
+    int bs = 256;
+    int gs = (total + bs - 1) / bs;
 
-                    for (int s = 0; s < n_sol; s++) {
-                        const double *f_sol = fine_pack->data
-                            + (size_t)s * f_nb * f_npts + (size_t)f_b * f_npts;
-                        double *c_sol = coarse_pack->data
-                            + (size_t)s * c_nb * c_npts + (size_t)c_b * c_npts;
-                        const double *f_res = fine_pack->accum
-                            + (size_t)s * f_nb * f_npts + (size_t)f_b * f_npts;
-                        double *c_rhs = coarse_pack->rhs
-                            + (size_t)s * c_nb * c_npts + (size_t)c_b * c_npts;
+    hipLaunchKernelGGL(hip_mg_restrict_kernel, gs, bs, 0, gpu_stream,
+                       fsp->data, fsp->accum,
+                       csp->data, csp->rhs,
+                       d_cm, d_pid,
+                       n_parents, n_sol,
+                       fine_pack->n_blocks, (size_t)fine_pack->npts,
+                       fine_pack->ghost, fine_pack->Ntotal,
+                       coarse_pack->n_blocks, (size_t)coarse_pack->npts,
+                       coarse_pack->ghost, coarse_pack->Ntotal,
+                       half_N, total);
 
-                        for (int pk = 0; pk < half_N; pk++)
-                            for (int pj = 0; pj < half_N; pj++)
-                                for (int pi = 0; pi < half_N; pi++) {
-                                    int fi = ghost + 2 * pi;
-                                    int fj = ghost + 2 * pj;
-                                    int fk = ghost + 2 * pk;
-                                    int f000 = fk * f_Nt * f_Nt + fj * f_Nt + fi;
-                                    int sxf = 1, syf = f_Nt, szf = f_Nt * f_Nt;
+    HIP_CHECK(hipStreamSynchronize(gpu_stream));
+    (void)hipFree(d_cm);
+    (void)hipFree(d_pid);
+}
 
-                                    double sol = 0.125 * (
-                                        f_sol[f000] + f_sol[f000+sxf]
-                                      + f_sol[f000+syf] + f_sol[f000+syf+sxf]
-                                      + f_sol[f000+szf] + f_sol[f000+szf+sxf]
-                                      + f_sol[f000+syf+szf] + f_sol[f000+syf+szf+sxf]);
+/* Prolongation kernel (trilinear, add correction).
+ * correction = coarse_data - coarse_scratch, interp to fine, add to fine_data.
+ * Thread per (parent × octant × sol_field × fine_point_in_N³). */
+__global__ void hip_mg_prolong_add_kernel(
+    const double *coarse_data, const double *coarse_scratch,
+    double *fine_data,
+    const int *child_map, const int *parent_ids,
+    int n_parents, int n_sol,
+    int f_nb, size_t f_npts, int f_N, int f_ghost, int f_Nt,
+    int c_nb, size_t c_npts, int c_ghost, int c_Nt,
+    int half_N, int total_threads)
+{
+    int tid = (int)((size_t)blockIdx.x * blockDim.x + threadIdx.x);
+    if (tid >= total_threads) return;
 
-                                    double res = 0.125 * (
-                                        f_res[f000] + f_res[f000+sxf]
-                                      + f_res[f000+syf] + f_res[f000+syf+sxf]
-                                      + f_res[f000+szf] + f_res[f000+szf+sxf]
-                                      + f_res[f000+syf+szf] + f_res[f000+syf+szf+sxf]);
+    int pts_per_octant = f_N * f_N * f_N;
+    int pts_per_parent = 8 * n_sol * pts_per_octant;
 
-                                    int ci = ghost + p_off_i + pi;
-                                    int cj = ghost + p_off_j + pj;
-                                    int ck = ghost + p_off_k + pk;
-                                    int cidx = ck * c_Nt * c_Nt + cj * c_Nt + ci;
-                                    c_sol[cidx] = sol;
-                                    c_rhs[cidx] = res;
-                                }
-                    }
-                }
+    int p = tid / pts_per_parent;
+    int rem = tid % pts_per_parent;
+    int octant = rem / (n_sol * pts_per_octant);
+    rem = rem % (n_sol * pts_per_octant);
+    int s = rem / pts_per_octant;
+    int pt = rem % pts_per_octant;
+
+    int f_b = child_map[p * 8 + octant];
+    if (f_b < 0) return;
+    int c_b = parent_ids[p];
+
+    int cx_oct = octant & 1;
+    int cy_oct = (octant >> 1) & 1;
+    int cz_oct = (octant >> 2) & 1;
+
+    int fi = pt % f_N;
+    int fj = (pt / f_N) % f_N;
+    int fk = pt / (f_N * f_N);
+
+    /* Coarse parent indices */
+    int Ic = c_ghost + cx_oct * half_N + fi / 2;
+    int Jc = c_ghost + cy_oct * half_N + fj / 2;
+    int Kc = c_ghost + cz_oct * half_N + fk / 2;
+    int di = (fi % 2) ? 1 : -1;
+    int dj = (fj % 2) ? 1 : -1;
+    int dk = (fk % 2) ? 1 : -1;
+
+    /* Trilinear interpolation of correction */
+    size_t c_base = (size_t)s * c_nb * c_npts + (size_t)c_b * c_npts;
+    double val = 0.0;
+    for (int ck = 0; ck < 2; ck++) {
+        int CK = ck ? Kc + dk : Kc;
+        double wk = ck ? 0.25 : 0.75;
+        for (int cj = 0; cj < 2; cj++) {
+            int CJ = cj ? Jc + dj : Jc;
+            double wkj = wk * (cj ? 0.25 : 0.75);
+            for (int ci = 0; ci < 2; ci++) {
+                int CI = ci ? Ic + di : Ic;
+                size_t cidx = c_base + (size_t)CK * c_Nt * c_Nt + CJ * c_Nt + CI;
+                double corr = coarse_data[cidx] - coarse_scratch[cidx];
+                val += wkj * (ci ? 0.25 : 0.75) * corr;
+            }
+        }
     }
 
-    /* Sync coarse back to device */
-    if (coarse_slot >= 0 && coarse_slot < MAX_SOLVER_SLOTS && d_solver[coarse_slot].valid) {
-        hip_solver_ptrs_t *csp = &d_solver[coarse_slot];
-        size_t bytes = csp->total * sizeof(double);
-        HIP_CHECK(hipMemcpy(csp->data, coarse_pack->data, bytes, hipMemcpyHostToDevice));
-        HIP_CHECK(hipMemcpy(csp->rhs,  coarse_pack->rhs,  bytes, hipMemcpyHostToDevice));
-    }
+    size_t f_off = (size_t)s * f_nb * f_npts + (size_t)f_b * f_npts
+                 + (size_t)(f_ghost + fk) * f_Nt * f_Nt
+                 + (f_ghost + fj) * f_Nt + (f_ghost + fi);
+    fine_data[f_off] += val;
 }
 
 extern "C"
@@ -2082,101 +2899,107 @@ void backend_mg_prolong_add_packed(meshblock_pack_t *coarse_pack, int coarse_slo
                                     const int *child_map, const int *parent_ids,
                                     int n_parents)
 {
-    /* Sync to host */
-    if (coarse_slot >= 0 && coarse_slot < MAX_SOLVER_SLOTS && d_solver[coarse_slot].valid) {
-        HIP_CHECK(hipStreamSynchronize(gpu_stream));
-        hip_solver_ptrs_t *csp = &d_solver[coarse_slot];
-        size_t bytes = csp->total * sizeof(double);
-        HIP_CHECK(hipMemcpy(coarse_pack->data, csp->data, bytes, hipMemcpyDeviceToHost));
-        HIP_CHECK(hipMemcpy(coarse_pack->scratch, csp->scratch, bytes, hipMemcpyDeviceToHost));
-    }
-    if (fine_slot >= 0 && fine_slot < MAX_SOLVER_SLOTS && d_solver[fine_slot].valid) {
-        hip_solver_ptrs_t *fsp = &d_solver[fine_slot];
-        size_t bytes = fsp->total * sizeof(double);
-        HIP_CHECK(hipMemcpy(fine_pack->data, fsp->data, bytes, hipMemcpyDeviceToHost));
-    }
+    if (coarse_slot < 0 || coarse_slot >= MAX_SOLVER_SLOTS || !d_solver[coarse_slot].valid) return;
+    if (fine_slot < 0 || fine_slot >= MAX_SOLVER_SLOTS || !d_solver[fine_slot].valid) return;
+    if (n_parents == 0) return;
 
-    /* Run CPU prolongation logic */
+    hip_solver_ptrs_t *csp = &d_solver[coarse_slot];
+    hip_solver_ptrs_t *fsp = &d_solver[fine_slot];
     int n_sol = four_field ? 4 : 1;
-    int f_nb = fine_pack->n_blocks;
-    size_t f_npts = fine_pack->npts;
-    int c_nb = coarse_pack->n_blocks;
-    size_t c_npts = coarse_pack->npts;
-    int ghost = coarse_pack->ghost;
-    int half_N = coarse_pack->N / 2;
     int f_N = fine_pack->N;
-    int f_ghost = fine_pack->ghost;
-    int f_Nt = fine_pack->Ntotal;
-    int c_Nt = coarse_pack->Ntotal;
+    int half_N = coarse_pack->N / 2;
 
-    for (int p = 0; p < n_parents; p++) {
-        int c_b = parent_ids[p];
+    int *d_cm, *d_pid;
+    HIP_CHECK(hipMalloc(&d_cm, n_parents * 8 * sizeof(int)));
+    HIP_CHECK(hipMalloc(&d_pid, n_parents * sizeof(int)));
+    HIP_CHECK(hipMemcpyAsync(d_cm, child_map, n_parents * 8 * sizeof(int),
+              hipMemcpyHostToDevice, gpu_stream));
+    HIP_CHECK(hipMemcpyAsync(d_pid, parent_ids, n_parents * sizeof(int),
+              hipMemcpyHostToDevice, gpu_stream));
 
-        /* Compute correction: scratch = data - scratch */
-        for (int s = 0; s < n_sol; s++) {
-            double *d = coarse_pack->data + (size_t)s * c_nb * c_npts + (size_t)c_b * c_npts;
-            double *sc = coarse_pack->scratch + (size_t)s * c_nb * c_npts + (size_t)c_b * c_npts;
-            for (size_t idx = 0; idx < c_npts; idx++)
-                sc[idx] = d[idx] - sc[idx];
+    int total = n_parents * 8 * n_sol * f_N * f_N * f_N;
+    int bs = 256;
+    int gs = (total + bs - 1) / bs;
+
+    hipLaunchKernelGGL(hip_mg_prolong_add_kernel, gs, bs, 0, gpu_stream,
+                       csp->data, csp->scratch,
+                       fsp->data,
+                       d_cm, d_pid,
+                       n_parents, n_sol,
+                       fine_pack->n_blocks, (size_t)fine_pack->npts,
+                       f_N, fine_pack->ghost, fine_pack->Ntotal,
+                       coarse_pack->n_blocks, (size_t)coarse_pack->npts,
+                       coarse_pack->ghost, coarse_pack->Ntotal,
+                       half_N, total);
+
+    HIP_CHECK(hipStreamSynchronize(gpu_stream));
+    (void)hipFree(d_cm);
+    (void)hipFree(d_pid);
+}
+
+/* FMG prolongation kernel (trilinear, overwrite).
+ * Same as prolong_add but writes csol (not correction) and overwrites (not adds). */
+__global__ void hip_mg_prolong_fmg_kernel(
+    const double *coarse_data,
+    double *fine_data,
+    const int *child_map, const int *parent_ids,
+    int n_parents, int n_sol,
+    int f_nb, size_t f_npts, int f_N, int f_ghost, int f_Nt,
+    int c_nb, size_t c_npts, int c_ghost, int c_Nt,
+    int half_N, int total_threads)
+{
+    int tid = (int)((size_t)blockIdx.x * blockDim.x + threadIdx.x);
+    if (tid >= total_threads) return;
+
+    int pts_per_octant = f_N * f_N * f_N;
+    int pts_per_parent = 8 * n_sol * pts_per_octant;
+
+    int p = tid / pts_per_parent;
+    int rem = tid % pts_per_parent;
+    int octant = rem / (n_sol * pts_per_octant);
+    rem = rem % (n_sol * pts_per_octant);
+    int s = rem / pts_per_octant;
+    int pt = rem % pts_per_octant;
+
+    int f_b = child_map[p * 8 + octant];
+    if (f_b < 0) return;
+    int c_b = parent_ids[p];
+
+    int cx_oct = octant & 1;
+    int cy_oct = (octant >> 1) & 1;
+    int cz_oct = (octant >> 2) & 1;
+
+    int fi = pt % f_N;
+    int fj = (pt / f_N) % f_N;
+    int fk = pt / (f_N * f_N);
+
+    int Ic = c_ghost + cx_oct * half_N + fi / 2;
+    int Jc = c_ghost + cy_oct * half_N + fj / 2;
+    int Kc = c_ghost + cz_oct * half_N + fk / 2;
+    int di = (fi % 2) ? 1 : -1;
+    int dj = (fj % 2) ? 1 : -1;
+    int dk = (fk % 2) ? 1 : -1;
+
+    size_t c_base = (size_t)s * c_nb * c_npts + (size_t)c_b * c_npts;
+    double val = 0.0;
+    for (int ck = 0; ck < 2; ck++) {
+        int CK = ck ? Kc + dk : Kc;
+        double wk = ck ? 0.25 : 0.75;
+        for (int cj = 0; cj < 2; cj++) {
+            int CJ = cj ? Jc + dj : Jc;
+            double wkj = wk * (cj ? 0.25 : 0.75);
+            for (int ci = 0; ci < 2; ci++) {
+                int CI = ci ? Ic + di : Ic;
+                size_t cidx = c_base + (size_t)CK * c_Nt * c_Nt + CJ * c_Nt + CI;
+                val += wkj * (ci ? 0.25 : 0.75) * coarse_data[cidx];
+            }
         }
-
-        for (int cz = 0; cz < 2; cz++)
-            for (int cy = 0; cy < 2; cy++)
-                for (int cx = 0; cx < 2; cx++) {
-                    int octant = cx + (cy << 1) + (cz << 2);
-                    int f_b = child_map[p * 8 + octant];
-                    if (f_b < 0) continue;
-
-                    int c_off_i = cx * half_N;
-                    int c_off_j = cy * half_N;
-                    int c_off_k = cz * half_N;
-
-                    for (int s = 0; s < n_sol; s++) {
-                        const double *corr = coarse_pack->scratch
-                            + (size_t)s * c_nb * c_npts + (size_t)c_b * c_npts;
-                        double *fsol = fine_pack->data
-                            + (size_t)s * f_nb * f_npts + (size_t)f_b * f_npts;
-
-                        for (int fk = 0; fk < f_N; fk++) {
-                            int Kc = ghost + c_off_k + fk / 2;
-                            int dk = (fk % 2) ? 1 : -1;
-                            for (int fj = 0; fj < f_N; fj++) {
-                                int Jc = ghost + c_off_j + fj / 2;
-                                int dj = (fj % 2) ? 1 : -1;
-                                for (int fi = 0; fi < f_N; fi++) {
-                                    int Ic = ghost + c_off_i + fi / 2;
-                                    int di = (fi % 2) ? 1 : -1;
-
-                                    double val = 0.0;
-                                    for (int ck = 0; ck < 2; ck++) {
-                                        int CK = ck ? Kc + dk : Kc;
-                                        double wk = ck ? 0.25 : 0.75;
-                                        for (int cj = 0; cj < 2; cj++) {
-                                            int CJ = cj ? Jc + dj : Jc;
-                                            double wkj = wk * (cj ? 0.25 : 0.75);
-                                            for (int ci = 0; ci < 2; ci++) {
-                                                int CI = ci ? Ic + di : Ic;
-                                                val += wkj * (ci ? 0.25 : 0.75)
-                                                    * corr[CK * c_Nt * c_Nt + CJ * c_Nt + CI];
-                                            }
-                                        }
-                                    }
-                                    fsol[(f_ghost + fk) * f_Nt * f_Nt
-                                       + (f_ghost + fj) * f_Nt
-                                       + (f_ghost + fi)] += val;
-                                }
-                            }
-                        }
-                    }
-                }
     }
 
-    /* Sync fine back to device */
-    if (fine_slot >= 0 && fine_slot < MAX_SOLVER_SLOTS && d_solver[fine_slot].valid) {
-        hip_solver_ptrs_t *fsp = &d_solver[fine_slot];
-        size_t bytes = fsp->total * sizeof(double);
-        HIP_CHECK(hipMemcpy(fsp->data, fine_pack->data, bytes, hipMemcpyHostToDevice));
-    }
+    size_t f_off = (size_t)s * f_nb * f_npts + (size_t)f_b * f_npts
+                 + (size_t)(f_ghost + fk) * f_Nt * f_Nt
+                 + (f_ghost + fj) * f_Nt + (f_ghost + fi);
+    fine_data[f_off] = val;
 }
 
 extern "C"
@@ -2186,85 +3009,96 @@ void backend_mg_prolong_fmg_packed(meshblock_pack_t *coarse_pack, int coarse_slo
                                     const int *child_map, const int *parent_ids,
                                     int n_parents)
 {
-    /* Sync coarse to host */
-    if (coarse_slot >= 0 && coarse_slot < MAX_SOLVER_SLOTS && d_solver[coarse_slot].valid) {
-        HIP_CHECK(hipStreamSynchronize(gpu_stream));
-        hip_solver_ptrs_t *csp = &d_solver[coarse_slot];
-        size_t bytes = csp->total * sizeof(double);
-        HIP_CHECK(hipMemcpy(coarse_pack->data, csp->data, bytes, hipMemcpyDeviceToHost));
-    }
+    if (coarse_slot < 0 || coarse_slot >= MAX_SOLVER_SLOTS || !d_solver[coarse_slot].valid) return;
+    if (fine_slot < 0 || fine_slot >= MAX_SOLVER_SLOTS || !d_solver[fine_slot].valid) return;
+    if (n_parents == 0) return;
 
-    /* Run CPU FMG prolongation */
+    hip_solver_ptrs_t *csp = &d_solver[coarse_slot];
+    hip_solver_ptrs_t *fsp = &d_solver[fine_slot];
     int n_sol = four_field ? 4 : 1;
-    int f_nb = fine_pack->n_blocks;
-    size_t f_npts = fine_pack->npts;
-    int c_nb = coarse_pack->n_blocks;
-    size_t c_npts = coarse_pack->npts;
-    int ghost = coarse_pack->ghost;
-    int half_N = coarse_pack->N / 2;
     int f_N = fine_pack->N;
-    int f_ghost = fine_pack->ghost;
-    int f_Nt = fine_pack->Ntotal;
-    int c_Nt = coarse_pack->Ntotal;
+    int half_N = coarse_pack->N / 2;
 
-    for (int p = 0; p < n_parents; p++) {
-        int c_b = parent_ids[p];
-        for (int cz = 0; cz < 2; cz++)
-            for (int cy = 0; cy < 2; cy++)
-                for (int cx = 0; cx < 2; cx++) {
-                    int octant = cx + (cy << 1) + (cz << 2);
-                    int f_b = child_map[p * 8 + octant];
-                    if (f_b < 0) continue;
+    int *d_cm, *d_pid;
+    HIP_CHECK(hipMalloc(&d_cm, n_parents * 8 * sizeof(int)));
+    HIP_CHECK(hipMalloc(&d_pid, n_parents * sizeof(int)));
+    HIP_CHECK(hipMemcpyAsync(d_cm, child_map, n_parents * 8 * sizeof(int),
+              hipMemcpyHostToDevice, gpu_stream));
+    HIP_CHECK(hipMemcpyAsync(d_pid, parent_ids, n_parents * sizeof(int),
+              hipMemcpyHostToDevice, gpu_stream));
 
-                    int c_off_i = cx * half_N;
-                    int c_off_j = cy * half_N;
-                    int c_off_k = cz * half_N;
+    int total = n_parents * 8 * n_sol * f_N * f_N * f_N;
+    int bs = 256;
+    int gs = (total + bs - 1) / bs;
 
-                    for (int s = 0; s < n_sol; s++) {
-                        const double *csol = coarse_pack->data
-                            + (size_t)s * c_nb * c_npts + (size_t)c_b * c_npts;
-                        double *fsol = fine_pack->data
-                            + (size_t)s * f_nb * f_npts + (size_t)f_b * f_npts;
+    hipLaunchKernelGGL(hip_mg_prolong_fmg_kernel, gs, bs, 0, gpu_stream,
+                       csp->data,
+                       fsp->data,
+                       d_cm, d_pid,
+                       n_parents, n_sol,
+                       fine_pack->n_blocks, (size_t)fine_pack->npts,
+                       f_N, fine_pack->ghost, fine_pack->Ntotal,
+                       coarse_pack->n_blocks, (size_t)coarse_pack->npts,
+                       coarse_pack->ghost, coarse_pack->Ntotal,
+                       half_N, total);
 
-                        for (int fk = 0; fk < f_N; fk++) {
-                            int Kc = ghost + c_off_k + fk / 2;
-                            int dk = (fk % 2) ? 1 : -1;
-                            for (int fj = 0; fj < f_N; fj++) {
-                                int Jc = ghost + c_off_j + fj / 2;
-                                int dj = (fj % 2) ? 1 : -1;
-                                for (int fi = 0; fi < f_N; fi++) {
-                                    int Ic = ghost + c_off_i + fi / 2;
-                                    int di = (fi % 2) ? 1 : -1;
+    HIP_CHECK(hipStreamSynchronize(gpu_stream));
+    (void)hipFree(d_cm);
+    (void)hipFree(d_pid);
+}
 
-                                    double val = 0.0;
-                                    for (int ck = 0; ck < 2; ck++) {
-                                        int CK = ck ? Kc + dk : Kc;
-                                        double wk = ck ? 0.25 : 0.75;
-                                        for (int cj = 0; cj < 2; cj++) {
-                                            int CJ = cj ? Jc + dj : Jc;
-                                            double wkj = wk * (cj ? 0.25 : 0.75);
-                                            for (int ci = 0; ci < 2; ci++) {
-                                                int CI = ci ? Ic + di : Ic;
-                                                val += wkj * (ci ? 0.25 : 0.75)
-                                                    * csol[CK * c_Nt * c_Nt + CJ * c_Nt + CI];
-                                            }
-                                        }
-                                    }
-                                    fsol[(f_ghost + fk) * f_Nt * f_Nt
-                                       + (f_ghost + fj) * f_Nt
-                                       + (f_ghost + fi)] = val;
-                                }
-                            }
-                        }
-                    }
-                }
+/* L2 norm: partial sum reduction on GPU, finish on host.
+ * Phase 1: each GPU block sums its chunk into partial_sums[blockIdx].
+ * Phase 2: host sums partial_sums (small, < 1 KB). */
+__global__ void hip_mg_l2_partial(
+    const double *rhs, const double *accum,
+    int nb, size_t npts, int N, int ghost, int Nt,
+    int n_sol, double *partial_sums, int *partial_counts,
+    int total_points)
+{
+    extern __shared__ double sdata[];
+    int *scount = (int *)&sdata[blockDim.x];
+
+    int tid = (int)((size_t)blockIdx.x * blockDim.x + threadIdx.x);
+    int ltid = threadIdx.x;
+
+    double my_sum = 0.0;
+    int my_count = 0;
+
+    if (tid < total_points) {
+        int interior_per_block = N * N * N;
+        int b = tid / interior_per_block;
+        int pt = tid % interior_per_block;
+
+        int i = ghost + pt % N;
+        int j = ghost + (pt / N) % N;
+        int k = ghost + pt / (N * N);
+        int idx = k * Nt * Nt + j * Nt + i;
+
+        for (int s = 0; s < n_sol; s++) {
+            size_t off = (size_t)s * nb * npts + (size_t)b * npts + idx;
+            double d = rhs[off] - accum[off];
+            my_sum += d * d;
+        }
+        my_count = 1;
     }
 
-    /* Sync fine to device */
-    if (fine_slot >= 0 && fine_slot < MAX_SOLVER_SLOTS && d_solver[fine_slot].valid) {
-        hip_solver_ptrs_t *fsp = &d_solver[fine_slot];
-        size_t bytes = fsp->total * sizeof(double);
-        HIP_CHECK(hipMemcpy(fsp->data, fine_pack->data, bytes, hipMemcpyHostToDevice));
+    sdata[ltid] = my_sum;
+    scount[ltid] = my_count;
+    __syncthreads();
+
+    /* Block-level reduction */
+    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+        if (ltid < stride) {
+            sdata[ltid] += sdata[ltid + stride];
+            scount[ltid] += scount[ltid + stride];
+        }
+        __syncthreads();
+    }
+
+    if (ltid == 0) {
+        partial_sums[blockIdx.x] = sdata[0];
+        partial_counts[blockIdx.x] = scount[0];
     }
 }
 
@@ -2272,36 +3106,48 @@ extern "C"
 double backend_mg_l2_norm_packed(meshblock_pack_t *pack, int slot,
                                   int four_field)
 {
-    /* Sync accum + rhs to host, compute L2 on CPU */
     if (slot < 0 || slot >= MAX_SOLVER_SLOTS || !d_solver[slot].valid) return 0.0;
     hip_solver_ptrs_t *sp = &d_solver[slot];
 
-    HIP_CHECK(hipStreamSynchronize(gpu_stream));
-    size_t bytes = sp->total * sizeof(double);
-    HIP_CHECK(hipMemcpy(pack->accum, sp->accum, bytes, hipMemcpyDeviceToHost));
-    HIP_CHECK(hipMemcpy(pack->rhs,   sp->rhs,   bytes, hipMemcpyDeviceToHost));
-
     int nb = pack->n_blocks;
-    size_t npts = pack->npts;
-    int N = pack->N, ghost = pack->ghost, Nt = pack->Ntotal;
+    int N = pack->N;
     int n_sol = four_field ? 4 : 1;
+    int total_points = nb * N * N * N;
+
+    int bs = 256;
+    int gs = (total_points + bs - 1) / bs;
+
+    /* Allocate partial sum buffers on device */
+    double *d_partial;
+    int *d_counts;
+    HIP_CHECK(hipMalloc(&d_partial, gs * sizeof(double)));
+    HIP_CHECK(hipMalloc(&d_counts, gs * sizeof(int)));
+
+    size_t shared_bytes = bs * (sizeof(double) + sizeof(int));
+    hipLaunchKernelGGL(hip_mg_l2_partial, gs, bs, shared_bytes, gpu_stream,
+                       sp->rhs, sp->accum,
+                       nb, (size_t)pack->npts, N, pack->ghost, pack->Ntotal,
+                       n_sol, d_partial, d_counts, total_points);
+
+    /* Copy partial results to host */
+    double *h_partial = (double *)malloc(gs * sizeof(double));
+    int *h_counts = (int *)malloc(gs * sizeof(int));
+    HIP_CHECK(hipStreamSynchronize(gpu_stream));
+    HIP_CHECK(hipMemcpy(h_partial, d_partial, gs * sizeof(double), hipMemcpyDeviceToHost));
+    HIP_CHECK(hipMemcpy(h_counts, d_counts, gs * sizeof(int), hipMemcpyDeviceToHost));
 
     double sum = 0.0;
     int count = 0;
-    for (int b = 0; b < nb; b++) {
-        int sy = Nt, sz = Nt * Nt;
-        for (int k = ghost; k < ghost + N; k++)
-            for (int j = ghost; j < ghost + N; j++)
-                for (int i = ghost; i < ghost + N; i++) {
-                    int idx = k * sz + j * sy + i;
-                    for (int s = 0; s < n_sol; s++) {
-                        size_t off = (size_t)s * nb * npts + (size_t)b * npts + idx;
-                        double d = pack->rhs[off] - pack->accum[off];
-                        sum += d * d;
-                    }
-                    count++;
-                }
+    for (int i = 0; i < gs; i++) {
+        sum += h_partial[i];
+        count += h_counts[i];
     }
+
+    free(h_partial);
+    free(h_counts);
+    (void)hipFree(d_partial);
+    (void)hipFree(d_counts);
+
     if (count == 0) return 0.0;
     return sqrt(sum / ((double)n_sol * count));
 }
