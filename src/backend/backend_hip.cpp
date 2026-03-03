@@ -1567,114 +1567,72 @@ void backend_mg_smooth_packed(meshblock_pack_t *pack, int slot, int color,
  * Thread mapping: (block, neighbor_dir, slab_point).
  * ======================================================================== */
 
+/* Solver same-level ghost exchange kernel.
+ * Reuses ghost_range_pack helper and d_nbr_offset from evolution kernels.
+ * One thread per (block, neighbor_direction) pair — copies the ghost slab. */
 __global__ void hip_mg_ghost_same_level(
     double *data, const int *neighbor_table,
     int nb, size_t npts, int N, int ghost, int Nt,
-    int n_sol, int total_threads)
+    int n_sol)
 {
     int tid = (int)((size_t)blockIdx.x * blockDim.x + threadIdx.x);
-    if (tid >= total_threads) return;
+    int total = nb * 26;
+    if (tid >= total) return;
 
-    /* Decode: block, direction, and point within slab.
-     * Each block has 26 neighbor directions. For each direction,
-     * ghost slab size varies (corner vs edge vs face). We use a
-     * flat encoding over all ghost points per block. */
+    int b = tid / 26;
+    int n = tid % 26;
 
-    /* Simplified: iterate per block × direction in the host wrapper.
-     * This kernel handles a single direction batch for all blocks. */
+    int nbr = neighbor_table[b * 26 + n];
+    if (nbr < 0) return;
 
-    /* For simplicity, the GPU ghost exchange uses the same CPU code
-     * path via sync. The smoother kernel dominates (80%+ of time);
-     * ghost exchange is O(N^2) vs O(N^3) for smoothing. */
-    (void)data; (void)neighbor_table;
-    (void)nb; (void)npts; (void)N; (void)ghost; (void)Nt;
-    (void)n_sol; (void)total_threads;
+    int ox = d_nbr_offset[n][0];
+    int oy = d_nbr_offset[n][1];
+    int oz = d_nbr_offset[n][2];
+
+    int dx_lo, dx_hi, sx_lo, sx_hi;
+    int dy_lo, dy_hi, sy_lo, sy_hi;
+    int dz_lo, dz_hi, sz_lo, sz_hi;
+    ghost_range_pack(ox, ghost, N, Nt, &dx_lo, &dx_hi, &sx_lo, &sx_hi);
+    ghost_range_pack(oy, ghost, N, Nt, &dy_lo, &dy_hi, &sy_lo, &sy_hi);
+    ghost_range_pack(oz, ghost, N, Nt, &dz_lo, &dz_hi, &sz_lo, &sz_hi);
+
+    for (int f = 0; f < n_sol; f++) {
+        size_t dst_base = (size_t)f * nb * npts + (size_t)b * npts;
+        size_t src_base = (size_t)f * nb * npts + (size_t)nbr * npts;
+
+        for (int kk = 0; kk < (dz_hi - dz_lo); kk++) {
+            for (int jj = 0; jj < (dy_hi - dy_lo); jj++) {
+                for (int ii = 0; ii < (dx_hi - dx_lo); ii++) {
+                    size_t d = dst_base
+                        + (size_t)(dz_lo + kk) * Nt * Nt
+                        + (size_t)(dy_lo + jj) * Nt + (dx_lo + ii);
+                    size_t s = src_base
+                        + (size_t)(sz_lo + kk) * Nt * Nt
+                        + (size_t)(sy_lo + jj) * Nt + (sx_lo + ii);
+                    data[d] = data[s];
+                }
+            }
+        }
+    }
 }
 
 extern "C"
 void backend_mg_ghost_same_level_packed(meshblock_pack_t *pack, int slot, int n_sol)
 {
-    /* V1: Round-trip to host for ghost exchange.
-     * Ghost exchange is O(N^2) per block — dominated by O(N^3) smoother.
-     * Two small D↔H transfers per exchange, acceptable for v1.
-     * Future v2: device-side ghost kernels (mirrors evolution path). */
+    /* Device-side same-level ghost exchange. One thread per (block, direction).
+     * No PCIe transfers — all data stays on device. */
     if (slot < 0 || slot >= MAX_SOLVER_SLOTS || !d_solver[slot].valid) return;
     hip_solver_ptrs_t *sp = &d_solver[slot];
 
-    HIP_CHECK(hipStreamSynchronize(gpu_stream));
-
-    /* Sync solution fields to host */
     int nb = pack->n_blocks;
-    size_t npts = pack->npts;
-    for (int s = 0; s < n_sol; s++) {
-        size_t offset = (size_t)s * nb * npts;
-        size_t bytes = (size_t)nb * npts * sizeof(double);
-        HIP_CHECK(hipMemcpy(pack->data + offset, sp->data + offset,
-                  bytes, hipMemcpyDeviceToHost));
-    }
+    int total = nb * 26;
+    int bs = 256;
+    int gs = (total + bs - 1) / bs;
 
-    /* Run CPU ghost exchange using the CPU backend function.
-     * We inline the logic here since the CPU function uses the pack
-     * directly and we already have data on host. */
-    {
-        static const int dir_offset[26][3] = {
-            {-1,-1,-1},{0,-1,-1},{1,-1,-1},{-1,0,-1},{0,0,-1},{1,0,-1},
-            {-1,1,-1},{0,1,-1},{1,1,-1},{-1,-1,0},{0,-1,0},{1,-1,0},
-            {-1,0,0},{1,0,0},{-1,1,0},{0,1,0},{1,1,0},{-1,-1,1},{0,-1,1},
-            {1,-1,1},{-1,0,1},{0,0,1},{1,0,1},{-1,1,1},{0,1,1},{1,1,1}
-        };
-        int N = pack->N, ghost = pack->ghost, Nt = pack->Ntotal;
-
-        for (int b = 0; b < nb; b++) {
-            for (int d = 0; d < 26; d++) {
-                int nbr = pack->neighbor_table[b * 26 + d];
-                if (nbr < 0) continue;
-
-                int ox = dir_offset[d][0];
-                int oy = dir_offset[d][1];
-                int oz = dir_offset[d][2];
-
-                int i_start, i_end, j_start, j_end, k_start, k_end;
-                if (ox == -1) { i_start = 0; i_end = ghost; }
-                else if (ox == 1) { i_start = ghost + N; i_end = Nt; }
-                else { i_start = ghost; i_end = ghost + N; }
-
-                if (oy == -1) { j_start = 0; j_end = ghost; }
-                else if (oy == 1) { j_start = ghost + N; j_end = Nt; }
-                else { j_start = ghost; j_end = ghost + N; }
-
-                if (oz == -1) { k_start = 0; k_end = ghost; }
-                else if (oz == 1) { k_start = ghost + N; k_end = Nt; }
-                else { k_start = ghost; k_end = ghost + N; }
-
-                int si_off = -ox * N;
-                int sj_off = -oy * N;
-                int sk_off = -oz * N;
-
-                for (int s = 0; s < n_sol; s++) {
-                    double *dst = pack->data + (size_t)s * nb * npts + (size_t)b * npts;
-                    const double *src = pack->data + (size_t)s * nb * npts + (size_t)nbr * npts;
-
-                    for (int k = k_start; k < k_end; k++)
-                        for (int j = j_start; j < j_end; j++)
-                            for (int i = i_start; i < i_end; i++) {
-                                int didx = k * Nt * Nt + j * Nt + i;
-                                int sidx = (k + sk_off) * Nt * Nt
-                                         + (j + sj_off) * Nt + (i + si_off);
-                                dst[didx] = src[sidx];
-                            }
-                }
-            }
-        }
-    }
-
-    /* Sync back to device */
-    for (int s = 0; s < n_sol; s++) {
-        size_t offset = (size_t)s * nb * npts;
-        size_t bytes = (size_t)nb * npts * sizeof(double);
-        HIP_CHECK(hipMemcpy(sp->data + offset, pack->data + offset,
-                  bytes, hipMemcpyHostToDevice));
-    }
+    hipLaunchKernelGGL(hip_mg_ghost_same_level, gs, bs, 0, gpu_stream,
+                       sp->data, sp->neighbor_table,
+                       nb, (size_t)pack->npts, pack->N, pack->ghost,
+                       pack->Ntotal, n_sol);
 }
 
 /* ========================================================================
