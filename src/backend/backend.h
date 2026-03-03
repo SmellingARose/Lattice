@@ -192,6 +192,150 @@ void backend_ghost_exchange_packed(meshblock_pack_t *pack);
  */
 void backend_enforce_algebraic_packed(meshblock_pack_t *pack);
 
+/* ========================================================================
+ * Runtime backend detection
+ * ======================================================================== */
+
+/* Returns 1 if the GPU backend is active, 0 for CPU.
+ * Used to select GPU solver path at runtime. */
+int backend_is_gpu(void);
+
+/* ========================================================================
+ * Multigrid solver packed kernel API
+ *
+ * GPU-accelerated FAS multigrid constraint solver. Separate device state
+ * from evolution kernels (d_solver[] vs d_ptrs). Operates on meshblock
+ * packs with solver field layout (10 fields: 4 solution + 6 background).
+ *
+ * CPU backend: OpenMP loops calling shared point functions from
+ *              mg_smooth_point.h.
+ * GPU backend: HIP kernels — one per operation, 8 launches per GS sweep.
+ *
+ * Ref: arXiv:2510.11152 (GPU FAS multigrid, 8-color MCGS)
+ * ======================================================================== */
+
+#define MAX_SOLVER_SLOTS 8  /* one per AMR level */
+
+/* Solver field slot indices: see MGP_* in mg_smooth_point.h */
+
+/*
+ * Map/unmap solver pack to/from GPU device memory.
+ * Uses separate d_solver[] slots from evolution d_ptrs.
+ * CPU backend: all no-ops.
+ */
+void backend_map_solver_pack(meshblock_pack_t *pack, int slot);
+void backend_unmap_solver_pack_sync(meshblock_pack_t *pack, int slot);
+
+/*
+ * Sync solver pack data buffer between host and device.
+ * Used for level-0 transfer to/from uniform MG solver on CPU.
+ */
+void backend_sync_solver_data_to_host(meshblock_pack_t *pack, int slot);
+void backend_sync_solver_data_to_device(meshblock_pack_t *pack, int slot);
+
+/*
+ * 8-color Newton-Gauss-Seidel smoother (one color per launch).
+ * All points of the given color are independent → GPU parallel.
+ *
+ * four_field: 0 = 1-field (psi only), 1 = 4-field (psi + V^i)
+ */
+void backend_mg_smooth_packed(meshblock_pack_t *pack, int slot, int color,
+                               int four_field);
+
+/*
+ * Same-level ghost exchange for solver fields.
+ * Copies ghost zones between same-level neighbors in the pack.
+ * n_sol: number of solution fields to exchange (1 or 4).
+ */
+void backend_mg_ghost_same_level_packed(meshblock_pack_t *pack, int slot, int n_sol);
+
+/*
+ * Apply zero-Dirichlet BCs on domain-boundary ghost zones.
+ * Zeros solution field ghost zones on boundary faces.
+ */
+void backend_mg_bc_packed(meshblock_pack_t *pack, int slot, int four_field);
+
+/*
+ * Evaluate nonlinear operator L(u) on all interior points.
+ * Writes result to accum buffer (slots 0..3).
+ */
+void backend_mg_operator_packed(meshblock_pack_t *pack, int slot,
+                                 int four_field);
+
+/*
+ * Compute residual: accum[i] = rhs[i] - accum[i] on interior points.
+ * Must be called after backend_mg_operator_packed.
+ */
+void backend_mg_residual_packed(meshblock_pack_t *pack, int slot,
+                                 int four_field);
+
+/*
+ * Save solution: scratch[s] = data[s] for solution fields.
+ * Used for FAS correction computation.
+ */
+void backend_mg_save_packed(meshblock_pack_t *pack, int slot, int four_field);
+
+/*
+ * Tau correction: rhs[s] += accum[s] on interior points.
+ * Adds L(restricted_solution) to restricted residual.
+ */
+void backend_mg_tau_packed(meshblock_pack_t *pack, int slot, int four_field);
+
+/*
+ * Zero solution fields in data buffer.
+ */
+void backend_mg_zero_solution_packed(meshblock_pack_t *pack, int slot,
+                                      int four_field);
+
+/*
+ * Zero RHS fields in rhs buffer.
+ */
+void backend_mg_zero_rhs_packed(meshblock_pack_t *pack, int slot, int four_field);
+
+/*
+ * Cross-slot restriction: fine → coarse.
+ * Restricts solution (data) and residual (accum) from fine_slot to
+ * coarse_slot using 8-child volume average (0.125 weight).
+ *
+ * child_map: [n_parents * 8] — for parent p, child_map[p*8+octant] is
+ *            the fine-slot block index of that child (-1 if absent).
+ * parent_ids: [n_parents] — coarse-slot block index of each parent.
+ */
+void backend_mg_restrict_packed(meshblock_pack_t *fine_pack, int fine_slot,
+                                 meshblock_pack_t *coarse_pack, int coarse_slot,
+                                 int four_field,
+                                 const int *child_map, const int *parent_ids,
+                                 int n_parents);
+
+/*
+ * Cross-slot prolongation: coarse correction → fine (add).
+ * Computes correction = coarse_data - coarse_scratch, trilinear interp,
+ * adds to fine_data.
+ */
+void backend_mg_prolong_add_packed(meshblock_pack_t *coarse_pack, int coarse_slot,
+                                    meshblock_pack_t *fine_pack, int fine_slot,
+                                    int four_field,
+                                    const int *child_map, const int *parent_ids,
+                                    int n_parents);
+
+/*
+ * FMG prolongation: coarse solution → fine (overwrite).
+ * Trilinear interpolation from coarse parent to fine child.
+ */
+void backend_mg_prolong_fmg_packed(meshblock_pack_t *coarse_pack, int coarse_slot,
+                                    meshblock_pack_t *fine_pack, int fine_slot,
+                                    int four_field,
+                                    const int *child_map, const int *parent_ids,
+                                    int n_parents);
+
+/*
+ * L2 norm of residual on interior points (reduction).
+ * Returns sqrt(sum((rhs - L(u))^2) / count).
+ * Requires operator already evaluated in accum.
+ */
+double backend_mg_l2_norm_packed(meshblock_pack_t *pack, int slot,
+                                  int four_field);
+
 EXTERN_C_END
 
 #endif /* LATTICE_BACKEND_H */

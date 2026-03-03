@@ -32,6 +32,7 @@ extern "C" {
 #include "../amr/block.h"
 #include "../amr/restriction.h"
 #include "../amr/prolongation.h"
+#include "../initial_data/mg_smooth_point.h"
 }
 
 /* ========================================================================
@@ -1287,4 +1288,1062 @@ void backend_enforce_algebraic_packed(meshblock_pack_t *pack)
     int grid_size = (total_threads + block_size - 1) / block_size;
     hipLaunchKernelGGL(hip_enforce_algebraic, grid_size, block_size, 0, gpu_stream,
                        d_ptrs.data, Nt, nb, npts, total_threads);
+}
+
+/* ========================================================================
+ * Runtime backend detection
+ * ======================================================================== */
+
+extern "C"
+int backend_is_gpu(void) { return 1; }
+
+/* ========================================================================
+ * Multigrid solver — separate device pointer slots
+ *
+ * The solver uses its own device pointers (d_solver[]) to avoid
+ * interfering with evolution d_ptrs. One slot per AMR level.
+ *
+ * Ref: arXiv:2510.11152 (GPU FAS multigrid, 8-color MCGS)
+ * ======================================================================== */
+
+typedef struct {
+    double *data, *rhs, *scratch, *accum;
+    double *dx_per_block, *origins;
+    int *on_boundary, *levels, *neighbor_table, *nblevel_table;
+    size_t total;
+    int nb;
+    int n_fields;
+    int valid;
+} hip_solver_ptrs_t;
+
+static hip_solver_ptrs_t d_solver[MAX_SOLVER_SLOTS];
+
+extern "C"
+void backend_map_solver_pack(meshblock_pack_t *pack, int slot)
+{
+    if (slot < 0 || slot >= MAX_SOLVER_SLOTS) {
+        fprintf(stderr, "backend_map_solver_pack: slot %d out of range\n", slot);
+        return;
+    }
+
+    hip_solver_ptrs_t *sp = &d_solver[slot];
+    memset(sp, 0, sizeof(*sp));
+
+    int nb = pack->n_blocks;
+    size_t npts = pack->npts;
+    int nf = pack->n_fields;
+    size_t total = (size_t)nf * nb * npts;
+    size_t total_bytes = total * sizeof(double);
+
+    sp->total = total;
+    sp->nb = nb;
+    sp->n_fields = nf;
+
+    /* Field buffers */
+    sp->data    = (double *)hip_alloc_copy(pack->data,    total_bytes);
+    sp->rhs     = (double *)hip_alloc_copy(pack->rhs,     total_bytes);
+    sp->scratch = (double *)hip_alloc_copy(pack->scratch,  total_bytes);
+    if (pack->accum)
+        sp->accum = (double *)hip_alloc_copy(pack->accum, total_bytes);
+
+    /* Metadata */
+    sp->dx_per_block   = (double *)hip_alloc_copy(pack->dx_per_block,
+                          nb * sizeof(double));
+    sp->origins        = (double *)hip_alloc_copy(pack->origins,
+                          nb * 3 * sizeof(double));
+    sp->on_boundary    = (int *)hip_alloc_copy(pack->on_boundary,
+                          nb * 6 * sizeof(int));
+    sp->levels         = (int *)hip_alloc_copy(pack->levels,
+                          nb * sizeof(int));
+    sp->neighbor_table = (int *)hip_alloc_copy(pack->neighbor_table,
+                          nb * NUM_NEIGHBORS * sizeof(int));
+    if (pack->nblevel_table)
+        sp->nblevel_table = (int *)hip_alloc_copy(pack->nblevel_table,
+                              nb * 27 * sizeof(int));
+
+    sp->valid = 1;
+}
+
+static void hip_free_solver_ptrs(hip_solver_ptrs_t *sp)
+{
+    if (!sp->valid) return;
+    hipFree(sp->data);
+    hipFree(sp->rhs);
+    hipFree(sp->scratch);
+    if (sp->accum) hipFree(sp->accum);
+    hipFree(sp->dx_per_block);
+    hipFree(sp->origins);
+    hipFree(sp->on_boundary);
+    hipFree(sp->levels);
+    hipFree(sp->neighbor_table);
+    if (sp->nblevel_table) hipFree(sp->nblevel_table);
+    sp->valid = 0;
+}
+
+extern "C"
+void backend_unmap_solver_pack_sync(meshblock_pack_t *pack, int slot)
+{
+    if (slot < 0 || slot >= MAX_SOLVER_SLOTS) return;
+    hip_solver_ptrs_t *sp = &d_solver[slot];
+    if (!sp->valid) return;
+
+    HIP_CHECK(hipStreamSynchronize(gpu_stream));
+
+    size_t total_bytes = sp->total * sizeof(double);
+    HIP_CHECK(hipMemcpy(pack->data,    sp->data,    total_bytes, hipMemcpyDeviceToHost));
+    HIP_CHECK(hipMemcpy(pack->rhs,     sp->rhs,     total_bytes, hipMemcpyDeviceToHost));
+    HIP_CHECK(hipMemcpy(pack->scratch,  sp->scratch, total_bytes, hipMemcpyDeviceToHost));
+    if (sp->accum && pack->accum)
+        HIP_CHECK(hipMemcpy(pack->accum, sp->accum, total_bytes, hipMemcpyDeviceToHost));
+
+    hip_free_solver_ptrs(sp);
+}
+
+extern "C"
+void backend_sync_solver_data_to_host(meshblock_pack_t *pack, int slot)
+{
+    if (slot < 0 || slot >= MAX_SOLVER_SLOTS) return;
+    hip_solver_ptrs_t *sp = &d_solver[slot];
+    if (!sp->valid) return;
+
+    HIP_CHECK(hipStreamSynchronize(gpu_stream));
+    size_t total_bytes = sp->total * sizeof(double);
+    HIP_CHECK(hipMemcpy(pack->data, sp->data, total_bytes, hipMemcpyDeviceToHost));
+    /* Also sync rhs (needed for level-0 transfer) */
+    HIP_CHECK(hipMemcpy(pack->rhs, sp->rhs, total_bytes, hipMemcpyDeviceToHost));
+}
+
+extern "C"
+void backend_sync_solver_data_to_device(meshblock_pack_t *pack, int slot)
+{
+    if (slot < 0 || slot >= MAX_SOLVER_SLOTS) return;
+    hip_solver_ptrs_t *sp = &d_solver[slot];
+    if (!sp->valid) return;
+
+    size_t total_bytes = sp->total * sizeof(double);
+    HIP_CHECK(hipMemcpy(sp->data, pack->data, total_bytes, hipMemcpyHostToDevice));
+    HIP_CHECK(hipMemcpy(sp->rhs,  pack->rhs,  total_bytes, hipMemcpyHostToDevice));
+}
+
+/* ========================================================================
+ * MG Kernel: 1-field Newton-GS smoother (one color)
+ *
+ * Thread mapping: tid → (block, colored_point).
+ * Each thread calls mg_smooth_1field_point from mg_smooth_point.h.
+ * ======================================================================== */
+
+__global__ void hip_mg_smooth_1field(
+    double *data, const double *rhs, const double *dx_arr,
+    int nb, size_t npts, int N, int ghost, int Nt,
+    int c0, int c1, int c2, int total_threads)
+{
+    int tid = (int)((size_t)blockIdx.x * blockDim.x + threadIdx.x);
+    if (tid >= total_threads) return;
+
+    /* Points per color per block: (N/2)^3 */
+    int half_N = N / 2;
+    int pts_per_block = half_N * half_N * half_N;
+    int b = tid / pts_per_block;
+    int pt = tid % pts_per_block;
+    if (b >= nb) return;
+
+    int pi = pt % half_N;
+    int pj = (pt / half_N) % half_N;
+    int pk = pt / (half_N * half_N);
+    int i = ghost + c0 + 2 * pi;
+    int j = ghost + c1 + 2 * pj;
+    int k = ghost + c2 + 2 * pk;
+
+    int sx = 1, sy = Nt, sz = Nt * Nt;
+    int idx = k * sz + j * sy + i;
+
+    double dx = dx_arr[b];
+    double dx2 = dx * dx;
+    double inv_dx = 1.0 / dx;
+
+    double *psi     = data + (size_t)MGP_SOL_PSI * nb * npts + (size_t)b * npts;
+    const double *psi_BL = data + (size_t)MGP_BG_PSI_BL * nb * npts + (size_t)b * npts;
+    const double *A2     = data + (size_t)MGP_BG_A2 * nb * npts + (size_t)b * npts;
+    const double *f_psi  = rhs + (size_t)MGP_SOL_PSI * nb * npts + (size_t)b * npts;
+
+    mg_smooth_1field_point(psi, psi_BL, A2, f_psi,
+                           idx, sx, sy, sz, inv_dx, dx2);
+}
+
+/* ========================================================================
+ * MG Kernel: 4-field Newton-GS smoother (one color)
+ * ======================================================================== */
+
+__global__ void hip_mg_smooth_4field(
+    double *data, const double *rhs, const double *dx_arr,
+    int nb, size_t npts, int N, int ghost, int Nt,
+    int c0, int c1, int c2, int total_threads)
+{
+    int tid = (int)((size_t)blockIdx.x * blockDim.x + threadIdx.x);
+    if (tid >= total_threads) return;
+
+    int half_N = N / 2;
+    int pts_per_block = half_N * half_N * half_N;
+    int b = tid / pts_per_block;
+    int pt = tid % pts_per_block;
+    if (b >= nb) return;
+
+    int pi = pt % half_N;
+    int pj = (pt / half_N) % half_N;
+    int pk = pt / (half_N * half_N);
+    int i = ghost + c0 + 2 * pi;
+    int j = ghost + c1 + 2 * pj;
+    int k = ghost + c2 + 2 * pk;
+
+    int sx = 1, sy = Nt, sz = Nt * Nt;
+    int idx = k * sz + j * sy + i;
+
+    double dx = dx_arr[b];
+    double dx2 = dx * dx;
+    double inv_dx = 1.0 / dx;
+
+    size_t base = (size_t)b * npts;
+    size_t stride = (size_t)nb * npts;
+
+    double *psi = data + (size_t)MGP_SOL_PSI * stride + base;
+    double *V0  = data + (size_t)MGP_SOL_V1  * stride + base;
+    double *V1  = data + (size_t)MGP_SOL_V2  * stride + base;
+    double *V2  = data + (size_t)MGP_SOL_V3  * stride + base;
+
+    const double *psi_BL  = data + (size_t)MGP_BG_PSI_BL * stride + base;
+    const double *A2      = data + (size_t)MGP_BG_A2      * stride + base;
+    const double *R_tilde = data + (size_t)MGP_BG_RTILDE  * stride + base;
+    const double *SM0     = data + (size_t)MGP_BG_SM1     * stride + base;
+    const double *SM1     = data + (size_t)MGP_BG_SM2     * stride + base;
+    const double *SM2     = data + (size_t)MGP_BG_SM3     * stride + base;
+
+    const double *f_psi = rhs + (size_t)MGP_SOL_PSI * stride + base;
+    const double *f_V0  = rhs + (size_t)MGP_SOL_V1  * stride + base;
+    const double *f_V1  = rhs + (size_t)MGP_SOL_V2  * stride + base;
+    const double *f_V2  = rhs + (size_t)MGP_SOL_V3  * stride + base;
+
+    mg_smooth_4field_point(psi, V0, V1, V2, psi_BL, A2,
+                           R_tilde, SM0, SM1, SM2,
+                           f_psi, f_V0, f_V1, f_V2,
+                           idx, sx, sy, sz, inv_dx, dx2);
+}
+
+extern "C"
+void backend_mg_smooth_packed(meshblock_pack_t *pack, int slot, int color,
+                               int four_field)
+{
+    if (slot < 0 || slot >= MAX_SOLVER_SLOTS || !d_solver[slot].valid) return;
+    hip_solver_ptrs_t *sp = &d_solver[slot];
+
+    int nb = pack->n_blocks;
+    size_t npts = pack->npts;
+    int N = pack->N, ghost = pack->ghost, Nt = pack->Ntotal;
+    int c0 = color & 1, c1 = (color >> 1) & 1, c2 = (color >> 2) & 1;
+
+    int half_N = N / 2;
+    int pts_per_block = half_N * half_N * half_N;
+    int total_threads = nb * pts_per_block;
+
+    int block_size = 256;
+    int grid_size = (total_threads + block_size - 1) / block_size;
+
+    if (four_field) {
+        hipLaunchKernelGGL(hip_mg_smooth_4field, grid_size, block_size,
+                           0, gpu_stream,
+                           sp->data, sp->rhs, sp->dx_per_block,
+                           nb, npts, N, ghost, Nt, c0, c1, c2, total_threads);
+    } else {
+        hipLaunchKernelGGL(hip_mg_smooth_1field, grid_size, block_size,
+                           0, gpu_stream,
+                           sp->data, sp->rhs, sp->dx_per_block,
+                           nb, npts, N, ghost, Nt, c0, c1, c2, total_threads);
+    }
+}
+
+/* ========================================================================
+ * MG Kernel: Same-level ghost exchange
+ *
+ * Each thread copies one point of one ghost zone slab.
+ * Thread mapping: (block, neighbor_dir, slab_point).
+ * ======================================================================== */
+
+__global__ void hip_mg_ghost_same_level(
+    double *data, const int *neighbor_table,
+    int nb, size_t npts, int N, int ghost, int Nt,
+    int n_sol, int total_threads)
+{
+    int tid = (int)((size_t)blockIdx.x * blockDim.x + threadIdx.x);
+    if (tid >= total_threads) return;
+
+    /* Decode: block, direction, and point within slab.
+     * Each block has 26 neighbor directions. For each direction,
+     * ghost slab size varies (corner vs edge vs face). We use a
+     * flat encoding over all ghost points per block. */
+
+    /* Simplified: iterate per block × direction in the host wrapper.
+     * This kernel handles a single direction batch for all blocks. */
+
+    /* For simplicity, the GPU ghost exchange uses the same CPU code
+     * path via sync. The smoother kernel dominates (80%+ of time);
+     * ghost exchange is O(N^2) vs O(N^3) for smoothing. */
+    (void)data; (void)neighbor_table;
+    (void)nb; (void)npts; (void)N; (void)ghost; (void)Nt;
+    (void)n_sol; (void)total_threads;
+}
+
+extern "C"
+void backend_mg_ghost_same_level_packed(meshblock_pack_t *pack, int slot, int n_sol)
+{
+    /* V1: Round-trip to host for ghost exchange.
+     * Ghost exchange is O(N^2) per block — dominated by O(N^3) smoother.
+     * Two small D↔H transfers per exchange, acceptable for v1.
+     * Future v2: device-side ghost kernels (mirrors evolution path). */
+    if (slot < 0 || slot >= MAX_SOLVER_SLOTS || !d_solver[slot].valid) return;
+    hip_solver_ptrs_t *sp = &d_solver[slot];
+
+    HIP_CHECK(hipStreamSynchronize(gpu_stream));
+
+    /* Sync solution fields to host */
+    int nb = pack->n_blocks;
+    size_t npts = pack->npts;
+    for (int s = 0; s < n_sol; s++) {
+        size_t offset = (size_t)s * nb * npts;
+        size_t bytes = (size_t)nb * npts * sizeof(double);
+        HIP_CHECK(hipMemcpy(pack->data + offset, sp->data + offset,
+                  bytes, hipMemcpyDeviceToHost));
+    }
+
+    /* Run CPU ghost exchange using the CPU backend function.
+     * We inline the logic here since the CPU function uses the pack
+     * directly and we already have data on host. */
+    {
+        static const int dir_offset[26][3] = {
+            {-1,-1,-1},{0,-1,-1},{1,-1,-1},{-1,0,-1},{0,0,-1},{1,0,-1},
+            {-1,1,-1},{0,1,-1},{1,1,-1},{-1,-1,0},{0,-1,0},{1,-1,0},
+            {-1,0,0},{1,0,0},{-1,1,0},{0,1,0},{1,1,0},{-1,-1,1},{0,-1,1},
+            {1,-1,1},{-1,0,1},{0,0,1},{1,0,1},{-1,1,1},{0,1,1},{1,1,1}
+        };
+        int N = pack->N, ghost = pack->ghost, Nt = pack->Ntotal;
+
+        for (int b = 0; b < nb; b++) {
+            for (int d = 0; d < 26; d++) {
+                int nbr = pack->neighbor_table[b * 26 + d];
+                if (nbr < 0) continue;
+
+                int ox = dir_offset[d][0];
+                int oy = dir_offset[d][1];
+                int oz = dir_offset[d][2];
+
+                int i_start, i_end, j_start, j_end, k_start, k_end;
+                if (ox == -1) { i_start = 0; i_end = ghost; }
+                else if (ox == 1) { i_start = ghost + N; i_end = Nt; }
+                else { i_start = ghost; i_end = ghost + N; }
+
+                if (oy == -1) { j_start = 0; j_end = ghost; }
+                else if (oy == 1) { j_start = ghost + N; j_end = Nt; }
+                else { j_start = ghost; j_end = ghost + N; }
+
+                if (oz == -1) { k_start = 0; k_end = ghost; }
+                else if (oz == 1) { k_start = ghost + N; k_end = Nt; }
+                else { k_start = ghost; k_end = ghost + N; }
+
+                int si_off = -ox * N;
+                int sj_off = -oy * N;
+                int sk_off = -oz * N;
+
+                for (int s = 0; s < n_sol; s++) {
+                    double *dst = pack->data + (size_t)s * nb * npts + (size_t)b * npts;
+                    const double *src = pack->data + (size_t)s * nb * npts + (size_t)nbr * npts;
+
+                    for (int k = k_start; k < k_end; k++)
+                        for (int j = j_start; j < j_end; j++)
+                            for (int i = i_start; i < i_end; i++) {
+                                int didx = k * Nt * Nt + j * Nt + i;
+                                int sidx = (k + sk_off) * Nt * Nt
+                                         + (j + sj_off) * Nt + (i + si_off);
+                                dst[didx] = src[sidx];
+                            }
+                }
+            }
+        }
+    }
+
+    /* Sync back to device */
+    for (int s = 0; s < n_sol; s++) {
+        size_t offset = (size_t)s * nb * npts;
+        size_t bytes = (size_t)nb * npts * sizeof(double);
+        HIP_CHECK(hipMemcpy(sp->data + offset, pack->data + offset,
+                  bytes, hipMemcpyHostToDevice));
+    }
+}
+
+/* ========================================================================
+ * MG Kernel: Zero-Dirichlet BCs on boundary ghost zones
+ * ======================================================================== */
+
+__global__ void hip_mg_bc(
+    double *data, const int *on_boundary,
+    int nb, size_t npts, int N, int ghost, int Nt,
+    int n_sol, int total_threads)
+{
+    int tid = (int)((size_t)blockIdx.x * blockDim.x + threadIdx.x);
+    if (tid >= total_threads) return;
+
+    int npts_per_block = Nt * Nt * Nt;
+    int b = tid / npts_per_block;
+    int pt = tid % npts_per_block;
+    if (b >= nb) return;
+
+    int i = pt % Nt;
+    int j = (pt / Nt) % Nt;
+    int k = pt / (Nt * Nt);
+
+    /* Check if this point is in any boundary ghost zone */
+    int is_ghost = 0;
+    if (on_boundary[b * 6 + 0] && i < ghost) is_ghost = 1;
+    if (on_boundary[b * 6 + 1] && i >= ghost + N) is_ghost = 1;
+    if (on_boundary[b * 6 + 2] && j < ghost) is_ghost = 1;
+    if (on_boundary[b * 6 + 3] && j >= ghost + N) is_ghost = 1;
+    if (on_boundary[b * 6 + 4] && k < ghost) is_ghost = 1;
+    if (on_boundary[b * 6 + 5] && k >= ghost + N) is_ghost = 1;
+
+    if (!is_ghost) return;
+
+    size_t stride = (size_t)nb * npts;
+    size_t base = (size_t)b * npts;
+    int idx = k * Nt * Nt + j * Nt + i;
+
+    for (int s = 0; s < n_sol; s++)
+        data[s * stride + base + idx] = 0.0;
+}
+
+extern "C"
+void backend_mg_bc_packed(meshblock_pack_t *pack, int slot, int four_field)
+{
+    if (slot < 0 || slot >= MAX_SOLVER_SLOTS || !d_solver[slot].valid) return;
+    hip_solver_ptrs_t *sp = &d_solver[slot];
+
+    int nb = pack->n_blocks;
+    size_t npts = pack->npts;
+    int N = pack->N, ghost = pack->ghost, Nt = pack->Ntotal;
+    int n_sol = four_field ? 4 : 1;
+
+    int total_threads = nb * Nt * Nt * Nt;
+    int block_size = 256;
+    int grid_size = (total_threads + block_size - 1) / block_size;
+
+    hipLaunchKernelGGL(hip_mg_bc, grid_size, block_size, 0, gpu_stream,
+                       sp->data, sp->on_boundary,
+                       nb, npts, N, ghost, Nt, n_sol, total_threads);
+}
+
+/* ========================================================================
+ * MG Kernel: Operator evaluation L(u)
+ * ======================================================================== */
+
+__global__ void hip_mg_operator_1field(
+    double *data, double *accum, const double *dx_arr,
+    int nb, size_t npts, int N, int ghost, int Nt, int total_threads)
+{
+    int tid = (int)((size_t)blockIdx.x * blockDim.x + threadIdx.x);
+    if (tid >= total_threads) return;
+
+    int interior_pts = N * N * N;
+    int b = tid / interior_pts;
+    int pt = tid % interior_pts;
+    if (b >= nb) return;
+
+    int i = ghost + pt % N;
+    int j = ghost + (pt / N) % N;
+    int k = ghost + pt / (N * N);
+
+    int sx = 1, sy = Nt, sz = Nt * Nt;
+    int idx = k * sz + j * sy + i;
+    double inv_dx = 1.0 / dx_arr[b];
+
+    size_t stride = (size_t)nb * npts;
+    size_t base = (size_t)b * npts;
+
+    const double *psi    = data + (size_t)MGP_SOL_PSI   * stride + base;
+    const double *psi_BL = data + (size_t)MGP_BG_PSI_BL * stride + base;
+    const double *A2     = data + (size_t)MGP_BG_A2     * stride + base;
+    double *L_psi = accum + (size_t)MGP_SOL_PSI * stride + base;
+
+    mg_operator_1field_point(L_psi, psi, psi_BL, A2,
+                             idx, sx, sy, sz, inv_dx);
+}
+
+__global__ void hip_mg_operator_4field(
+    double *data, double *accum, const double *dx_arr,
+    int nb, size_t npts, int N, int ghost, int Nt, int total_threads)
+{
+    int tid = (int)((size_t)blockIdx.x * blockDim.x + threadIdx.x);
+    if (tid >= total_threads) return;
+
+    int interior_pts = N * N * N;
+    int b = tid / interior_pts;
+    int pt = tid % interior_pts;
+    if (b >= nb) return;
+
+    int i = ghost + pt % N;
+    int j = ghost + (pt / N) % N;
+    int k = ghost + pt / (N * N);
+
+    int sx = 1, sy = Nt, sz = Nt * Nt;
+    int idx = k * sz + j * sy + i;
+    double inv_dx = 1.0 / dx_arr[b];
+
+    size_t stride = (size_t)nb * npts;
+    size_t base = (size_t)b * npts;
+
+    const double *psi     = data + (size_t)MGP_SOL_PSI    * stride + base;
+    const double *V0      = data + (size_t)MGP_SOL_V1     * stride + base;
+    const double *V1      = data + (size_t)MGP_SOL_V2     * stride + base;
+    const double *V2      = data + (size_t)MGP_SOL_V3     * stride + base;
+    const double *psi_BL  = data + (size_t)MGP_BG_PSI_BL  * stride + base;
+    const double *A2      = data + (size_t)MGP_BG_A2      * stride + base;
+    const double *R_tilde = data + (size_t)MGP_BG_RTILDE  * stride + base;
+    const double *SM0     = data + (size_t)MGP_BG_SM1     * stride + base;
+    const double *SM1     = data + (size_t)MGP_BG_SM2     * stride + base;
+    const double *SM2     = data + (size_t)MGP_BG_SM3     * stride + base;
+
+    double *L_psi = accum + (size_t)MGP_SOL_PSI * stride + base;
+    double *L_V0  = accum + (size_t)MGP_SOL_V1  * stride + base;
+    double *L_V1  = accum + (size_t)MGP_SOL_V2  * stride + base;
+    double *L_V2  = accum + (size_t)MGP_SOL_V3  * stride + base;
+
+    mg_operator_4field_point(L_psi, L_V0, L_V1, L_V2,
+                             psi, V0, V1, V2,
+                             psi_BL, A2, R_tilde, SM0, SM1, SM2,
+                             idx, sx, sy, sz, inv_dx);
+}
+
+extern "C"
+void backend_mg_operator_packed(meshblock_pack_t *pack, int slot,
+                                 int four_field)
+{
+    if (slot < 0 || slot >= MAX_SOLVER_SLOTS || !d_solver[slot].valid) return;
+    hip_solver_ptrs_t *sp = &d_solver[slot];
+
+    int nb = pack->n_blocks;
+    size_t npts = pack->npts;
+    int N = pack->N, ghost = pack->ghost, Nt = pack->Ntotal;
+
+    int interior_pts = N * N * N;
+    int total_threads = nb * interior_pts;
+    int block_size = 256;
+    int grid_size = (total_threads + block_size - 1) / block_size;
+
+    if (four_field) {
+        hipLaunchKernelGGL(hip_mg_operator_4field, grid_size, block_size,
+                           0, gpu_stream,
+                           sp->data, sp->accum, sp->dx_per_block,
+                           nb, npts, N, ghost, Nt, total_threads);
+    } else {
+        hipLaunchKernelGGL(hip_mg_operator_1field, grid_size, block_size,
+                           0, gpu_stream,
+                           sp->data, sp->accum, sp->dx_per_block,
+                           nb, npts, N, ghost, Nt, total_threads);
+    }
+}
+
+/* ========================================================================
+ * MG Kernel: Residual r = f - L(u)
+ * ======================================================================== */
+
+__global__ void hip_mg_residual(
+    double *accum, const double *rhs,
+    int nb, size_t npts, int N, int ghost, int Nt,
+    int n_sol, int total_threads)
+{
+    int tid = (int)((size_t)blockIdx.x * blockDim.x + threadIdx.x);
+    if (tid >= total_threads) return;
+
+    int interior_pts = N * N * N;
+    int b = tid / interior_pts;
+    int pt = tid % interior_pts;
+    if (b >= nb) return;
+
+    int i = ghost + pt % N;
+    int j = ghost + (pt / N) % N;
+    int k = ghost + pt / (N * N);
+    int idx = k * Nt * Nt + j * Nt + i;
+
+    size_t stride = (size_t)nb * npts;
+    size_t base = (size_t)b * npts;
+
+    for (int s = 0; s < n_sol; s++)
+        accum[s * stride + base + idx] = rhs[s * stride + base + idx]
+                                        - accum[s * stride + base + idx];
+}
+
+extern "C"
+void backend_mg_residual_packed(meshblock_pack_t *pack, int slot,
+                                 int four_field)
+{
+    if (slot < 0 || slot >= MAX_SOLVER_SLOTS || !d_solver[slot].valid) return;
+    hip_solver_ptrs_t *sp = &d_solver[slot];
+
+    int nb = pack->n_blocks;
+    size_t npts = pack->npts;
+    int N = pack->N, ghost = pack->ghost, Nt = pack->Ntotal;
+    int n_sol = four_field ? 4 : 1;
+
+    int total_threads = nb * N * N * N;
+    int block_size = 256;
+    int grid_size = (total_threads + block_size - 1) / block_size;
+
+    hipLaunchKernelGGL(hip_mg_residual, grid_size, block_size, 0, gpu_stream,
+                       sp->accum, sp->rhs,
+                       nb, npts, N, ghost, Nt, n_sol, total_threads);
+}
+
+/* ========================================================================
+ * MG Kernel: Save solution scratch = data
+ * ======================================================================== */
+
+__global__ void hip_mg_save(
+    double *scratch, const double *data,
+    int nb, size_t npts, int n_sol, size_t total)
+{
+    size_t tid = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
+    if (tid >= total) return;
+
+    /* Only copy solution fields (0..n_sol-1) */
+    size_t field_stride = (size_t)nb * npts;
+    size_t field_idx = tid / field_stride;
+    if ((int)field_idx >= n_sol) return;
+
+    scratch[tid] = data[tid];
+}
+
+extern "C"
+void backend_mg_save_packed(meshblock_pack_t *pack, int slot, int four_field)
+{
+    if (slot < 0 || slot >= MAX_SOLVER_SLOTS || !d_solver[slot].valid) return;
+    hip_solver_ptrs_t *sp = &d_solver[slot];
+
+    int n_sol = four_field ? 4 : 1;
+    size_t total = (size_t)n_sol * pack->n_blocks * pack->npts;
+
+    int block_size = 256;
+    int grid_size = ((int)total + block_size - 1) / block_size;
+
+    hipLaunchKernelGGL(hip_mg_save, grid_size, block_size, 0, gpu_stream,
+                       sp->scratch, sp->data,
+                       pack->n_blocks, pack->npts, n_sol, total);
+}
+
+/* ========================================================================
+ * MG Kernel: Tau correction rhs += accum
+ * ======================================================================== */
+
+__global__ void hip_mg_tau(
+    double *rhs_buf, const double *accum,
+    int nb, size_t npts, int N, int ghost, int Nt,
+    int n_sol, int total_threads)
+{
+    int tid = (int)((size_t)blockIdx.x * blockDim.x + threadIdx.x);
+    if (tid >= total_threads) return;
+
+    int interior_pts = N * N * N;
+    int b = tid / interior_pts;
+    int pt = tid % interior_pts;
+    if (b >= nb) return;
+
+    int i = ghost + pt % N;
+    int j = ghost + (pt / N) % N;
+    int k = ghost + pt / (N * N);
+    int idx = k * Nt * Nt + j * Nt + i;
+
+    size_t stride = (size_t)nb * npts;
+    size_t base = (size_t)b * npts;
+
+    for (int s = 0; s < n_sol; s++)
+        rhs_buf[s * stride + base + idx] += accum[s * stride + base + idx];
+}
+
+extern "C"
+void backend_mg_tau_packed(meshblock_pack_t *pack, int slot, int four_field)
+{
+    if (slot < 0 || slot >= MAX_SOLVER_SLOTS || !d_solver[slot].valid) return;
+    hip_solver_ptrs_t *sp = &d_solver[slot];
+
+    int nb = pack->n_blocks;
+    size_t npts = pack->npts;
+    int N = pack->N, ghost = pack->ghost, Nt = pack->Ntotal;
+    int n_sol = four_field ? 4 : 1;
+
+    int total_threads = nb * N * N * N;
+    int block_size = 256;
+    int grid_size = (total_threads + block_size - 1) / block_size;
+
+    hipLaunchKernelGGL(hip_mg_tau, grid_size, block_size, 0, gpu_stream,
+                       sp->rhs, sp->accum,
+                       nb, npts, N, ghost, Nt, n_sol, total_threads);
+}
+
+/* ========================================================================
+ * MG Kernel: Zero solution / RHS
+ * ======================================================================== */
+
+extern "C"
+void backend_mg_zero_solution_packed(meshblock_pack_t *pack, int slot,
+                                      int four_field)
+{
+    if (slot < 0 || slot >= MAX_SOLVER_SLOTS || !d_solver[slot].valid) return;
+    hip_solver_ptrs_t *sp = &d_solver[slot];
+
+    int n_sol = four_field ? 4 : 1;
+    size_t bytes = (size_t)n_sol * pack->n_blocks * pack->npts * sizeof(double);
+    HIP_CHECK(hipMemsetAsync(sp->data, 0, bytes, gpu_stream));
+}
+
+extern "C"
+void backend_mg_zero_rhs_packed(meshblock_pack_t *pack, int slot, int four_field)
+{
+    if (slot < 0 || slot >= MAX_SOLVER_SLOTS || !d_solver[slot].valid) return;
+    hip_solver_ptrs_t *sp = &d_solver[slot];
+
+    int n_sol = four_field ? 4 : 1;
+    size_t bytes = (size_t)n_sol * pack->n_blocks * pack->npts * sizeof(double);
+    HIP_CHECK(hipMemsetAsync(sp->rhs, 0, bytes, gpu_stream));
+}
+
+/* ========================================================================
+ * MG: Restriction, prolongation, L2 norm — host round-trip for v1
+ *
+ * These operations involve cross-level data movement (different packs).
+ * V1 strategy: sync both levels to host, run CPU code, sync back.
+ * The smoother dominates total time; these are called O(1) per V-cycle.
+ * ======================================================================== */
+
+extern "C"
+void backend_mg_restrict_packed(meshblock_pack_t *fine_pack, int fine_slot,
+                                 meshblock_pack_t *coarse_pack, int coarse_slot,
+                                 int four_field,
+                                 const int *child_map, const int *parent_ids,
+                                 int n_parents)
+{
+    /* Sync fine data+accum to host */
+    if (fine_slot >= 0 && fine_slot < MAX_SOLVER_SLOTS && d_solver[fine_slot].valid) {
+        HIP_CHECK(hipStreamSynchronize(gpu_stream));
+        hip_solver_ptrs_t *fsp = &d_solver[fine_slot];
+        size_t bytes = fsp->total * sizeof(double);
+        HIP_CHECK(hipMemcpy(fine_pack->data, fsp->data, bytes, hipMemcpyDeviceToHost));
+        HIP_CHECK(hipMemcpy(fine_pack->accum, fsp->accum, bytes, hipMemcpyDeviceToHost));
+    }
+
+    /* Sync coarse data+rhs to host (will be overwritten) */
+    if (coarse_slot >= 0 && coarse_slot < MAX_SOLVER_SLOTS && d_solver[coarse_slot].valid) {
+        hip_solver_ptrs_t *csp = &d_solver[coarse_slot];
+        size_t bytes = csp->total * sizeof(double);
+        HIP_CHECK(hipMemcpy(coarse_pack->data, csp->data, bytes, hipMemcpyDeviceToHost));
+        HIP_CHECK(hipMemcpy(coarse_pack->rhs, csp->rhs, bytes, hipMemcpyDeviceToHost));
+    }
+
+    /* Run CPU restriction logic */
+    int n_sol = four_field ? 4 : 1;
+    int f_nb = fine_pack->n_blocks;
+    size_t f_npts = fine_pack->npts;
+    int c_nb = coarse_pack->n_blocks;
+    size_t c_npts = coarse_pack->npts;
+    int ghost = fine_pack->ghost;
+    int half_N = coarse_pack->N / 2;
+    int f_Nt = fine_pack->Ntotal;
+    int c_Nt = coarse_pack->Ntotal;
+
+    for (int p = 0; p < n_parents; p++) {
+        int c_b = parent_ids[p];
+        for (int cz = 0; cz < 2; cz++)
+            for (int cy = 0; cy < 2; cy++)
+                for (int cx = 0; cx < 2; cx++) {
+                    int octant = cx + (cy << 1) + (cz << 2);
+                    int f_b = child_map[p * 8 + octant];
+                    if (f_b < 0) continue;
+
+                    int p_off_i = cx * half_N;
+                    int p_off_j = cy * half_N;
+                    int p_off_k = cz * half_N;
+
+                    for (int s = 0; s < n_sol; s++) {
+                        const double *f_sol = fine_pack->data
+                            + (size_t)s * f_nb * f_npts + (size_t)f_b * f_npts;
+                        double *c_sol = coarse_pack->data
+                            + (size_t)s * c_nb * c_npts + (size_t)c_b * c_npts;
+                        const double *f_res = fine_pack->accum
+                            + (size_t)s * f_nb * f_npts + (size_t)f_b * f_npts;
+                        double *c_rhs = coarse_pack->rhs
+                            + (size_t)s * c_nb * c_npts + (size_t)c_b * c_npts;
+
+                        for (int pk = 0; pk < half_N; pk++)
+                            for (int pj = 0; pj < half_N; pj++)
+                                for (int pi = 0; pi < half_N; pi++) {
+                                    int fi = ghost + 2 * pi;
+                                    int fj = ghost + 2 * pj;
+                                    int fk = ghost + 2 * pk;
+                                    int f000 = fk * f_Nt * f_Nt + fj * f_Nt + fi;
+                                    int sxf = 1, syf = f_Nt, szf = f_Nt * f_Nt;
+
+                                    double sol = 0.125 * (
+                                        f_sol[f000] + f_sol[f000+sxf]
+                                      + f_sol[f000+syf] + f_sol[f000+syf+sxf]
+                                      + f_sol[f000+szf] + f_sol[f000+szf+sxf]
+                                      + f_sol[f000+syf+szf] + f_sol[f000+syf+szf+sxf]);
+
+                                    double res = 0.125 * (
+                                        f_res[f000] + f_res[f000+sxf]
+                                      + f_res[f000+syf] + f_res[f000+syf+sxf]
+                                      + f_res[f000+szf] + f_res[f000+szf+sxf]
+                                      + f_res[f000+syf+szf] + f_res[f000+syf+szf+sxf]);
+
+                                    int ci = ghost + p_off_i + pi;
+                                    int cj = ghost + p_off_j + pj;
+                                    int ck = ghost + p_off_k + pk;
+                                    int cidx = ck * c_Nt * c_Nt + cj * c_Nt + ci;
+                                    c_sol[cidx] = sol;
+                                    c_rhs[cidx] = res;
+                                }
+                    }
+                }
+    }
+
+    /* Sync coarse back to device */
+    if (coarse_slot >= 0 && coarse_slot < MAX_SOLVER_SLOTS && d_solver[coarse_slot].valid) {
+        hip_solver_ptrs_t *csp = &d_solver[coarse_slot];
+        size_t bytes = csp->total * sizeof(double);
+        HIP_CHECK(hipMemcpy(csp->data, coarse_pack->data, bytes, hipMemcpyHostToDevice));
+        HIP_CHECK(hipMemcpy(csp->rhs,  coarse_pack->rhs,  bytes, hipMemcpyHostToDevice));
+    }
+}
+
+extern "C"
+void backend_mg_prolong_add_packed(meshblock_pack_t *coarse_pack, int coarse_slot,
+                                    meshblock_pack_t *fine_pack, int fine_slot,
+                                    int four_field,
+                                    const int *child_map, const int *parent_ids,
+                                    int n_parents)
+{
+    /* Sync to host */
+    if (coarse_slot >= 0 && coarse_slot < MAX_SOLVER_SLOTS && d_solver[coarse_slot].valid) {
+        HIP_CHECK(hipStreamSynchronize(gpu_stream));
+        hip_solver_ptrs_t *csp = &d_solver[coarse_slot];
+        size_t bytes = csp->total * sizeof(double);
+        HIP_CHECK(hipMemcpy(coarse_pack->data, csp->data, bytes, hipMemcpyDeviceToHost));
+        HIP_CHECK(hipMemcpy(coarse_pack->scratch, csp->scratch, bytes, hipMemcpyDeviceToHost));
+    }
+    if (fine_slot >= 0 && fine_slot < MAX_SOLVER_SLOTS && d_solver[fine_slot].valid) {
+        hip_solver_ptrs_t *fsp = &d_solver[fine_slot];
+        size_t bytes = fsp->total * sizeof(double);
+        HIP_CHECK(hipMemcpy(fine_pack->data, fsp->data, bytes, hipMemcpyDeviceToHost));
+    }
+
+    /* Run CPU prolongation logic */
+    int n_sol = four_field ? 4 : 1;
+    int f_nb = fine_pack->n_blocks;
+    size_t f_npts = fine_pack->npts;
+    int c_nb = coarse_pack->n_blocks;
+    size_t c_npts = coarse_pack->npts;
+    int ghost = coarse_pack->ghost;
+    int half_N = coarse_pack->N / 2;
+    int f_N = fine_pack->N;
+    int f_ghost = fine_pack->ghost;
+    int f_Nt = fine_pack->Ntotal;
+    int c_Nt = coarse_pack->Ntotal;
+
+    for (int p = 0; p < n_parents; p++) {
+        int c_b = parent_ids[p];
+
+        /* Compute correction: scratch = data - scratch */
+        for (int s = 0; s < n_sol; s++) {
+            double *d = coarse_pack->data + (size_t)s * c_nb * c_npts + (size_t)c_b * c_npts;
+            double *sc = coarse_pack->scratch + (size_t)s * c_nb * c_npts + (size_t)c_b * c_npts;
+            for (size_t idx = 0; idx < c_npts; idx++)
+                sc[idx] = d[idx] - sc[idx];
+        }
+
+        for (int cz = 0; cz < 2; cz++)
+            for (int cy = 0; cy < 2; cy++)
+                for (int cx = 0; cx < 2; cx++) {
+                    int octant = cx + (cy << 1) + (cz << 2);
+                    int f_b = child_map[p * 8 + octant];
+                    if (f_b < 0) continue;
+
+                    int c_off_i = cx * half_N;
+                    int c_off_j = cy * half_N;
+                    int c_off_k = cz * half_N;
+
+                    for (int s = 0; s < n_sol; s++) {
+                        const double *corr = coarse_pack->scratch
+                            + (size_t)s * c_nb * c_npts + (size_t)c_b * c_npts;
+                        double *fsol = fine_pack->data
+                            + (size_t)s * f_nb * f_npts + (size_t)f_b * f_npts;
+
+                        for (int fk = 0; fk < f_N; fk++) {
+                            int Kc = ghost + c_off_k + fk / 2;
+                            int dk = (fk % 2) ? 1 : -1;
+                            for (int fj = 0; fj < f_N; fj++) {
+                                int Jc = ghost + c_off_j + fj / 2;
+                                int dj = (fj % 2) ? 1 : -1;
+                                for (int fi = 0; fi < f_N; fi++) {
+                                    int Ic = ghost + c_off_i + fi / 2;
+                                    int di = (fi % 2) ? 1 : -1;
+
+                                    double val = 0.0;
+                                    for (int ck = 0; ck < 2; ck++) {
+                                        int CK = ck ? Kc + dk : Kc;
+                                        double wk = ck ? 0.25 : 0.75;
+                                        for (int cj = 0; cj < 2; cj++) {
+                                            int CJ = cj ? Jc + dj : Jc;
+                                            double wkj = wk * (cj ? 0.25 : 0.75);
+                                            for (int ci = 0; ci < 2; ci++) {
+                                                int CI = ci ? Ic + di : Ic;
+                                                val += wkj * (ci ? 0.25 : 0.75)
+                                                    * corr[CK * c_Nt * c_Nt + CJ * c_Nt + CI];
+                                            }
+                                        }
+                                    }
+                                    fsol[(f_ghost + fk) * f_Nt * f_Nt
+                                       + (f_ghost + fj) * f_Nt
+                                       + (f_ghost + fi)] += val;
+                                }
+                            }
+                        }
+                    }
+                }
+    }
+
+    /* Sync fine back to device */
+    if (fine_slot >= 0 && fine_slot < MAX_SOLVER_SLOTS && d_solver[fine_slot].valid) {
+        hip_solver_ptrs_t *fsp = &d_solver[fine_slot];
+        size_t bytes = fsp->total * sizeof(double);
+        HIP_CHECK(hipMemcpy(fsp->data, fine_pack->data, bytes, hipMemcpyHostToDevice));
+    }
+}
+
+extern "C"
+void backend_mg_prolong_fmg_packed(meshblock_pack_t *coarse_pack, int coarse_slot,
+                                    meshblock_pack_t *fine_pack, int fine_slot,
+                                    int four_field,
+                                    const int *child_map, const int *parent_ids,
+                                    int n_parents)
+{
+    /* Sync coarse to host */
+    if (coarse_slot >= 0 && coarse_slot < MAX_SOLVER_SLOTS && d_solver[coarse_slot].valid) {
+        HIP_CHECK(hipStreamSynchronize(gpu_stream));
+        hip_solver_ptrs_t *csp = &d_solver[coarse_slot];
+        size_t bytes = csp->total * sizeof(double);
+        HIP_CHECK(hipMemcpy(coarse_pack->data, csp->data, bytes, hipMemcpyDeviceToHost));
+    }
+
+    /* Run CPU FMG prolongation */
+    int n_sol = four_field ? 4 : 1;
+    int f_nb = fine_pack->n_blocks;
+    size_t f_npts = fine_pack->npts;
+    int c_nb = coarse_pack->n_blocks;
+    size_t c_npts = coarse_pack->npts;
+    int ghost = coarse_pack->ghost;
+    int half_N = coarse_pack->N / 2;
+    int f_N = fine_pack->N;
+    int f_ghost = fine_pack->ghost;
+    int f_Nt = fine_pack->Ntotal;
+    int c_Nt = coarse_pack->Ntotal;
+
+    for (int p = 0; p < n_parents; p++) {
+        int c_b = parent_ids[p];
+        for (int cz = 0; cz < 2; cz++)
+            for (int cy = 0; cy < 2; cy++)
+                for (int cx = 0; cx < 2; cx++) {
+                    int octant = cx + (cy << 1) + (cz << 2);
+                    int f_b = child_map[p * 8 + octant];
+                    if (f_b < 0) continue;
+
+                    int c_off_i = cx * half_N;
+                    int c_off_j = cy * half_N;
+                    int c_off_k = cz * half_N;
+
+                    for (int s = 0; s < n_sol; s++) {
+                        const double *csol = coarse_pack->data
+                            + (size_t)s * c_nb * c_npts + (size_t)c_b * c_npts;
+                        double *fsol = fine_pack->data
+                            + (size_t)s * f_nb * f_npts + (size_t)f_b * f_npts;
+
+                        for (int fk = 0; fk < f_N; fk++) {
+                            int Kc = ghost + c_off_k + fk / 2;
+                            int dk = (fk % 2) ? 1 : -1;
+                            for (int fj = 0; fj < f_N; fj++) {
+                                int Jc = ghost + c_off_j + fj / 2;
+                                int dj = (fj % 2) ? 1 : -1;
+                                for (int fi = 0; fi < f_N; fi++) {
+                                    int Ic = ghost + c_off_i + fi / 2;
+                                    int di = (fi % 2) ? 1 : -1;
+
+                                    double val = 0.0;
+                                    for (int ck = 0; ck < 2; ck++) {
+                                        int CK = ck ? Kc + dk : Kc;
+                                        double wk = ck ? 0.25 : 0.75;
+                                        for (int cj = 0; cj < 2; cj++) {
+                                            int CJ = cj ? Jc + dj : Jc;
+                                            double wkj = wk * (cj ? 0.25 : 0.75);
+                                            for (int ci = 0; ci < 2; ci++) {
+                                                int CI = ci ? Ic + di : Ic;
+                                                val += wkj * (ci ? 0.25 : 0.75)
+                                                    * csol[CK * c_Nt * c_Nt + CJ * c_Nt + CI];
+                                            }
+                                        }
+                                    }
+                                    fsol[(f_ghost + fk) * f_Nt * f_Nt
+                                       + (f_ghost + fj) * f_Nt
+                                       + (f_ghost + fi)] = val;
+                                }
+                            }
+                        }
+                    }
+                }
+    }
+
+    /* Sync fine to device */
+    if (fine_slot >= 0 && fine_slot < MAX_SOLVER_SLOTS && d_solver[fine_slot].valid) {
+        hip_solver_ptrs_t *fsp = &d_solver[fine_slot];
+        size_t bytes = fsp->total * sizeof(double);
+        HIP_CHECK(hipMemcpy(fsp->data, fine_pack->data, bytes, hipMemcpyHostToDevice));
+    }
+}
+
+extern "C"
+double backend_mg_l2_norm_packed(meshblock_pack_t *pack, int slot,
+                                  int four_field)
+{
+    /* Sync accum + rhs to host, compute L2 on CPU */
+    if (slot < 0 || slot >= MAX_SOLVER_SLOTS || !d_solver[slot].valid) return 0.0;
+    hip_solver_ptrs_t *sp = &d_solver[slot];
+
+    HIP_CHECK(hipStreamSynchronize(gpu_stream));
+    size_t bytes = sp->total * sizeof(double);
+    HIP_CHECK(hipMemcpy(pack->accum, sp->accum, bytes, hipMemcpyDeviceToHost));
+    HIP_CHECK(hipMemcpy(pack->rhs,   sp->rhs,   bytes, hipMemcpyDeviceToHost));
+
+    int nb = pack->n_blocks;
+    size_t npts = pack->npts;
+    int N = pack->N, ghost = pack->ghost, Nt = pack->Ntotal;
+    int n_sol = four_field ? 4 : 1;
+
+    double sum = 0.0;
+    int count = 0;
+    for (int b = 0; b < nb; b++) {
+        int sy = Nt, sz = Nt * Nt;
+        for (int k = ghost; k < ghost + N; k++)
+            for (int j = ghost; j < ghost + N; j++)
+                for (int i = ghost; i < ghost + N; i++) {
+                    int idx = k * sz + j * sy + i;
+                    for (int s = 0; s < n_sol; s++) {
+                        size_t off = (size_t)s * nb * npts + (size_t)b * npts + idx;
+                        double d = pack->rhs[off] - pack->accum[off];
+                        sum += d * d;
+                    }
+                    count++;
+                }
+    }
+    if (count == 0) return 0.0;
+    return sqrt(sum / ((double)n_sol * count));
 }

@@ -34,6 +34,8 @@
 #include "../amr/refine.h"
 #include "../amr/ghost_exchange.h"
 #include "../amr/prolongation.h"
+#include "../amr/meshblock_pack.h"
+#include "../backend/backend.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1690,6 +1692,373 @@ static double amr_residual_norm(mg_amr_t *mg)
 }
 
 /* ================================================================
+ * GPU-accelerated solver path
+ *
+ * When backend_is_gpu() returns 1, the solver packs each AMR level
+ * into a meshblock_pack_t, maps to GPU, and runs the smoother +
+ * operator + element-wise kernels on device. Cross-level operations
+ * (restriction, prolongation) use host round-trips in v1.
+ * Uniform MG below level 0 always runs on CPU.
+ *
+ * Ref: arXiv:2510.11152 (GPU FAS multigrid, 8-color MCGS)
+ * ================================================================ */
+
+/* Per-level pack data for GPU solver */
+typedef struct {
+    meshblock_pack_t *pack;
+    int slot;              /* d_solver[] slot index */
+    int *block_ids;        /* block IDs at this level */
+    int n_blocks;
+} gpu_level_t;
+
+/* Child map for restriction/prolongation between adjacent levels */
+typedef struct {
+    int *child_map;    /* [n_parents * 8] — fine block index per octant */
+    int *parent_ids;   /* [n_parents] — coarse pack block index */
+    int n_parents;
+} gpu_child_map_t;
+
+/* Build per-level packs for the GPU solver.
+ * Allocates packs with MG_AMR_N_FIELDS and maps to GPU slots. */
+static void gpu_build_level_packs(mesh_t *m, int four_field,
+                                   gpu_level_t *levels, int max_level)
+{
+    (void)four_field;
+    for (int L = 0; L <= max_level; L++) {
+        /* Count blocks at this level */
+        int count = 0;
+        for (int b = 0; b < m->num_blocks; b++) {
+            block_t *blk = m->blocks[b];
+            if (blk && blk->loc.level == L) count++;
+        }
+
+        int *ids = calloc(count, sizeof(int));
+        int idx = 0;
+        for (int b = 0; b < m->num_blocks; b++) {
+            block_t *blk = m->blocks[b];
+            if (blk && blk->loc.level == L) ids[idx++] = b;
+        }
+
+        /* Get npts from first block at this level */
+        size_t npts = 0;
+        for (int b = 0; b < m->num_blocks; b++) {
+            block_t *blk = m->blocks[b];
+            if (blk && blk->loc.level == L) {
+                npts = blk->grid->npoints;
+                break;
+            }
+        }
+
+        meshblock_pack_t *pack = meshblock_pack_create(
+            count, npts, ids, L, RK_CLASSIC, MG_AMR_N_FIELDS);
+        meshblock_pack_load_meta(pack, m->blocks);
+        meshblock_pack_build_neighbors(pack, m->blocks);
+        meshblock_pack_load(pack, m->blocks);
+
+        levels[L].pack = pack;
+        levels[L].slot = L;
+        levels[L].block_ids = ids;
+        levels[L].n_blocks = count;
+
+        backend_map_solver_pack(pack, L);
+    }
+}
+
+/* Build parent→child maps for cross-level restriction/prolongation */
+static void gpu_build_child_maps(mesh_t *m, gpu_level_t *levels,
+                                  gpu_child_map_t *maps, int max_level)
+{
+    for (int L = 1; L <= max_level; L++) {
+        gpu_level_t *coarse = &levels[L - 1];
+        gpu_level_t *fine = &levels[L];
+
+        /* Build block_id → pack index maps */
+        int *fine_id_to_pack = calloc(m->num_blocks, sizeof(int));
+        for (int i = 0; i < m->num_blocks; i++) fine_id_to_pack[i] = -1;
+        for (int i = 0; i < fine->n_blocks; i++)
+            fine_id_to_pack[fine->block_ids[i]] = i;
+
+        int *coarse_id_to_pack = calloc(m->num_blocks, sizeof(int));
+        for (int i = 0; i < m->num_blocks; i++) coarse_id_to_pack[i] = -1;
+        for (int i = 0; i < coarse->n_blocks; i++)
+            coarse_id_to_pack[coarse->block_ids[i]] = i;
+
+        /* Count parents (coarse blocks with children at level L) */
+        int n_parents = 0;
+        for (int i = 0; i < coarse->n_blocks; i++) {
+            int bid = coarse->block_ids[i];
+            block_t *blk = m->blocks[bid];
+            int has_children = 0;
+            for (int c = 0; c < 8; c++)
+                if (blk->child_ids[c] >= 0) { has_children = 1; break; }
+            if (has_children) n_parents++;
+        }
+
+        int *child_map = calloc(n_parents * 8, sizeof(int));
+        int *parent_ids = calloc(n_parents, sizeof(int));
+        int pidx = 0;
+
+        for (int i = 0; i < coarse->n_blocks; i++) {
+            int bid = coarse->block_ids[i];
+            block_t *blk = m->blocks[bid];
+            int has_children = 0;
+            for (int c = 0; c < 8; c++)
+                if (blk->child_ids[c] >= 0) { has_children = 1; break; }
+            if (!has_children) continue;
+
+            parent_ids[pidx] = i;  /* coarse pack index */
+            for (int c = 0; c < 8; c++) {
+                int child_id = blk->child_ids[c];
+                child_map[pidx * 8 + c] = (child_id >= 0)
+                    ? fine_id_to_pack[child_id] : -1;
+            }
+            pidx++;
+        }
+
+        maps[L].child_map = child_map;
+        maps[L].parent_ids = parent_ids;
+        maps[L].n_parents = n_parents;
+
+        free(fine_id_to_pack);
+        free(coarse_id_to_pack);
+    }
+}
+
+/* GPU composite V-cycle: host orchestration, GPU kernels for smooth/op.
+ * Level 0 hands off to CPU uniform MG via D↔H transfer. */
+static void composite_vcycle_gpu(mg_amr_t *mg, int amr_level,
+                                  gpu_level_t *levels, gpu_child_map_t *maps)
+{
+    meshblock_pack_t *pack = levels[amr_level].pack;
+    int slot = levels[amr_level].slot;
+    int ff = mg->four_field;
+    int n_sol = ff ? 4 : 1;
+
+    /* Base case: level 0 → uniform MG on CPU */
+    if (amr_level == 0) {
+        /* Sync level-0 data to host */
+        backend_sync_solver_data_to_host(pack, slot);
+        meshblock_pack_store(pack, mg->mesh->blocks);
+
+        /* Run existing CPU uniform MG path */
+        apply_bcs_level(mg->mesh, 0, ff);
+        copy_amr_level0_to_mg(mg);
+        umg_vcycle(mg->mg_levels, mg->n_mg_levels, 0, ff);
+        copy_mg_to_amr_level0(mg);
+        apply_bcs_level(mg->mesh, 0, ff);
+
+        /* Sync back to pack and device */
+        meshblock_pack_load(pack, mg->mesh->blocks);
+        backend_sync_solver_data_to_device(pack, slot);
+        return;
+    }
+
+    /* Ghost exchange: sync to host for CF boundary fill, then back */
+    backend_sync_solver_data_to_host(pack, slot);
+    meshblock_pack_store(pack, mg->mesh->blocks);
+    solver_full_exchange(mg->mesh, amr_level, ff);
+    meshblock_pack_load(pack, mg->mesh->blocks);
+    backend_sync_solver_data_to_device(pack, slot);
+
+    /* Pre-smooth: MG_NU_PRE sweeps × 8 colors */
+    for (int s = 0; s < MG_NU_PRE; s++) {
+        for (int color = 0; color < 8; color++) {
+            backend_mg_smooth_packed(pack, slot, color, ff);
+            backend_mg_ghost_same_level_packed(pack, slot, n_sol);
+            backend_mg_bc_packed(pack, slot, ff);
+        }
+    }
+
+    /* Full exchange before operator eval */
+    backend_sync_solver_data_to_host(pack, slot);
+    meshblock_pack_store(pack, mg->mesh->blocks);
+    solver_full_exchange(mg->mesh, amr_level, ff);
+    meshblock_pack_load(pack, mg->mesh->blocks);
+    backend_sync_solver_data_to_device(pack, slot);
+
+    /* Operator + residual */
+    backend_mg_operator_packed(pack, slot, ff);
+    backend_mg_residual_packed(pack, slot, ff);
+
+    /* Restrict fine→coarse */
+    meshblock_pack_t *c_pack = levels[amr_level - 1].pack;
+    int c_slot = levels[amr_level - 1].slot;
+    backend_mg_restrict_packed(pack, slot, c_pack, c_slot, ff,
+                                maps[amr_level].child_map,
+                                maps[amr_level].parent_ids,
+                                maps[amr_level].n_parents);
+
+    /* Zero leaf rhs at coarse level (blocks without children at amr_level) */
+    /* This is done via host round-trip since we need to check child_ids */
+    backend_sync_solver_data_to_host(c_pack, c_slot);
+    meshblock_pack_store(c_pack, mg->mesh->blocks);
+    {
+        for (int b = 0; b < mg->mesh->num_blocks; b++) {
+            block_t *blk = mg->mesh->blocks[b];
+            if (!blk || blk->loc.level != amr_level - 1) continue;
+            int has_children = 0;
+            for (int c = 0; c < 8; c++)
+                if (blk->child_ids[c] >= 0) { has_children = 1; break; }
+            if (has_children) continue;
+            grid_t *g = blk->grid;
+            for (int s = 0; s < n_sol; s++)
+                memset(g->rhs[s], 0, g->npoints * sizeof(double));
+        }
+    }
+
+    /* Save solution on coarse level */
+    meshblock_pack_load(c_pack, mg->mesh->blocks);
+    backend_sync_solver_data_to_device(c_pack, c_slot);
+    backend_mg_save_packed(c_pack, c_slot, ff);
+
+    /* BCs on coarse level */
+    backend_mg_bc_packed(c_pack, c_slot, ff);
+
+    /* Full exchange at coarse level for tau correction */
+    backend_sync_solver_data_to_host(c_pack, c_slot);
+    meshblock_pack_store(c_pack, mg->mesh->blocks);
+    solver_full_exchange(mg->mesh, amr_level - 1, ff);
+    meshblock_pack_load(c_pack, mg->mesh->blocks);
+    backend_sync_solver_data_to_device(c_pack, c_slot);
+
+    /* Tau correction: operator + add to rhs */
+    backend_mg_operator_packed(c_pack, c_slot, ff);
+    backend_mg_tau_packed(c_pack, c_slot, ff);
+
+    /* Recursive coarse solve */
+    composite_vcycle_gpu(mg, amr_level - 1, levels, maps);
+
+    /* BCs before prolongation */
+    backend_mg_bc_packed(c_pack, c_slot, ff);
+
+    /* Prolongate correction coarse→fine */
+    backend_mg_prolong_add_packed(c_pack, c_slot, pack, slot, ff,
+                                   maps[amr_level].child_map,
+                                   maps[amr_level].parent_ids,
+                                   maps[amr_level].n_parents);
+
+    /* Full exchange after prolongation */
+    backend_sync_solver_data_to_host(pack, slot);
+    meshblock_pack_store(pack, mg->mesh->blocks);
+    solver_full_exchange(mg->mesh, amr_level, ff);
+    meshblock_pack_load(pack, mg->mesh->blocks);
+    backend_sync_solver_data_to_device(pack, slot);
+
+    /* Post-smooth */
+    for (int s = 0; s < MG_NU_POST; s++) {
+        for (int color = 0; color < 8; color++) {
+            backend_mg_smooth_packed(pack, slot, color, ff);
+            backend_mg_ghost_same_level_packed(pack, slot, n_sol);
+            backend_mg_bc_packed(pack, slot, ff);
+        }
+    }
+}
+
+/* GPU composite FMG */
+static void composite_fmg_gpu(mg_amr_t *mg, gpu_level_t *levels,
+                                gpu_child_map_t *maps)
+{
+    /* Step 1: solve on coarsest (uniform hierarchy on CPU) */
+    umg_fmg(mg->mg_levels, mg->n_mg_levels, mg->four_field);
+    copy_mg_to_amr_level0(mg);
+    apply_bcs_level(mg->mesh, 0, mg->four_field);
+
+    /* Sync level-0 to device */
+    meshblock_pack_load(levels[0].pack, mg->mesh->blocks);
+    backend_sync_solver_data_to_device(levels[0].pack, levels[0].slot);
+
+    /* Step 2: ascend through AMR levels */
+    for (int L = 1; L <= mg->mesh->max_level; L++) {
+        /* Prolongate from level L-1 to level L via host */
+        backend_mg_prolong_fmg_packed(levels[L - 1].pack, levels[L - 1].slot,
+                                       levels[L].pack, levels[L].slot,
+                                       mg->four_field,
+                                       maps[L].child_map, maps[L].parent_ids,
+                                       maps[L].n_parents);
+
+        /* Ghost exchange at new level */
+        backend_sync_solver_data_to_host(levels[L].pack, levels[L].slot);
+        meshblock_pack_store(levels[L].pack, mg->mesh->blocks);
+        solver_ghost_exchange_all(mg->mesh, mg->four_field);
+        meshblock_pack_load(levels[L].pack, mg->mesh->blocks);
+        backend_sync_solver_data_to_device(levels[L].pack, levels[L].slot);
+
+        /* One composite V-cycle to polish */
+        composite_vcycle_gpu(mg, L, levels, maps);
+    }
+}
+
+/* GPU residual norm: sync finest level, compute on CPU */
+static double amr_residual_norm_gpu(mg_amr_t *mg, gpu_level_t *levels)
+{
+    int finest = mg->mesh->max_level;
+    meshblock_pack_t *pack = levels[finest].pack;
+    int slot = levels[finest].slot;
+
+    /* Full ghost exchange on CPU */
+    backend_sync_solver_data_to_host(pack, slot);
+    meshblock_pack_store(pack, mg->mesh->blocks);
+    solver_ghost_exchange_all(mg->mesh, mg->four_field);
+    meshblock_pack_load(pack, mg->mesh->blocks);
+    backend_sync_solver_data_to_device(pack, slot);
+
+    /* Operator on GPU */
+    backend_mg_operator_packed(pack, slot, mg->four_field);
+
+    /* L2 norm */
+    return backend_mg_l2_norm_packed(pack, slot, mg->four_field);
+}
+
+/* Main GPU solver entry point */
+static double gpu_solve_amr(mg_amr_t *mg, double tol, int max_iter,
+                              int verbose)
+{
+    mesh_t *m = mg->mesh;
+    int max_level = m->max_level;
+
+    /* Build per-level packs and map to GPU */
+    gpu_level_t *levels = calloc(max_level + 1, sizeof(gpu_level_t));
+    gpu_build_level_packs(m, mg->four_field, levels, max_level);
+
+    /* Build child maps */
+    gpu_child_map_t *maps = calloc(max_level + 1, sizeof(gpu_child_map_t));
+    gpu_build_child_maps(m, levels, maps, max_level);
+
+    /* Run FMG */
+    if (verbose) printf("[AMR-MG-GPU] Running composite FMG...\n");
+    composite_fmg_gpu(mg, levels, maps);
+
+    double residual = amr_residual_norm_gpu(mg, levels);
+    if (verbose) printf("[AMR-MG-GPU] FMG done: residual = %.6e\n", residual);
+
+    /* Post-FMG V-cycles */
+    for (int cycle = 0; cycle < max_iter && residual > tol; cycle++) {
+        composite_vcycle_gpu(mg, max_level, levels, maps);
+        residual = amr_residual_norm_gpu(mg, levels);
+        if (verbose)
+            printf("[AMR-MG-GPU] V-cycle %d: residual = %.6e\n",
+                   cycle + 1, residual);
+    }
+
+    /* Sync all levels back to blocks */
+    for (int L = 0; L <= max_level; L++) {
+        backend_unmap_solver_pack_sync(levels[L].pack, levels[L].slot);
+        meshblock_pack_store(levels[L].pack, m->blocks);
+        meshblock_pack_free(levels[L].pack);
+        free(levels[L].block_ids);
+    }
+    free(levels);
+
+    for (int L = 1; L <= max_level; L++) {
+        free(maps[L].child_map);
+        free(maps[L].parent_ids);
+    }
+    free(maps);
+
+    return residual;
+}
+
+/* ================================================================
  * Mesh refinement near punctures (shared by solver and evolution paths)
  * ================================================================ */
 
@@ -1847,20 +2216,25 @@ double relaxation_solve_amr(grid_t *g, int n_bh, const puncture_data_t *bhs,
     /* Ghost exchange so backgrounds are in ghost zones too */
     solver_ghost_exchange_all(m, 0);
 
-    /* Run composite FMG */
-    if (verbose) printf("[AMR-MG] Running composite FMG...\n");
-    composite_fmg(&mg);
+    double residual;
+    if (backend_is_gpu()) {
+        residual = gpu_solve_amr(&mg, tol, max_iter, verbose);
+    } else {
+        /* Run composite FMG */
+        if (verbose) printf("[AMR-MG] Running composite FMG...\n");
+        composite_fmg(&mg);
 
-    double residual = amr_residual_norm(&mg);
-    if (verbose) printf("[AMR-MG] FMG done: residual = %.6e\n", residual);
-
-    /* Post-FMG V-cycles */
-    for (int cycle = 0; cycle < max_iter && residual > tol; cycle++) {
-        composite_vcycle(&mg, m->max_level);
         residual = amr_residual_norm(&mg);
-        if (verbose)
-            printf("[AMR-MG] V-cycle %d: residual = %.6e\n",
-                   cycle + 1, residual);
+        if (verbose) printf("[AMR-MG] FMG done: residual = %.6e\n", residual);
+
+        /* Post-FMG V-cycles */
+        for (int cycle = 0; cycle < max_iter && residual > tol; cycle++) {
+            composite_vcycle(&mg, m->max_level);
+            residual = amr_residual_norm(&mg);
+            if (verbose)
+                printf("[AMR-MG] V-cycle %d: residual = %.6e\n",
+                       cycle + 1, residual);
+        }
     }
 
     /* Transfer AMR solution to the target grid.
@@ -1989,18 +2363,23 @@ double relaxation_solve_coupled_amr(grid_t *g, int n_bh,
 
     solver_ghost_exchange_all(m, 1);
 
-    if (verbose) printf("[AMR-MG] Running composite FMG (4-field)...\n");
-    composite_fmg(&mg);
+    double residual;
+    if (backend_is_gpu()) {
+        residual = gpu_solve_amr(&mg, tol, max_iter, verbose);
+    } else {
+        if (verbose) printf("[AMR-MG] Running composite FMG (4-field)...\n");
+        composite_fmg(&mg);
 
-    double residual = amr_residual_norm(&mg);
-    if (verbose) printf("[AMR-MG] FMG done: residual = %.6e\n", residual);
-
-    for (int cycle = 0; cycle < max_iter && residual > tol; cycle++) {
-        composite_vcycle(&mg, m->max_level);
         residual = amr_residual_norm(&mg);
-        if (verbose)
-            printf("[AMR-MG] V-cycle %d: residual = %.6e\n",
-                   cycle + 1, residual);
+        if (verbose) printf("[AMR-MG] FMG done: residual = %.6e\n", residual);
+
+        for (int cycle = 0; cycle < max_iter && residual > tol; cycle++) {
+            composite_vcycle(&mg, m->max_level);
+            residual = amr_residual_norm(&mg);
+            if (verbose)
+                printf("[AMR-MG] V-cycle %d: residual = %.6e\n",
+                       cycle + 1, residual);
+        }
     }
 
     /* Transfer solution: pass 1 (level 0) + pass 2 (fine levels) */
@@ -2194,20 +2573,25 @@ double relaxation_solve_amr_mesh(mesh_t *m, int n_bh, const puncture_data_t *bhs
 
     solver_ghost_exchange_all(m, 0);
 
-    /* Run composite FMG */
-    if (verbose) printf("[AMR-MG-mesh] Running composite FMG...\n");
-    composite_fmg(&mg);
+    double residual;
+    if (backend_is_gpu()) {
+        residual = gpu_solve_amr(&mg, tol, max_iter, verbose);
+    } else {
+        /* Run composite FMG */
+        if (verbose) printf("[AMR-MG-mesh] Running composite FMG...\n");
+        composite_fmg(&mg);
 
-    double residual = amr_residual_norm(&mg);
-    if (verbose) printf("[AMR-MG-mesh] FMG done: residual = %.6e\n", residual);
-
-    /* Post-FMG V-cycles */
-    for (int cycle = 0; cycle < max_iter && residual > tol; cycle++) {
-        composite_vcycle(&mg, m->max_level);
         residual = amr_residual_norm(&mg);
-        if (verbose)
-            printf("[AMR-MG-mesh] V-cycle %d: residual = %.6e\n",
-                   cycle + 1, residual);
+        if (verbose) printf("[AMR-MG-mesh] FMG done: residual = %.6e\n", residual);
+
+        /* Post-FMG V-cycles */
+        for (int cycle = 0; cycle < max_iter && residual > tol; cycle++) {
+            composite_vcycle(&mg, m->max_level);
+            residual = amr_residual_norm(&mg);
+            if (verbose)
+                printf("[AMR-MG-mesh] V-cycle %d: residual = %.6e\n",
+                       cycle + 1, residual);
+        }
     }
 
     /* Free MG hierarchy only — mesh is caller-owned */
@@ -2302,18 +2686,23 @@ double relaxation_solve_coupled_amr_mesh(mesh_t *m, int n_bh,
 
     solver_ghost_exchange_all(m, 1);
 
-    if (verbose) printf("[AMR-MG-mesh] Running composite FMG (4-field)...\n");
-    composite_fmg(&mg);
+    double residual;
+    if (backend_is_gpu()) {
+        residual = gpu_solve_amr(&mg, tol, max_iter, verbose);
+    } else {
+        if (verbose) printf("[AMR-MG-mesh] Running composite FMG (4-field)...\n");
+        composite_fmg(&mg);
 
-    double residual = amr_residual_norm(&mg);
-    if (verbose) printf("[AMR-MG-mesh] FMG done: residual = %.6e\n", residual);
-
-    for (int cycle = 0; cycle < max_iter && residual > tol; cycle++) {
-        composite_vcycle(&mg, m->max_level);
         residual = amr_residual_norm(&mg);
-        if (verbose)
-            printf("[AMR-MG-mesh] V-cycle %d: residual = %.6e\n",
-                   cycle + 1, residual);
+        if (verbose) printf("[AMR-MG-mesh] FMG done: residual = %.6e\n", residual);
+
+        for (int cycle = 0; cycle < max_iter && residual > tol; cycle++) {
+            composite_vcycle(&mg, m->max_level);
+            residual = amr_residual_norm(&mg);
+            if (verbose)
+                printf("[AMR-MG-mesh] V-cycle %d: residual = %.6e\n",
+                       cycle + 1, residual);
+        }
     }
 
     /* Free MG hierarchy only — mesh is caller-owned */
