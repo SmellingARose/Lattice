@@ -96,6 +96,13 @@ typedef struct {
      * Values: neighbor level, or -1 = domain boundary.
      * nblevel_table[b*27 + 13] = self level (center element). */
     int     *nblevel_table;   /* [n_blocks * 27]                           */
+
+    /* ---- persistent GPU device memory handle ----
+     * Opaque pointer to backend-specific device allocations (hip_device_ptrs_t
+     * on GPU, NULL on CPU). Allocated on first backend_map_pack, persists
+     * across sub-steps, freed by backend_free_pack_device or meshblock_pack_free.
+     * Eliminates hipMalloc/hipFree per sub-step in Berger-Oliger subcycling. */
+    void    *device_handle;   /* opaque: backend device memory (NULL on CPU) */
 } meshblock_pack_t;
 
 /* Pack indexing macro:

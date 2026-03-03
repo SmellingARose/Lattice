@@ -101,6 +101,10 @@ typedef struct {
     int n_refined;
     size_t coarse_total;
     int n_fields;
+    /* GPU-resident subcycling (Part B): temporal interp + cross-level map */
+    double *fields_old;          /* [total] pre-step data for temporal interp  */
+    int *cross_level_map;        /* [n_cross * 3] (fine_blk, dir, coarse_blk) */
+    int n_cross_entries;
 } hip_device_ptrs_t;
 
 static hip_device_ptrs_t d_ptrs;
@@ -169,50 +173,74 @@ void backend_map_pack(meshblock_pack_t *pack, const sim_params_t *p)
     int nb = pack->n_blocks;
     size_t total_bytes = total * sizeof(double);
 
-    memset(&d_ptrs, 0, sizeof(d_ptrs));
-    d_ptrs.total = total;
-    d_ptrs.nb = nb;
-    d_ptrs.n_fields = pack->n_fields;
+    hip_device_ptrs_t *dp = (hip_device_ptrs_t *)pack->device_handle;
 
-    /* Core field buffers */
-    d_ptrs.data    = (double *)hip_alloc_copy(pack->data,    total_bytes);
-    d_ptrs.rhs     = (double *)hip_alloc_copy(pack->rhs,     total_bytes);
-    d_ptrs.scratch = (double *)hip_alloc_copy(pack->scratch,  total_bytes);
-    if (pack->accum) {
-        d_ptrs.accum = (double *)hip_alloc_copy(pack->accum, total_bytes);
+    if (dp) {
+        /* Re-map: device memory persists. Sync data + coarse_data only. */
+        HIP_CHECK(hipMemcpyAsync(dp->data, pack->data, total_bytes,
+                                  hipMemcpyHostToDevice, gpu_stream));
+        if (dp->coarse_data && pack->coarse_data) {
+            HIP_CHECK(hipMemcpyAsync(dp->coarse_data, pack->coarse_data,
+                        dp->coarse_total * sizeof(double),
+                        hipMemcpyHostToDevice, gpu_stream));
+        }
+        /* Update params in case they changed between steps */
+        HIP_CHECK(hipMemcpyAsync(dp->params, p, sizeof(sim_params_t),
+                                  hipMemcpyHostToDevice, gpu_stream));
+        d_ptrs = *dp;
+        d_ptrs_valid = 1;
+        return;
     }
 
+    /* First map: allocate everything */
+    dp = (hip_device_ptrs_t *)calloc(1, sizeof(*dp));
+    dp->total = total;
+    dp->nb = nb;
+    dp->n_fields = pack->n_fields;
+
+    /* Core field buffers */
+    dp->data    = (double *)hip_alloc_copy(pack->data,    total_bytes);
+    dp->rhs     = (double *)hip_alloc_copy(pack->rhs,     total_bytes);
+    dp->scratch = (double *)hip_alloc_copy(pack->scratch,  total_bytes);
+    if (pack->accum) {
+        dp->accum = (double *)hip_alloc_copy(pack->accum, total_bytes);
+    }
+
+    /* Allocate fields_old for temporal interpolation (same size as data) */
+    HIP_CHECK(hipMalloc(&dp->fields_old, total_bytes));
+    HIP_CHECK(hipMemset(dp->fields_old, 0, total_bytes));
+
     /* Per-block metadata */
-    d_ptrs.origins         = (double *)hip_alloc_copy(pack->origins,
+    dp->origins         = (double *)hip_alloc_copy(pack->origins,
                               nb * 3 * sizeof(double));
-    d_ptrs.dx_per_block    = (double *)hip_alloc_copy(pack->dx_per_block,
+    dp->dx_per_block    = (double *)hip_alloc_copy(pack->dx_per_block,
                               nb * sizeof(double));
-    d_ptrs.on_boundary     = (int *)hip_alloc_copy(pack->on_boundary,
+    dp->on_boundary     = (int *)hip_alloc_copy(pack->on_boundary,
                               nb * 6 * sizeof(int));
-    d_ptrs.levels          = (int *)hip_alloc_copy(pack->levels,
+    dp->levels          = (int *)hip_alloc_copy(pack->levels,
                               nb * sizeof(int));
-    d_ptrs.neighbor_table  = (int *)hip_alloc_copy(pack->neighbor_table,
+    dp->neighbor_table  = (int *)hip_alloc_copy(pack->neighbor_table,
                               nb * NUM_NEIGHBORS * sizeof(int));
-    d_ptrs.refined_map     = (int *)hip_alloc_copy(pack->refined_map,
+    dp->refined_map     = (int *)hip_alloc_copy(pack->refined_map,
                               nb * sizeof(int));
-    d_ptrs.nblevel_table   = (int *)hip_alloc_copy(pack->nblevel_table,
+    dp->nblevel_table   = (int *)hip_alloc_copy(pack->nblevel_table,
                               nb * 27 * sizeof(int));
 
     /* Coarse data (if present) */
-    d_ptrs.n_refined = pack->n_refined;
+    dp->n_refined = pack->n_refined;
     if (pack->coarse_data && pack->n_refined > 0) {
         size_t coarse_total = (size_t)pack->n_refined * pack->n_fields
                             * pack->coarse_npts;
-        d_ptrs.coarse_total = coarse_total;
-        d_ptrs.coarse_data = (double *)hip_alloc_copy(pack->coarse_data,
+        dp->coarse_total = coarse_total;
+        dp->coarse_data = (double *)hip_alloc_copy(pack->coarse_data,
                               coarse_total * sizeof(double));
-        d_ptrs.coarse_neighbor_table = (int *)hip_alloc_copy(
+        dp->coarse_neighbor_table = (int *)hip_alloc_copy(
             pack->coarse_neighbor_table,
             pack->n_refined * NUM_NEIGHBORS * sizeof(int));
     }
 
     /* Simulation parameters (read-only) */
-    d_ptrs.params = (sim_params_t *)hip_alloc_copy(p, sizeof(sim_params_t));
+    dp->params = (sim_params_t *)hip_alloc_copy(p, sizeof(sim_params_t));
 
     /* Build compact boundary block ID list (2A optimization).
      * Only blocks with at least one on_boundary face need Sommerfeld. */
@@ -225,37 +253,285 @@ void backend_map_pack(meshblock_pack_t *pack, const sim_params_t *p)
                 has |= pack->on_boundary[b * 6 + face];
             if (has) h_bids[n_bdy++] = b;
         }
-        d_ptrs.n_boundary = n_bdy;
-        d_ptrs.boundary_block_ids = NULL;
+        dp->n_boundary = n_bdy;
+        dp->boundary_block_ids = NULL;
         if (n_bdy > 0) {
-            d_ptrs.boundary_block_ids = (int *)hip_alloc_copy(
+            dp->boundary_block_ids = (int *)hip_alloc_copy(
                 h_bids, n_bdy * sizeof(int));
         }
         free(h_bids);
     }
 
+    /* Cross-level map: not yet built (Part B builds it separately) */
+    dp->cross_level_map = NULL;
+    dp->n_cross_entries = 0;
+
+    /* Save handle to pack for persistence */
+    pack->device_handle = dp;
+    d_ptrs = *dp;
     d_ptrs_valid = 1;
 }
 
-/* Free all device memory (shared by unmap and unmap_sync) */
-static void hip_free_device_ptrs(void)
+/* Free all device allocations in a hip_device_ptrs_t */
+static void hip_free_device_ptrs_struct(hip_device_ptrs_t *dp)
 {
-    (void)hipFree(d_ptrs.data);
-    (void)hipFree(d_ptrs.rhs);
-    (void)hipFree(d_ptrs.scratch);
-    if (d_ptrs.accum) (void)hipFree(d_ptrs.accum);
-    (void)hipFree(d_ptrs.origins);
-    (void)hipFree(d_ptrs.dx_per_block);
-    (void)hipFree(d_ptrs.on_boundary);
-    (void)hipFree(d_ptrs.levels);
-    (void)hipFree(d_ptrs.neighbor_table);
-    (void)hipFree(d_ptrs.refined_map);
-    (void)hipFree(d_ptrs.nblevel_table);
-    if (d_ptrs.coarse_data) (void)hipFree(d_ptrs.coarse_data);
-    if (d_ptrs.coarse_neighbor_table) (void)hipFree(d_ptrs.coarse_neighbor_table);
-    if (d_ptrs.boundary_block_ids) (void)hipFree(d_ptrs.boundary_block_ids);
-    (void)hipFree(d_ptrs.params);
-    d_ptrs_valid = 0;
+    if (!dp) return;
+    (void)hipFree(dp->data);
+    (void)hipFree(dp->rhs);
+    (void)hipFree(dp->scratch);
+    if (dp->accum) (void)hipFree(dp->accum);
+    if (dp->fields_old) (void)hipFree(dp->fields_old);
+    (void)hipFree(dp->origins);
+    (void)hipFree(dp->dx_per_block);
+    (void)hipFree(dp->on_boundary);
+    (void)hipFree(dp->levels);
+    (void)hipFree(dp->neighbor_table);
+    (void)hipFree(dp->refined_map);
+    (void)hipFree(dp->nblevel_table);
+    if (dp->coarse_data) (void)hipFree(dp->coarse_data);
+    if (dp->coarse_neighbor_table) (void)hipFree(dp->coarse_neighbor_table);
+    if (dp->boundary_block_ids) (void)hipFree(dp->boundary_block_ids);
+    (void)hipFree(dp->params);
+    if (dp->cross_level_map) (void)hipFree(dp->cross_level_map);
+}
+
+/*
+ * Free persistent device memory for a pack and clear its handle.
+ * Called from meshblock_pack_free or explicitly on regrid.
+ */
+extern "C"
+void backend_free_pack_device(meshblock_pack_t *pack)
+{
+    hip_device_ptrs_t *dp = (hip_device_ptrs_t *)pack->device_handle;
+    if (!dp) return;
+    /* If this was the active pack, invalidate d_ptrs before freeing */
+    if (d_ptrs_valid && d_ptrs.data == dp->data)
+        d_ptrs_valid = 0;
+    hip_free_device_ptrs_struct(dp);
+    free(dp);
+    pack->device_handle = NULL;
+}
+
+/*
+ * Activate a pack's persistent device state as the current d_ptrs
+ * without any host↔device memcpy. Zero-cost pack switching for
+ * GPU-resident subcycling.
+ */
+extern "C"
+void backend_activate_pack(meshblock_pack_t *pack)
+{
+    hip_device_ptrs_t *dp = (hip_device_ptrs_t *)pack->device_handle;
+    if (!dp) return;
+    d_ptrs = *dp;
+    d_ptrs_valid = 1;
+}
+
+/*
+ * Save pre-step field data on device: fields_old = data (D2D copy).
+ * Used for temporal interpolation by finer levels during subcycling.
+ */
+extern "C"
+void backend_save_old_packed(meshblock_pack_t *pack)
+{
+    hip_device_ptrs_t *dp = (hip_device_ptrs_t *)pack->device_handle;
+    if (!dp || !dp->fields_old) return;
+    size_t bytes = dp->total * sizeof(double);
+    HIP_CHECK(hipMemcpyAsync(dp->fields_old, dp->data, bytes,
+                              hipMemcpyDeviceToDevice, gpu_stream));
+}
+
+/* Forward declarations: ghost exchange kernels used by cross-level and solver
+ * orchestrator functions before their actual definitions. */
+__global__ void hip_ghost_restrict(double *pk_data, double *coarse_data,
+                                    int *refined_map,
+                                    int nb, int ghost_f, int Nt_f,
+                                    int ghost_c, int N_c, int Nt_c,
+                                    size_t npts, size_t cnpts, int nf);
+__global__ void hip_ghost_coarse_fill(double *pk_data, double *coarse_data,
+                                       int *refined_map, int *levels,
+                                       int *nblevel_table, int *neighbor_table,
+                                       int *coarse_nbr_table,
+                                       double *origins, double *dx_arr,
+                                       int nb, int ghost, int N_c, int Nt_c,
+                                       int Nt_f, size_t npts, size_t cnpts,
+                                       int nf);
+__global__ void hip_ghost_extrap(double *coarse_data, int *refined_map,
+                                  int *nblevel_table,
+                                  int nb, int gh, int N_c, int Nt_c,
+                                  size_t cnpts, int nf,
+                                  int dim);
+__global__ void hip_ghost_prolong(double *pk_data, double *coarse_data,
+                                   int *refined_map, int *levels,
+                                   int *nblevel_table,
+                                   int nb, int ghost_f, int N_f, int Nt_f,
+                                   int ghost_c, int Nt_c,
+                                   size_t npts, size_t cnpts, int nf);
+__global__ void hip_cross_level_ghost_fill(
+    double *fine_coarse_data,
+    const double *coarse_data_new,
+    const double *coarse_data_old,
+    const int *cross_map,
+    int n_entries,
+    const int *fine_refined_map,
+    const double *fine_origins,
+    const double *coarse_origins,
+    const double *coarse_dx,
+    double frac,
+    int fine_nb, int coarse_nb,
+    int ghost_c, int N_c, int Nt_c,
+    int Nt_coarse_full,
+    size_t fine_cnpts, size_t coarse_npts,
+    int nf);
+
+/*
+ * Cross-level ghost fill entirely on device.
+ * Fills fine_pack's coarse buffer and ghosts from coarse_pack's data with
+ * temporal interpolation. Full 5-phase multilevel ghost exchange on device.
+ *
+ * Both packs must have persistent device handles (device_handle != NULL).
+ * Uses fine pack's existing restrict/prolong kernels with explicit pointers
+ * from both packs' device handles.
+ */
+extern "C"
+void backend_cross_level_ghost_fill_packed(
+    meshblock_pack_t *fine_pack,
+    meshblock_pack_t *coarse_pack,
+    double frac)
+{
+    hip_device_ptrs_t *fdp = (hip_device_ptrs_t *)fine_pack->device_handle;
+    hip_device_ptrs_t *cdp = (hip_device_ptrs_t *)coarse_pack->device_handle;
+    if (!fdp || !cdp) return;
+    if (fine_pack->n_refined == 0) return;
+
+    int nb = fine_pack->n_blocks;
+    int ghost = fine_pack->ghost;
+    int N_f = fine_pack->N;
+    int Nt_f = fine_pack->Ntotal;
+    size_t npts = fine_pack->npts;
+    int nf = fine_pack->n_fields;
+    int ghost_c = fine_pack->ghost;
+    int N_c = fine_pack->coarse_N;
+    int Nt_c = fine_pack->coarse_Ntotal;
+    size_t cnpts = fine_pack->coarse_npts;
+    int bs = 256;
+
+    /* Phase 2: Restrict fine interior → fine's coarse_buf.
+     * Uses fine pack's data and coarse_data on device. */
+    {
+        /* Activate fine pack's device state */
+        d_ptrs = *fdp;
+        d_ptrs_valid = 1;
+
+        int total = nb * nf * N_c * N_c;
+        int gs = (total + bs - 1) / bs;
+        hipLaunchKernelGGL(hip_ghost_restrict, gs, bs, 0, gpu_stream,
+                           fdp->data, fdp->coarse_data, fdp->refined_map,
+                           nb, ghost, Nt_f, ghost_c, N_c, Nt_c,
+                           npts, cnpts, nf);
+    }
+
+    /* Phase 3a: Same-level coarse_buf exchange among siblings.
+     * Re-launches hip_ghost_coarse_fill with fine pack's pointers only
+     * for the same-level branch (nlev == blk_level). */
+    {
+        int total = nb * NUM_NEIGHBORS;
+        int gs = (total + bs - 1) / bs;
+        hipLaunchKernelGGL(hip_ghost_coarse_fill, gs, bs, 0, gpu_stream,
+                           fdp->data, fdp->coarse_data,
+                           fdp->refined_map, fdp->levels,
+                           fdp->nblevel_table, fdp->neighbor_table,
+                           fdp->coarse_neighbor_table,
+                           fdp->origins, fdp->dx_per_block,
+                           nb, ghost, N_c, Nt_c, Nt_f,
+                           npts, cnpts, nf);
+    }
+
+    /* Phase 3b: Cross-level fill from coarser pack.
+     * For fine blocks with coarser-level neighbors, copy from coarse pack's
+     * data (or temporally interpolate with fields_old) into fine's coarse_buf.
+     *
+     * This reuses hip_ghost_coarse_fill's coarser-neighbor branch (nlev ==
+     * blk_level - 1) but reads from the coarse pack's data. Since that
+     * branch reads from pk_data at pack_nbr, and the coarser-level neighbors
+     * are NOT in the fine pack, this branch doesn't fire. Instead we need
+     * a dedicated cross-pack kernel.
+     *
+     * For now, the cross-level fill entries are recorded in the cross_level_map.
+     * If no map is built, skip (the CPU path handles this case). */
+    if (fdp->cross_level_map && fdp->n_cross_entries > 0) {
+        /* Launch cross-level ghost fill kernel.
+         * Each entry: (fine_block, direction, coarse_block).
+         * We copy a slab from coarse_pack's data (temporally interpolated)
+         * into fine_pack's coarse_data. */
+        int n_entries = fdp->n_cross_entries;
+        int gs = (n_entries + bs - 1) / bs;
+
+        /* Linear temporal interpolation: val = (1-frac)*old + frac*new.
+         * frac = 0.0 for first sub-step, 0.5 for second. */
+        hipLaunchKernelGGL(hip_cross_level_ghost_fill, gs, bs, 0, gpu_stream,
+                           fdp->coarse_data,
+                           cdp->data,
+                           cdp->fields_old,
+                           fdp->cross_level_map,
+                           n_entries,
+                           fdp->refined_map,
+                           fdp->origins,
+                           cdp->origins,
+                           cdp->dx_per_block,
+                           frac,
+                           nb, cdp->nb,
+                           ghost_c, N_c, Nt_c,
+                           coarse_pack->Ntotal,
+                           cnpts, coarse_pack->npts,
+                           nf);
+    }
+
+    /* Phase 3.5: Boundary extrapolation on fine's coarse_data (X, Y, Z) */
+    {
+        int total = nb * nf * Nt_c * Nt_c;
+        int gs = (total + bs - 1) / bs;
+        for (int dim = 0; dim < 3; dim++) {
+            hipLaunchKernelGGL(hip_ghost_extrap, gs, bs, 0, gpu_stream,
+                               fdp->coarse_data, fdp->refined_map,
+                               fdp->nblevel_table,
+                               nb, ghost_c, N_c, Nt_c, cnpts, nf, dim);
+        }
+    }
+
+    /* Phase 4: Prolongate fine's coarse_data → fine ghosts */
+    {
+        int total = nb * Nt_f * Nt_f * Nt_f;
+        int gs = (total + bs - 1) / bs;
+        hipLaunchKernelGGL(hip_ghost_prolong, gs, bs, 0, gpu_stream,
+                           fdp->data, fdp->coarse_data,
+                           fdp->refined_map, fdp->levels,
+                           fdp->nblevel_table,
+                           nb, ghost, N_f, Nt_f, ghost_c, Nt_c,
+                           npts, cnpts, nf);
+    }
+}
+
+/*
+ * Upload cross-level neighbor map to device. Stores in the pack's
+ * persistent device handle. If a previous map exists, frees it first.
+ */
+extern "C"
+void backend_upload_cross_level_map(meshblock_pack_t *pack,
+                                     const int *map, int count)
+{
+    hip_device_ptrs_t *dp = (hip_device_ptrs_t *)pack->device_handle;
+    if (!dp) return;
+
+    /* Free previous map if any */
+    if (dp->cross_level_map) {
+        (void)hipFree(dp->cross_level_map);
+        dp->cross_level_map = NULL;
+    }
+
+    dp->n_cross_entries = count;
+    if (count > 0) {
+        dp->cross_level_map = (int *)hip_alloc_copy(map, count * 3 * sizeof(int));
+    }
 }
 
 extern "C"
@@ -264,7 +540,8 @@ void backend_unmap_pack(meshblock_pack_t *pack)
     (void)pack;
     if (!d_ptrs_valid) return;
     HIP_CHECK(hipStreamSynchronize(gpu_stream));
-    hip_free_device_ptrs();
+    /* Do NOT free — device memory persists in pack->device_handle */
+    d_ptrs_valid = 0;
 }
 
 extern "C"
@@ -276,17 +553,9 @@ void backend_unmap_pack_sync(meshblock_pack_t *pack)
 
     size_t total_bytes = d_ptrs.total * sizeof(double);
 
-    /* Sync field buffers back to host */
-    HIP_CHECK(hipMemcpy(pack->data,    d_ptrs.data,    total_bytes,
+    /* Sync data back to host (not rhs/scratch/accum — temporary) */
+    HIP_CHECK(hipMemcpy(pack->data, d_ptrs.data, total_bytes,
               hipMemcpyDeviceToHost));
-    HIP_CHECK(hipMemcpy(pack->rhs,     d_ptrs.rhs,     total_bytes,
-              hipMemcpyDeviceToHost));
-    HIP_CHECK(hipMemcpy(pack->scratch,  d_ptrs.scratch, total_bytes,
-              hipMemcpyDeviceToHost));
-    if (d_ptrs.accum && pack->accum) {
-        HIP_CHECK(hipMemcpy(pack->accum, d_ptrs.accum, total_bytes,
-                  hipMemcpyDeviceToHost));
-    }
 
     /* Sync coarse data */
     if (d_ptrs.coarse_data && pack->coarse_data) {
@@ -295,7 +564,8 @@ void backend_unmap_pack_sync(meshblock_pack_t *pack)
                   hipMemcpyDeviceToHost));
     }
 
-    hip_free_device_ptrs();
+    /* Do NOT free — device memory persists in pack->device_handle */
+    d_ptrs_valid = 0;
 }
 
 /* ========================================================================
@@ -1118,6 +1388,95 @@ __global__ void hip_ghost_prolong(double *pk_data, double *coarse_data,
     }
 }
 
+/* Kernel 13b: Cross-level ghost fill (cross-pack, temporal interpolation).
+ * Each entry in cross_map encodes (fine_block, direction, coarse_block).
+ * One thread per entry. Reads from coarse pack's data (temporally
+ * interpolated), writes to fine pack's coarse_data buffer.
+ *
+ * Used by backend_cross_level_ghost_fill_packed for GPU-resident subcycling.
+ * Linear temporal interpolation: val = (1-frac)*old + frac*new.
+ */
+__global__ void hip_cross_level_ghost_fill(
+    double *fine_coarse_data,       /* fine pack's coarse buffer (dst) */
+    const double *coarse_data_new,  /* coarse pack's current data */
+    const double *coarse_data_old,  /* coarse pack's pre-step data */
+    const int *cross_map,           /* [n_entries * 3] */
+    int n_entries,
+    const int *fine_refined_map,    /* fine pack's refined_map */
+    const double *fine_origins,     /* fine pack's origins */
+    const double *coarse_origins,   /* coarse pack's origins */
+    const double *coarse_dx,        /* coarse pack's dx_per_block */
+    double frac,                    /* temporal interp fraction (0.0 or 0.5) */
+    int fine_nb, int coarse_nb,
+    int ghost_c, int N_c, int Nt_c,
+    int Nt_coarse_full,             /* coarse pack's Ntotal */
+    size_t fine_cnpts, size_t coarse_npts,
+    int nf)
+{
+    int e = blockIdx.x * blockDim.x + threadIdx.x;
+    if (e >= n_entries) return;
+
+    int fb = cross_map[e * 3 + 0];    /* fine pack block index */
+    int dir = cross_map[e * 3 + 1];   /* neighbor direction 0-25 */
+    int cb = cross_map[e * 3 + 2];    /* coarse pack block index */
+
+    int r = fine_refined_map[fb];
+    if (r < 0) return;
+
+    double dx_c = coarse_dx[cb];
+
+    /* Compute origin offset: fine block origin relative to coarse block origin,
+     * in coarse grid units. This maps fine's coarse_buf coordinates to coarse
+     * pack's data coordinates. */
+    int off_i = (int)round((fine_origins[fb*3+0] - coarse_origins[cb*3+0]) / dx_c);
+    int off_j = (int)round((fine_origins[fb*3+1] - coarse_origins[cb*3+1]) / dx_c);
+    int off_k = (int)round((fine_origins[fb*3+2] - coarse_origins[cb*3+2]) / dx_c);
+
+    int ox = d_nbr_offset[dir][0];
+    int oy = d_nbr_offset[dir][1];
+    int oz = d_nbr_offset[dir][2];
+
+    /* Compute destination range in fine's coarse_buf */
+    int dx_lo, dx_hi, dummy1, dummy2;
+    int dy_lo, dy_hi, dummy3, dummy4;
+    int dz_lo, dz_hi, dummy5, dummy6;
+    ghost_range_pack(ox, ghost_c, N_c, Nt_c, &dx_lo, &dx_hi, &dummy1, &dummy2);
+    ghost_range_pack(oy, ghost_c, N_c, Nt_c, &dy_lo, &dy_hi, &dummy3, &dummy4);
+    ghost_range_pack(oz, ghost_c, N_c, Nt_c, &dz_lo, &dz_hi, &dummy5, &dummy6);
+
+    double one_minus_frac = 1.0 - frac;
+
+    for (int f = 0; f < nf; f++) {
+        size_t dst_off = (size_t)r * nf * fine_cnpts + (size_t)f * fine_cnpts;
+        size_t src_off_new = (size_t)f * coarse_nb * coarse_npts
+                           + (size_t)cb * coarse_npts;
+        size_t src_off_old = src_off_new;  /* same layout for fields_old */
+
+        for (int kk = dz_lo; kk < dz_hi; kk++) {
+            int sk = kk + off_k;
+            if (sk < 0 || sk >= Nt_coarse_full) continue;
+            for (int jj = dy_lo; jj < dy_hi; jj++) {
+                int sj = jj + off_j;
+                if (sj < 0 || sj >= Nt_coarse_full) continue;
+                for (int ii = dx_lo; ii < dx_hi; ii++) {
+                    int si = ii + off_i;
+                    if (si < 0 || si >= Nt_coarse_full) continue;
+
+                    size_t src_idx = (size_t)sk * Nt_coarse_full * Nt_coarse_full
+                                   + (size_t)sj * Nt_coarse_full + si;
+                    double val_new = coarse_data_new[src_off_new + src_idx];
+                    double val_old = coarse_data_old[src_off_old + src_idx];
+                    double val = one_minus_frac * val_old + frac * val_new;
+
+                    size_t dst_idx = (size_t)kk * Nt_c * Nt_c
+                                   + (size_t)jj * Nt_c + ii;
+                    fine_coarse_data[dst_off + dst_idx] = val;
+                }
+            }
+        }
+    }
+}
+
 /* Kernel 14: Ghost exchange orchestrator */
 extern "C"
 void backend_ghost_exchange_packed(meshblock_pack_t *pack)
@@ -1313,6 +1672,27 @@ int backend_is_gpu(void) { return 1; }
 extern "C"
 void backend_map_pack_diag(meshblock_pack_t *pack)
 {
+    hip_device_ptrs_t *dp = (hip_device_ptrs_t *)pack->device_handle;
+
+    if (dp) {
+        /* Pack has persistent device memory — just sync data and activate.
+         * Data only (read-only diagnostics), metadata already on device. */
+        size_t total_bytes = dp->total * sizeof(double);
+        HIP_CHECK(hipMemcpyAsync(dp->data, pack->data, total_bytes,
+                                  hipMemcpyHostToDevice, gpu_stream));
+        if (dp->coarse_data && pack->coarse_data) {
+            HIP_CHECK(hipMemcpyAsync(dp->coarse_data, pack->coarse_data,
+                        dp->coarse_total * sizeof(double),
+                        hipMemcpyHostToDevice, gpu_stream));
+        }
+        d_ptrs = *dp;
+        d_ptrs_valid = 1;
+        return;
+    }
+
+    /* No persistent handle — allocate temporary diagnostic-only device memory.
+     * This path is used for leaf packs that haven't gone through
+     * backend_map_pack (e.g., diagnostics on a fresh pack). */
     int nb = pack->n_blocks;
     size_t total = (size_t)pack->n_fields * nb * pack->npts;
     size_t total_bytes = total * sizeof(double);
@@ -1364,9 +1744,14 @@ void backend_unmap_pack_diag(meshblock_pack_t *pack)
     if (!d_ptrs_valid) return;
     HIP_CHECK(hipStreamSynchronize(gpu_stream));
 
-    /* Free all device memory — no sync back (read-only mapping) */
+    if (pack->device_handle) {
+        /* Persistent: just deactivate d_ptrs, don't free */
+        d_ptrs_valid = 0;
+        return;
+    }
+
+    /* Temporary allocation: free all device memory — no sync back (read-only) */
     (void)hipFree(d_ptrs.data);
-    /* No rhs/scratch/accum to free */
     (void)hipFree(d_ptrs.origins);
     (void)hipFree(d_ptrs.dx_per_block);
     (void)hipFree(d_ptrs.on_boundary);
@@ -2050,6 +2435,16 @@ typedef struct {
     int nb;
     int n_fields;
     int valid;
+    /* Coarse buffer fields for device-side CF ghost exchange (Part C) */
+    int *refined_map;
+    double *coarse_data;
+    int *coarse_neighbor_table;
+    int n_refined;
+    size_t coarse_total, coarse_npts;
+    /* Cross-level neighbor map for solver ghost exchange.
+     * cf_map[b * 26 + n] = coarser-level pack index of neighbor, -1 = none. */
+    int *cf_map;                 /* [nb * 26]: coarser-level pack index per dir */
+    int *is_parent;              /* [nb]: 1 if block is non-leaf parent */
 } hip_solver_ptrs_t;
 
 static hip_solver_ptrs_t d_solver[MAX_SOLVER_SLOTS];
@@ -2097,6 +2492,32 @@ void backend_map_solver_pack(meshblock_pack_t *pack, int slot)
         sp->nblevel_table = (int *)hip_alloc_copy(pack->nblevel_table,
                               nb * 27 * sizeof(int));
 
+    /* Coarse buffer data (if present) for device-side CF ghost exchange */
+    sp->n_refined = pack->n_refined;
+    sp->refined_map = NULL;
+    sp->coarse_data = NULL;
+    sp->coarse_neighbor_table = NULL;
+    sp->coarse_total = 0;
+    sp->coarse_npts = 0;
+    sp->cf_map = NULL;
+    sp->is_parent = NULL;
+
+    if (pack->refined_map)
+        sp->refined_map = (int *)hip_alloc_copy(pack->refined_map,
+                            nb * sizeof(int));
+
+    if (pack->coarse_data && pack->n_refined > 0) {
+        size_t coarse_total = (size_t)pack->n_refined * nf * pack->coarse_npts;
+        sp->coarse_total = coarse_total;
+        sp->coarse_npts = pack->coarse_npts;
+        sp->coarse_data = (double *)hip_alloc_copy(pack->coarse_data,
+                            coarse_total * sizeof(double));
+        if (pack->coarse_neighbor_table)
+            sp->coarse_neighbor_table = (int *)hip_alloc_copy(
+                pack->coarse_neighbor_table,
+                pack->n_refined * NUM_NEIGHBORS * sizeof(int));
+    }
+
     sp->valid = 1;
 }
 
@@ -2113,6 +2534,11 @@ static void hip_free_solver_ptrs(hip_solver_ptrs_t *sp)
     (void)hipFree(sp->levels);
     (void)hipFree(sp->neighbor_table);
     if (sp->nblevel_table) (void)hipFree(sp->nblevel_table);
+    if (sp->refined_map) (void)hipFree(sp->refined_map);
+    if (sp->coarse_data) (void)hipFree(sp->coarse_data);
+    if (sp->coarse_neighbor_table) (void)hipFree(sp->coarse_neighbor_table);
+    if (sp->cf_map) (void)hipFree(sp->cf_map);
+    if (sp->is_parent) (void)hipFree(sp->is_parent);
     sp->valid = 0;
 }
 
@@ -3150,4 +3576,319 @@ double backend_mg_l2_norm_packed(meshblock_pack_t *pack, int slot,
 
     if (count == 0) return 0.0;
     return sqrt(sum / ((double)n_sol * count));
+}
+
+/* ========================================================================
+ * Device-side solver ghost exchange (Part C)
+ *
+ * Full multilevel ghost exchange using solver device pointers, replacing
+ * the host-side sync→store→exchange→load→sync round-trip pattern.
+ * Reuses evolution ghost exchange kernels (hip_ghost_restrict, hip_ghost_extrap,
+ * hip_ghost_prolong) with solver-slot pointers.
+ *
+ * New kernels:
+ *   - hip_mg_ghost_cf_fill: same-level coarse_buf exchange + cross-level
+ *     fill from a different solver slot (no temporal interpolation).
+ *   - hip_mg_zero_leaf_rhs: zero RHS on leaf (non-parent) blocks.
+ * ======================================================================== */
+
+/* Kernel: Fill coarse_buf ghosts for solver packs.
+ * Combined same-level coarse sibling exchange + cross-level fill from
+ * coarser solver slot. One thread per (block, 26-neighbor) pair.
+ *
+ * Same-level branch: copies between coarse_bufs of sibling blocks.
+ * Cross-level branch: reads from coarser solver slot's data array.
+ * No temporal interpolation (solver doesn't subcycle).
+ *
+ * Mirrors hip_ghost_coarse_fill but reads cross-level data from a
+ * separate device array (coarser solver slot) instead of the same pack. */
+__global__ void hip_mg_ghost_cf_fill(
+    double *coarse_data,            /* this level's coarse buffer */
+    const double *coarse_level_data,/* coarser level's solver data */
+    const int *refined_map,         /* [nb] → coarse_data slot index */
+    const int *levels,              /* [nb] block levels */
+    const int *nblevel_table,       /* [nb*27] neighbor levels */
+    const int *coarse_nbr_table,    /* [n_refined*26] coarse-buf neighbors */
+    const int *cf_map,              /* [nb*26] coarser-level pack index */
+    const double *origins,          /* [nb*3] this level's origins */
+    const double *coarse_origins,   /* [coarse_nb*3] coarser level's origins */
+    const double *coarse_dx,        /* [coarse_nb] coarser level's dx */
+    int nb, int coarse_nb,
+    int ghost, int N_c, int Nt_c,   /* coarse buffer dimensions */
+    int Nt_block,                    /* block Ntotal (same for all levels) */
+    size_t npts_block,               /* block npts = Nt_block^3 */
+    size_t cnpts,                    /* coarse_buf npts = Nt_c^3 */
+    int nf)
+{
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = nb * NUM_NEIGHBORS;
+    if (tid >= total) return;
+
+    int b = tid / NUM_NEIGHBORS;
+    int n = tid % NUM_NEIGHBORS;
+
+    int r = refined_map[b];
+    if (r < 0) return;
+
+    int blk_level = levels[b];
+    int ox = d_nbr_offset[n][0];
+    int oy = d_nbr_offset[n][1];
+    int oz = d_nbr_offset[n][2];
+    int nlev = nblevel_table[b*27 + (oz+1)*9 + (oy+1)*3 + (ox+1)];
+
+    if (nlev == blk_level) {
+        /* Same-level: exchange between sibling coarse bufs */
+        int coarse_nbr = coarse_nbr_table[r * NUM_NEIGHBORS + n];
+        if (coarse_nbr < 0) return;
+
+        int dx_lo, dx_hi, sx_lo, sx_hi;
+        int dy_lo, dy_hi, sy_lo, sy_hi;
+        int dz_lo, dz_hi, sz_lo, sz_hi;
+        ghost_range_pack(ox, ghost, N_c, Nt_c, &dx_lo, &dx_hi, &sx_lo, &sx_hi);
+        ghost_range_pack(oy, ghost, N_c, Nt_c, &dy_lo, &dy_hi, &sy_lo, &sy_hi);
+        ghost_range_pack(oz, ghost, N_c, Nt_c, &dz_lo, &dz_hi, &sz_lo, &sz_hi);
+
+        for (int f = 0; f < nf; f++) {
+            size_t dst_off = (size_t)r * nf * cnpts + (size_t)f * cnpts;
+            size_t src_off = (size_t)coarse_nbr * nf * cnpts + (size_t)f * cnpts;
+
+            for (int kk = 0; kk < (dz_hi - dz_lo); kk++) {
+                for (int jj = 0; jj < (dy_hi - dy_lo); jj++) {
+                    for (int ii = 0; ii < (dx_hi - dx_lo); ii++) {
+                        size_t dd = dst_off
+                            + (size_t)(dz_lo+kk) * Nt_c * Nt_c
+                            + (size_t)(dy_lo+jj) * Nt_c + (dx_lo+ii);
+                        size_t ss = src_off
+                            + (size_t)(sz_lo+kk) * Nt_c * Nt_c
+                            + (size_t)(sy_lo+jj) * Nt_c + (sx_lo+ii);
+                        coarse_data[dd] = coarse_data[ss];
+                    }
+                }
+            }
+        }
+    } else if (nlev >= 0 && nlev == blk_level - 1) {
+        /* Cross-level: read from coarser solver slot's data */
+        int coarse_blk = cf_map[b * NUM_NEIGHBORS + n];
+        if (coarse_blk < 0 || coarse_blk >= coarse_nb) return;
+
+        double dx_c = coarse_dx[coarse_blk];
+        int off_i = (int)round((origins[b*3+0] - coarse_origins[coarse_blk*3+0]) / dx_c);
+        int off_j = (int)round((origins[b*3+1] - coarse_origins[coarse_blk*3+1]) / dx_c);
+        int off_k = (int)round((origins[b*3+2] - coarse_origins[coarse_blk*3+2]) / dx_c);
+
+        int dx_lo, dx_hi, dummy1, dummy2;
+        int dy_lo, dy_hi, dummy3, dummy4;
+        int dz_lo, dz_hi, dummy5, dummy6;
+        ghost_range_pack(ox, ghost, N_c, Nt_c, &dx_lo, &dx_hi, &dummy1, &dummy2);
+        ghost_range_pack(oy, ghost, N_c, Nt_c, &dy_lo, &dy_hi, &dummy3, &dummy4);
+        ghost_range_pack(oz, ghost, N_c, Nt_c, &dz_lo, &dz_hi, &dummy5, &dummy6);
+
+        for (int f = 0; f < nf; f++) {
+            size_t dst_off = (size_t)r * nf * cnpts + (size_t)f * cnpts;
+            size_t src_off = (size_t)f * coarse_nb * npts_block
+                           + (size_t)coarse_blk * npts_block;
+
+            for (int kk = dz_lo; kk < dz_hi; kk++) {
+                int sk = kk + off_k;
+                if (sk < 0 || sk >= Nt_block) continue;
+                for (int jj = dy_lo; jj < dy_hi; jj++) {
+                    int sj = jj + off_j;
+                    if (sj < 0 || sj >= Nt_block) continue;
+                    for (int ii = dx_lo; ii < dx_hi; ii++) {
+                        int si = ii + off_i;
+                        if (si < 0 || si >= Nt_block) continue;
+                        coarse_data[dst_off + (size_t)kk*Nt_c*Nt_c + jj*Nt_c + ii] =
+                            coarse_level_data[src_off + (size_t)sk*Nt_block*Nt_block
+                                              + sj*Nt_block + si];
+                    }
+                }
+            }
+        }
+    }
+}
+
+/* Kernel: Zero RHS on leaf (non-parent) blocks.
+ * One thread per (block, point), skip parent blocks. */
+__global__ void hip_mg_zero_leaf_rhs(
+    double *rhs, const int *is_parent,
+    int nb, size_t npts, int n_sol)
+{
+    int tid = (int)((size_t)blockIdx.x * blockDim.x + threadIdx.x);
+    int total_threads = nb * (int)npts;
+    if (tid >= total_threads) return;
+
+    int b = tid / (int)npts;
+    int pt = tid % (int)npts;
+
+    if (is_parent[b]) return;  /* only zero leaf blocks */
+
+    size_t stride = (size_t)nb * npts;
+    size_t base = (size_t)b * npts + (size_t)pt;
+
+    for (int s = 0; s < n_sol; s++)
+        rhs[s * stride + base] = 0.0;
+}
+
+/* Orchestrator: full device-side solver ghost exchange at one AMR level.
+ *
+ * Reuses evolution kernels (hip_ghost_restrict, hip_ghost_extrap,
+ * hip_ghost_prolong) with solver-slot pointers. Uses new hip_mg_ghost_cf_fill
+ * for the combined same-level coarse exchange + cross-level fill.
+ *
+ * Phases:
+ *   1. Same-level exchange on data (existing hip_mg_ghost_same_level)
+ *   2. Restrict data → coarse_data (hip_ghost_restrict)
+ *   3. Fill coarse_data ghosts (hip_mg_ghost_cf_fill)
+ *   4. Extrapolate coarse_data boundaries (hip_ghost_extrap × 3 dims)
+ *   5. Prolongate coarse_data → fine data ghosts (hip_ghost_prolong)
+ *   6. Zero-Dirichlet BCs (hip_mg_bc)
+ */
+extern "C"
+void backend_mg_ghost_full_packed(meshblock_pack_t *pack, int slot,
+                                    int coarse_slot, int four_field)
+{
+    if (slot < 0 || slot >= MAX_SOLVER_SLOTS || !d_solver[slot].valid) return;
+    hip_solver_ptrs_t *sp = &d_solver[slot];
+
+    int nb = pack->n_blocks;
+    int ghost = pack->ghost;
+    int N = pack->N;
+    int Nt = pack->Ntotal;
+    size_t npts = pack->npts;
+    int n_sol = four_field ? 4 : 1;
+
+    /* Phase 1: Same-level exchange on data */
+    {
+        int total = nb * NUM_NEIGHBORS;
+        int bs = 256;
+        int gs = (total + bs - 1) / bs;
+        hipLaunchKernelGGL(hip_mg_ghost_same_level, gs, bs, 0, gpu_stream,
+                           sp->data, sp->neighbor_table,
+                           nb, npts, N, ghost, Nt, n_sol);
+    }
+
+    /* Phases 2-5: CF boundary fill (only for level > 0 with coarse data) */
+    if (sp->coarse_data && sp->n_refined > 0) {
+        int ghost_c = ghost;
+        int N_c = pack->coarse_N;
+        int Nt_c = pack->coarse_Ntotal;
+        size_t cnpts = pack->coarse_npts;
+
+        /* Phase 2: Restrict data → coarse_data */
+        {
+            int total = nb * n_sol * N_c * N_c;
+            int bs = 256;
+            int gs = (total + bs - 1) / bs;
+            hipLaunchKernelGGL(hip_ghost_restrict, gs, bs, 0, gpu_stream,
+                               sp->data, sp->coarse_data,
+                               sp->refined_map,
+                               nb, ghost, Nt, ghost_c, N_c, Nt_c,
+                               npts, cnpts, n_sol);
+        }
+
+        /* Phase 3: Fill coarse_data ghosts (same-level + cross-level) */
+        {
+            /* Get coarser level's pointers (NULL if no coarser level) */
+            const double *coarse_level_data = NULL;
+            const double *coarse_origins = NULL;
+            const double *coarse_dx = NULL;
+            int coarse_nb = 0;
+
+            if (coarse_slot >= 0 && coarse_slot < MAX_SOLVER_SLOTS
+                && d_solver[coarse_slot].valid) {
+                hip_solver_ptrs_t *csp = &d_solver[coarse_slot];
+                coarse_level_data = csp->data;
+                coarse_origins = csp->origins;
+                coarse_dx = csp->dx_per_block;
+                coarse_nb = csp->nb;
+            }
+
+            int total = nb * NUM_NEIGHBORS;
+            int bs = 256;
+            int gs = (total + bs - 1) / bs;
+            hipLaunchKernelGGL(hip_mg_ghost_cf_fill, gs, bs, 0, gpu_stream,
+                               sp->coarse_data, coarse_level_data,
+                               sp->refined_map, sp->levels,
+                               sp->nblevel_table, sp->coarse_neighbor_table,
+                               sp->cf_map,
+                               sp->origins, coarse_origins, coarse_dx,
+                               nb, coarse_nb,
+                               ghost_c, N_c, Nt_c,
+                               Nt, npts, cnpts, n_sol);
+        }
+
+        /* Phase 4: Boundary extrapolation (3 dimensions) */
+        {
+            int total = nb * n_sol * Nt_c * Nt_c;
+            int bs = 256;
+            int gs = (total + bs - 1) / bs;
+            for (int dim = 0; dim < 3; dim++) {
+                hipLaunchKernelGGL(hip_ghost_extrap, gs, bs, 0, gpu_stream,
+                                   sp->coarse_data, sp->refined_map,
+                                   sp->nblevel_table,
+                                   nb, ghost, N_c, Nt_c, cnpts, n_sol, dim);
+            }
+        }
+
+        /* Phase 5: Prolongate coarse_data → fine data ghosts */
+        {
+            int total = nb * Nt * Nt * Nt;
+            int bs = 256;
+            int gs = (total + bs - 1) / bs;
+            hipLaunchKernelGGL(hip_ghost_prolong, gs, bs, 0, gpu_stream,
+                               sp->data, sp->coarse_data,
+                               sp->refined_map, sp->levels,
+                               sp->nblevel_table,
+                               nb, ghost, N, Nt, ghost_c, Nt_c,
+                               npts, cnpts, n_sol);
+        }
+    }
+
+    /* Phase 6: Zero-Dirichlet BCs */
+    {
+        int total_threads = nb * Nt * Nt * Nt;
+        int bs = 256;
+        int gs = (total_threads + bs - 1) / bs;
+        hipLaunchKernelGGL(hip_mg_bc, gs, bs, 0, gpu_stream,
+                           sp->data, sp->on_boundary,
+                           nb, npts, N, ghost, Nt, n_sol, total_threads);
+    }
+}
+
+/* Zero RHS on leaf (non-parent) blocks on device. */
+extern "C"
+void backend_mg_zero_leaf_rhs_packed(meshblock_pack_t *pack, int slot,
+                                       int four_field)
+{
+    if (slot < 0 || slot >= MAX_SOLVER_SLOTS || !d_solver[slot].valid) return;
+    hip_solver_ptrs_t *sp = &d_solver[slot];
+
+    if (!sp->is_parent) return;  /* no parent info uploaded */
+
+    int nb = pack->n_blocks;
+    size_t npts = pack->npts;
+    int n_sol = four_field ? 4 : 1;
+
+    int total_threads = nb * (int)npts;
+    int bs = 256;
+    int gs = (total_threads + bs - 1) / bs;
+    hipLaunchKernelGGL(hip_mg_zero_leaf_rhs, gs, bs, 0, gpu_stream,
+                       sp->rhs, sp->is_parent,
+                       nb, npts, n_sol);
+}
+
+/* Upload cross-level neighbor map and parent mask to a solver device slot. */
+extern "C"
+void backend_mg_upload_cf_data(int slot, const int *cf_map, int nb,
+                                const int *is_parent)
+{
+    if (slot < 0 || slot >= MAX_SOLVER_SLOTS || !d_solver[slot].valid) return;
+    hip_solver_ptrs_t *sp = &d_solver[slot];
+
+    /* Free previous allocations if any */
+    if (sp->cf_map) (void)hipFree(sp->cf_map);
+    if (sp->is_parent) (void)hipFree(sp->is_parent);
+
+    sp->cf_map = (int *)hip_alloc_copy(cf_map, (size_t)nb * NUM_NEIGHBORS * sizeof(int));
+    sp->is_parent = (int *)hip_alloc_copy(is_parent, (size_t)nb * sizeof(int));
 }

@@ -1158,6 +1158,24 @@ void backend_enforce_algebraic_packed(meshblock_pack_t *pack)
 int backend_is_gpu(void) { return 0; }
 
 /* ========================================================================
+ * Persistent per-pack device memory — CPU stubs (all no-ops)
+ * ======================================================================== */
+
+void backend_free_pack_device(meshblock_pack_t *pack) { (void)pack; }
+void backend_activate_pack(meshblock_pack_t *pack) { (void)pack; }
+void backend_save_old_packed(meshblock_pack_t *pack) { (void)pack; }
+void backend_cross_level_ghost_fill_packed(
+    meshblock_pack_t *fine_pack, meshblock_pack_t *coarse_pack, double frac)
+{
+    (void)fine_pack; (void)coarse_pack; (void)frac;
+}
+void backend_upload_cross_level_map(meshblock_pack_t *pack,
+                                     const int *map, int count)
+{
+    (void)pack; (void)map; (void)count;
+}
+
+/* ========================================================================
  * GPU diagnostic kernels — CPU implementations
  *
  * Map/unmap are no-ops. Diagnostic functions reuse the pack's host data
@@ -2079,4 +2097,24 @@ double backend_mg_l2_norm_packed(meshblock_pack_t *pack, int slot,
 
     if (count == 0) return 0.0;
     return sqrt(sum / ((double)n_sol * count));
+}
+
+/* Device-side solver ghost exchange — CPU stubs (no-ops).
+ * CPU solver uses host-side ghost exchange directly. */
+void backend_mg_ghost_full_packed(meshblock_pack_t *pack, int slot,
+                                    int coarse_slot, int four_field)
+{
+    (void)pack; (void)slot; (void)coarse_slot; (void)four_field;
+}
+
+void backend_mg_zero_leaf_rhs_packed(meshblock_pack_t *pack, int slot,
+                                       int four_field)
+{
+    (void)pack; (void)slot; (void)four_field;
+}
+
+void backend_mg_upload_cf_data(int slot, const int *cf_map, int nb,
+                                const int *is_parent)
+{
+    (void)slot; (void)cf_map; (void)nb; (void)is_parent;
 }

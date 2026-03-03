@@ -201,6 +201,74 @@ void backend_enforce_algebraic_packed(meshblock_pack_t *pack);
 int backend_is_gpu(void);
 
 /* ========================================================================
+ * Persistent per-pack device memory API
+ *
+ * Eliminates hipMalloc/hipFree per sub-step. Device memory lives with
+ * the pack (via pack->device_handle). First backend_map_pack allocates;
+ * subsequent calls only sync data. backend_free_pack_device releases
+ * device memory (called from meshblock_pack_free or explicitly).
+ *
+ * backend_activate_pack sets d_ptrs from a pack's device handle without
+ * any memcpy — used by GPU-resident subcycling where data is already
+ * on device.
+ *
+ * backend_save_old_packed does a device→device copy of the data buffer
+ * to a pre-step snapshot (fields_old) for temporal interpolation.
+ *
+ * backend_cross_level_ghost_fill_packed performs the full 5-phase
+ * cross-level ghost exchange entirely on device, reading the coarser
+ * pack's data (with temporal interpolation) to fill the finer pack's
+ * coarse buffer.
+ * ======================================================================== */
+
+/*
+ * Free persistent device memory associated with a pack.
+ * Called from meshblock_pack_free or explicitly on regrid.
+ * CPU backend: no-op.
+ */
+void backend_free_pack_device(meshblock_pack_t *pack);
+
+/*
+ * Activate a pack's persistent device state as the current d_ptrs
+ * without any host↔device memcpy. Used by GPU-resident subcycling
+ * to switch between level packs that are already on device.
+ * CPU backend: no-op.
+ */
+void backend_activate_pack(meshblock_pack_t *pack);
+
+/*
+ * Save pre-step field data on device: fields_old = data (D2D copy).
+ * Used for temporal interpolation by finer levels during subcycling.
+ * CPU backend: no-op (CPU path uses block-level fields_old).
+ */
+void backend_save_old_packed(meshblock_pack_t *pack);
+
+/*
+ * Cross-level ghost fill entirely on device. Fills fine_pack's
+ * coarse buffer from coarse_pack's data with temporal interpolation.
+ * Executes the full 5-phase multilevel ghost exchange:
+ *   1. Restrict fine interior → fine's coarse_buf
+ *   2. Same-level coarse_buf exchange
+ *   3. Cross-level fill (temporal interp from coarse pack)
+ *   4. Boundary extrapolation
+ *   5. Prolongation into fine ghosts
+ * CPU backend: no-op (CPU path uses ghost_fill_from_coarser).
+ */
+void backend_cross_level_ghost_fill_packed(
+    meshblock_pack_t *fine_pack,
+    meshblock_pack_t *coarse_pack,
+    double frac);
+
+/*
+ * Upload cross-level neighbor map to device for a pack.
+ * Called after build_cross_level_map in rk4.c.
+ * Stores the map in the pack's device handle.
+ * CPU backend: no-op.
+ */
+void backend_upload_cross_level_map(meshblock_pack_t *pack,
+                                     const int *map, int count);
+
+/* ========================================================================
  * GPU diagnostic kernels
  *
  * Lightweight on-device diagnostics: constraints, lapse, separation, NaN.
@@ -413,6 +481,42 @@ void backend_mg_prolong_fmg_packed(meshblock_pack_t *coarse_pack, int coarse_slo
  */
 double backend_mg_l2_norm_packed(meshblock_pack_t *pack, int slot,
                                   int four_field);
+
+/*
+ * Full device-side ghost exchange for solver pack at a given AMR level.
+ * Replaces the host-side sync→store→exchange→load→sync round-trip
+ * pattern in composite_vcycle_gpu. All phases run on device:
+ *   1. Same-level exchange on data
+ *   2. Restrict data → coarse_data (if level > 0)
+ *   3. Fill coarse_data ghosts (same-level sibling + cross-level from coarser slot)
+ *   4. Extrapolate coarse_data boundary ghosts
+ *   5. Prolongate coarse_data → data ghosts
+ *   6. Zero-Dirichlet BCs
+ *
+ * coarse_slot: d_solver[] slot of the coarser level, -1 if no coarser level.
+ * CPU backend: no-op (CPU solver uses host-side ghost exchange directly).
+ */
+void backend_mg_ghost_full_packed(meshblock_pack_t *pack, int slot,
+                                    int coarse_slot, int four_field);
+
+/*
+ * Zero the RHS of leaf blocks (non-parent blocks) on device.
+ * Used by the solver to zero leaf RHS before restriction overwrites parents.
+ * CPU backend: no-op.
+ */
+void backend_mg_zero_leaf_rhs_packed(meshblock_pack_t *pack, int slot,
+                                       int four_field);
+
+/*
+ * Upload cross-level neighbor map and parent mask to a solver device slot.
+ * cf_map: [nb * 26] table — for block b, direction n, cf_map[b*26+n] is the
+ *         coarser-level pack index of the neighbor (-1 if none).
+ * is_parent: [nb] — 1 if block has children (restriction target), 0 = leaf.
+ * Called after backend_map_solver_pack and before any ghost exchange.
+ * CPU backend: no-op.
+ */
+void backend_mg_upload_cf_data(int slot, const int *cf_map, int nb,
+                                const int *is_parent);
 
 EXTERN_C_END
 

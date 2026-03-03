@@ -2466,3 +2466,117 @@ All are embarrassingly parallel (each block/k-slice writes to independent memory
 - Chombo AMRMultiGrid: `mgRelax` + `homogeneousCFInterp`
 - Athena++ MG (Tomida & Stone 2023): same pattern
 - Afivo octree-mg: ghost cells from parent at CF boundaries
+
+---
+
+## Zero-PCIe GPU Pipeline (Parts A + B + C)
+
+Root cause of ~200 s/step GPU performance: `backend_map_pack()` did
+hipMalloc + hipMemcpy for ALL buffers (~730 MB) on EVERY sub-step, and
+`backend_unmap_pack_sync()` did hipMemcpy + hipFree every sub-step. With 4
+AMR levels, Berger-Oliger subcycling creates ~31 sub-steps per global step.
+Net GPU utilization: ~3% → reported as 0%.
+
+### Part A: Persistent Per-Pack Device Memory
+
+Added `void *device_handle` to `meshblock_pack_t` — opaque pointer to
+`hip_device_ptrs_t` on GPU (NULL on CPU). Device memory allocated on first
+`backend_map_pack()`, persists across sub-steps, freed only by
+`backend_free_pack_device()` or `meshblock_pack_free()`.
+
+- `backend_map_pack()`: first call allocates + copies everything; subsequent
+  calls sync only data + coarse_data (metadata unchanged)
+- `backend_unmap_pack_sync()`: syncs data + coarse_data back to host, does NOT
+  free device memory
+- `backend_activate_pack()`: sets global `d_ptrs` from pack's device handle
+  without any memcpy — used by GPU-resident subcycling
+- `backend_free_pack_device()`: frees all device allocations (called from
+  `meshblock_pack_free()`)
+
+Eliminates ~465 hipMalloc/hipFree calls per global step.
+
+### Part B: GPU-Resident Evolution
+
+Zero PCIe transfers during Berger-Oliger subcycling. All data stays on device
+across sub-steps.
+
+New `hip_device_ptrs_t` fields:
+- `fields_old`: pre-step data for temporal interpolation by finer levels
+- `cross_level_map`: (fine_block, direction, coarse_block) triples for
+  cross-pack ghost fill
+
+New kernels/functions:
+- `hip_cross_level_ghost_fill`: reads from coarser pack's data (new + old)
+  with temporal interpolation, writes to fine pack's coarse_data
+- `backend_cross_level_ghost_fill_packed()`: orchestrates 5-phase cross-level
+  ghost exchange entirely on device (restrict → same-level coarse → cross-level
+  fill → extrapolation → prolongation)
+- `backend_save_old_packed()`: device→device copy of data to fields_old
+
+New evolution path in `rk4.c`:
+- `step_level_gpu()`: single-level RK4 step entirely on device (no map/unmap)
+- `subcycle_level_gpu()`: recursive Berger-Oliger subcycling on device
+- `gpu_ensure_level_packs()`: builds level packs + cross-level maps on first
+  step or after regrid
+- `gpu_sync_all_to_host()`: single sync of all levels at end of global step
+
+Entry point: `rk4_step_mesh()` dispatches to `subcycle_level_gpu()` when
+`backend_is_gpu()` and `max_level > 0`.
+
+### Part C: Solver Round-Trip Elimination
+
+Replaced 7 host↔device round-trip patterns in the AMR composite multigrid
+solver with device-side ghost exchange kernels. Each round-trip was a 5-line
+sequence: `backend_sync_solver_data_to_host → meshblock_pack_store →
+solver_full_exchange → meshblock_pack_load → backend_sync_solver_data_to_device`.
+
+New solver kernel/function:
+- `hip_mg_ghost_cf_fill`: combined same-level coarse_buf exchange + cross-level
+  fill from coarser solver slot. One thread per (block, 26-neighbor) pair.
+  Same-level branch copies between sibling coarse_bufs via `coarse_nbr_table`.
+  Cross-level branch reads from `d_solver[coarse_slot].data` using origin
+  offset computation.
+- `hip_mg_zero_leaf_rhs`: zeros RHS fields on leaf blocks (skips parents),
+  replacing a host round-trip for leaf RHS zeroing.
+- `backend_mg_ghost_full_packed(pack, slot, coarse_slot, four_field)`:
+  orchestrates 6-phase device-side solver ghost exchange:
+  1. Same-level exchange (`hip_mg_ghost_same_level`)
+  2. Restrict data → coarse_data (`hip_ghost_restrict`, reused from evolution)
+  3. CF fill (`hip_mg_ghost_cf_fill`, new kernel)
+  4. Boundary extrapolation × 3 dims (`hip_ghost_extrap`, reused)
+  5. Prolongation coarse_data → fine ghosts (`hip_ghost_prolong`, reused)
+  6. Zero-Dirichlet BCs (`hip_mg_bc`)
+- `backend_mg_upload_cf_data(slot, cf_map, nb, is_parent)`: uploads cross-level
+  neighbor map + parent mask to solver slot
+- `gpu_build_cf_maps()` in `relaxation_amr.c`: builds cf_map[nb * 26] and
+  is_parent[nb] for each AMR level, uploads via `backend_mg_upload_cf_data`
+
+Round-trips replaced:
+- `composite_vcycle_gpu()`: 5 round-trips → 5 device-side calls
+- `composite_fmg_gpu()`: 1 round-trip → 1 device-side call
+- `amr_residual_norm_gpu()`: 1 round-trip → 1 device-side call
+
+Evolution kernels (`hip_ghost_restrict`, `hip_ghost_extrap`, `hip_ghost_prolong`)
+reused directly with solver pointers — they take raw pointer arguments, not globals.
+
+### Modified Files
+
+| File | Changes |
+|------|---------|
+| `meshblock_pack.h` | `void *device_handle` field |
+| `meshblock_pack.c` | Init handle to NULL; call `backend_free_pack_device()` in free |
+| `backend.h` | New declarations: `backend_free_pack_device`, `backend_activate_pack`, `backend_save_old_packed`, `backend_cross_level_ghost_fill_packed`, `backend_mg_ghost_full_packed`, `backend_mg_zero_leaf_rhs_packed`, `backend_mg_upload_cf_data` |
+| `backend_hip.cpp` | Persistent device ptrs, `fields_old` + `cross_level_map`, solver `cf_map` + `is_parent`, new kernels, orchestrator functions (+851 lines) |
+| `backend_cpu.c` | No-op stubs for all new functions |
+| `rk4.c` | `step_level_gpu`, `subcycle_level_gpu`, `gpu_ensure_level_packs`, `gpu_sync_all_to_host`, `build_cross_level_map` (+251 lines) |
+| `relaxation_amr.c` | `gpu_build_cf_maps`, replaced 7 round-trip patterns |
+
+### Test Results
+
+- CPU build: zero warnings, all tests pass
+- GPU build (NVIDIA Tesla P40): zero warnings
+  - GPU kernel isolation: ALL PASSED
+  - Bowen-York 33/33: PASSED
+  - HiSpID 26/26: PASSED
+  - AMR relaxation: OOM (only 2.5 GB free on P40 — external resource constraint)
+- Convergence: unaffected (CPU paths unchanged)

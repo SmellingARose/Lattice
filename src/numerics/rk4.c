@@ -588,6 +588,238 @@ static void subcycle_level(mesh_t *m, const sim_params_t *p,
 }
 
 /* ========================================================================
+ * GPU-resident Berger-Oliger subcycling
+ *
+ * Zero PCIe transfers during evolution. Data uploaded once to device,
+ * stays resident across all sub-steps, downloaded once for output.
+ *
+ * Key differences from CPU subcycling:
+ *   - Cross-level ghosts filled on device (backend_cross_level_ghost_fill_packed)
+ *   - Pack switching via backend_activate_pack (no memcpy)
+ *   - Temporal interp state saved on device (backend_save_old_packed)
+ *   - Single host sync after all levels done (gpu_sync_all_to_host)
+ *
+ * Ref: Berger & Oliger (1984), JCP 53:484.
+ * ======================================================================== */
+
+/*
+ * Build cross-level neighbor map for GPU-resident ghost fill.
+ * For each fine block with a coarser-level neighbor, records
+ * (fine_pack_idx, direction, coarse_pack_idx) for the cross-level
+ * ghost fill kernel.
+ */
+static void build_cross_level_map(mesh_t *m, meshblock_pack_t *fine_pack,
+                                   meshblock_pack_t *coarse_pack)
+{
+    /* Build reverse map: mesh_block_id → coarse pack index */
+    int max_id = 0;
+    for (int i = 0; i < coarse_pack->n_blocks; i++)
+        if (coarse_pack->block_ids[i] > max_id)
+            max_id = coarse_pack->block_ids[i];
+    for (int i = 0; i < fine_pack->n_blocks; i++)
+        if (fine_pack->block_ids[i] > max_id)
+            max_id = fine_pack->block_ids[i];
+
+    int *coarse_rev = calloc(max_id + 1, sizeof(int));
+    for (int i = 0; i <= max_id; i++) coarse_rev[i] = -1;
+    for (int b = 0; b < coarse_pack->n_blocks; b++)
+        coarse_rev[coarse_pack->block_ids[b]] = b;
+
+    /* Scan fine pack for cross-level neighbors */
+    int max_entries = fine_pack->n_blocks * NUM_NEIGHBORS;
+    int *map = malloc(max_entries * 3 * sizeof(int));
+    int count = 0;
+
+    for (int fb = 0; fb < fine_pack->n_blocks; fb++) {
+        int bid = fine_pack->block_ids[fb];
+        block_t *blk = m->blocks[bid];
+        int blk_level = blk->loc.level;
+
+        for (int d = 0; d < NUM_NEIGHBORS; d++) {
+            int ox = nbr_offset[d][0];
+            int oy = nbr_offset[d][1];
+            int oz = nbr_offset[d][2];
+            int nlev = blk->nblevel[oz+1][oy+1][ox+1];
+
+            if (nlev >= 0 && nlev == blk_level - 1) {
+                /* This fine block has a coarser-level neighbor in direction d */
+                int nbr_id = blk->neighbor_ids[d];
+                if (nbr_id >= 0 && nbr_id <= max_id) {
+                    int ci = coarse_rev[nbr_id];
+                    if (ci >= 0) {
+                        map[count*3+0] = fb;
+                        map[count*3+1] = d;
+                        map[count*3+2] = ci;
+                        count++;
+                    }
+                }
+            }
+        }
+    }
+
+    /* Upload to device (stored in fine pack's device handle) via backend */
+    if (count > 0) {
+        /* The device handle's cross_level_map is set by the backend.
+         * We store the host map temporarily and let backend upload it. */
+        extern void backend_upload_cross_level_map(meshblock_pack_t *pack,
+                                                    const int *map, int count);
+        backend_upload_cross_level_map(fine_pack, map, count);
+    }
+
+    free(map);
+    free(coarse_rev);
+}
+
+/*
+ * Ensure all level packs exist and are mapped to device.
+ * Called once at start of GPU-resident subcycling (or after regrid).
+ */
+static void gpu_ensure_level_packs(mesh_t *m, const sim_params_t *p)
+{
+    for (int L = 0; L <= m->max_level; L++) {
+        if (!m->level_packs[L] || m->packs_dirty) {
+            if (m->level_packs[L])
+                meshblock_pack_free(m->level_packs[L]);
+            m->level_packs[L] = mesh_build_level_pack(m, L, p->rk_method);
+            if (!m->level_packs[L]) continue;
+
+            /* Map to device (first map: allocates everything) */
+            backend_map_pack(m->level_packs[L], p);
+            backend_unmap_pack(m->level_packs[L]);
+        } else if (!m->level_packs[L]->device_handle) {
+            /* Pack exists but no device memory yet — sync and map */
+            meshblock_pack_sync_from_blocks(m->level_packs[L], m->blocks);
+            if (m->level_packs[L]->n_refined > 0)
+                meshblock_pack_load_coarse(m->level_packs[L], m->blocks);
+            backend_map_pack(m->level_packs[L], p);
+            backend_unmap_pack(m->level_packs[L]);
+        } else {
+            /* Pack exists and has device memory — sync data H→D */
+            meshblock_pack_sync_from_blocks(m->level_packs[L], m->blocks);
+            if (m->level_packs[L]->n_refined > 0)
+                meshblock_pack_load_coarse(m->level_packs[L], m->blocks);
+            backend_map_pack(m->level_packs[L], p);
+            backend_unmap_pack(m->level_packs[L]);
+        }
+    }
+
+    /* Build cross-level maps for levels > 0 */
+    for (int L = 1; L <= m->max_level; L++) {
+        if (m->level_packs[L] && m->level_packs[L-1] &&
+            m->level_packs[L]->n_refined > 0) {
+            build_cross_level_map(m, m->level_packs[L], m->level_packs[L-1]);
+        }
+    }
+}
+
+/*
+ * Sync all level packs' data from device back to host blocks.
+ * Called once after the full GPU-resident subcycling completes.
+ * Also runs ghost_exchange and restrict_to_parents on host for consistency.
+ */
+static void gpu_sync_all_to_host(mesh_t *m)
+{
+    for (int L = 0; L <= m->max_level; L++) {
+        meshblock_pack_t *pack = m->level_packs[L];
+        if (!pack) continue;
+
+        /* Activate this pack's device state and sync data D→H */
+        backend_activate_pack(pack);
+        backend_unmap_pack_sync(pack);
+
+        /* Copy device-synced data back to block structs */
+        meshblock_pack_sync_to_blocks(pack, m->blocks);
+    }
+
+    /* Restore inter-block consistency on host */
+    ghost_exchange(m);
+    mesh_restrict_to_parents(m);
+}
+
+/*
+ * GPU-resident level step: all kernels on device, no PCIe transfers.
+ * Classic RK4 only (GPU-resident path requires RK_CLASSIC).
+ */
+static void step_level_gpu(mesh_t *m, const sim_params_t *p,
+                            int level, double dt_level, double frac)
+{
+    meshblock_pack_t *pack = m->level_packs[level];
+    if (!pack) return;
+
+    /* Cross-level ghost fill entirely on device */
+    if (level > 0 && m->level_packs[level - 1])
+        backend_cross_level_ghost_fill_packed(
+            pack, m->level_packs[level - 1], frac);
+
+    /* Set global d_ptrs from this pack's device handle (no memcpy) */
+    backend_activate_pack(pack);
+
+    /* Classic RK4 — identical kernel sequence as existing step_level */
+    backend_copy_packed(pack, PACK_BUF_SCRATCH, PACK_BUF_DATA);
+    backend_zero_packed(pack, PACK_BUF_ACCUM);
+
+    /* Stage 1 */
+    backend_ghost_exchange_packed(pack);
+    backend_compute_rhs_packed(pack, p);
+    backend_sommerfeld_packed(pack, p);
+    backend_rk4_stage_packed(pack, 1.0/6.0, 0.5, dt_level);
+
+    /* Stage 2 */
+    backend_ghost_exchange_packed(pack);
+    backend_compute_rhs_packed(pack, p);
+    backend_sommerfeld_packed(pack, p);
+    backend_rk4_stage_packed(pack, 1.0/3.0, 0.5, dt_level);
+
+    /* Stage 3 */
+    backend_ghost_exchange_packed(pack);
+    backend_compute_rhs_packed(pack, p);
+    backend_sommerfeld_packed(pack, p);
+    backend_rk4_stage_packed(pack, 1.0/3.0, 1.0, dt_level);
+
+    /* Stage 4 */
+    backend_ghost_exchange_packed(pack);
+    backend_compute_rhs_packed(pack, p);
+    backend_sommerfeld_packed(pack, p);
+    backend_rk4_final_packed(pack, 1.0/6.0, dt_level);
+
+    backend_enforce_algebraic_packed(pack);
+    /* NO unmap — data stays on device */
+}
+
+/*
+ * GPU-resident recursive subcycling.
+ * Same algorithm as subcycle_level() but operates entirely on device.
+ * No PCIe transfers between sub-steps.
+ *
+ * Ref: Berger & Oliger (1984), JCP 53:484.
+ */
+static void subcycle_level_gpu(mesh_t *m, const sim_params_t *p,
+                                int level, double dt_level, double t_start,
+                                int sub_step)
+{
+    /* Save pre-step state on device for temporal interp by finer levels */
+    if (level < m->max_level && m->level_packs[level])
+        backend_save_old_packed(m->level_packs[level]);
+
+    /* Temporal interpolation fraction (same as CPU path) */
+    double frac = (level > 0) ? sub_step * 0.5 : 0.0;
+
+    step_level_gpu(m, p, level, dt_level, frac);
+
+    /* Subcycle finer levels: 2 sub-steps at dt/2 */
+    if (level < m->max_level) {
+        subcycle_level_gpu(m, p, level + 1, dt_level / 2.0, t_start, 0);
+        subcycle_level_gpu(m, p, level + 1, dt_level / 2.0,
+                           t_start + dt_level / 2.0, 1);
+    }
+
+    /* No post-subcycle restrict needed during device-resident subcycling:
+     * Cross-level ghost fill reads from leaf blocks in the coarse pack
+     * (which have correct stepped data). Restriction to non-leaf parents
+     * is done once at the end (gpu_sync_all_to_host). */
+}
+
+/* ========================================================================
  * Public interface — mesh-level stepping
  * ======================================================================== */
 
@@ -595,6 +827,8 @@ static void subcycle_level(mesh_t *m, const sim_params_t *p,
  * Production path: packed batch kernels.
  * Uniform mesh (max_level == 0): single pack, no subcycling.
  * AMR mesh (max_level > 0): Berger-Oliger subcycling, per-level packs.
+ *   GPU: device-resident subcycling (zero PCIe during sub-steps).
+ *   CPU: host-side subcycling with per-level packs.
  *
  * Ghost exchange via device kernels (Commit 2: direct on pack buffers).
  *
@@ -611,13 +845,18 @@ void rk4_step_mesh(mesh_t *m, const sim_params_t *p,
             ck45_step_mesh_packed(m, p, dt);
         else
             classic_rk4_step_mesh_packed(m, p, dt);
+    } else if (backend_is_gpu() && p->rk_method == RK_CLASSIC) {
+        /* GPU-resident AMR subcycling: zero PCIe during evolution.
+         * All level packs mapped to device once; data stays resident
+         * across all sub-steps. Single sync to host at end for output.
+         * Requires classic RK4 (not CK45 — no quartic temporal interp). */
+        gpu_ensure_level_packs(m, p);
+        subcycle_level_gpu(m, p, 0, dt, p->time, 0);
+        gpu_sync_all_to_host(m);
+        if (m->packs_dirty) m->packs_dirty = 0;
     } else {
-        /* AMR with Berger-Oliger subcycling.
-         * dt is the coarsest-level time step (CFL * dx_coarse).
-         * Each finer level takes 2x more sub-steps at half the dt.
-         * Level packs are built on first use or after regrid (packs_dirty).
-         * Clear the dirty flag after the recursive subcycling so all
-         * level packs are cached for subsequent global steps. */
+        /* CPU AMR subcycling (existing path).
+         * Also used for GPU + CK45 (quartic temporal interp not yet on device). */
         subcycle_level(m, p, 0, dt, p->time, 0);
         if (m->packs_dirty) m->packs_dirty = 0;
     }

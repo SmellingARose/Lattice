@@ -154,8 +154,14 @@ meshblock_pack_t *meshblock_pack_create(int n_blocks, size_t npts,
     pack->ghost  = 0;
     pack->Ntotal = 0;
 
+    /* Device memory handle: NULL until backend_map_pack allocates */
+    pack->device_handle = NULL;
+
     return pack;
 }
+
+/* Forward declaration: free persistent GPU device memory */
+extern void backend_free_pack_device(meshblock_pack_t *pack);
 
 /*
  * Free all pack buffers and the pack struct itself.
@@ -163,6 +169,10 @@ meshblock_pack_t *meshblock_pack_create(int n_blocks, size_t npts,
 void meshblock_pack_free(meshblock_pack_t *pack)
 {
     if (!pack) return;
+
+    /* Free persistent GPU device memory before host buffers */
+    if (pack->device_handle)
+        backend_free_pack_device(pack);
 
     /* Core field buffers */
     free(pack->data);

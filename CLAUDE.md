@@ -167,6 +167,27 @@ work on AMR meshes.
     `ghost_fill_from_coarser()` Pass 1, `restrict_level_to_parents()`,
     `mesh_constraint_l2()`, `mesh_momentum_l2()`, `umg_sweep_1field()`,
     `umg_sweep_4field()`, `umg_compute_operator()`.
+- **Tier 5 optimizations (GPU, zero-PCIe pipeline, all complete):**
+  - *Persistent per-pack device memory:* `void *device_handle` on
+    `meshblock_pack_t` stores opaque `hip_device_ptrs_t`. Device memory
+    allocated on first `backend_map_pack()`, persists across sub-steps.
+    `backend_activate_pack()` sets global pointers without memcpy.
+    `backend_free_pack_device()` frees on pack destruction. Eliminates
+    ~465 hipMalloc/hipFree calls per global step.
+  - *GPU-resident evolution:* Zero PCIe during Berger-Oliger subcycling.
+    `step_level_gpu()` / `subcycle_level_gpu()` in `rk4.c` run entire
+    recursive subcycle on device. `fields_old` buffer for temporal
+    interpolation. `hip_cross_level_ghost_fill` kernel reads from coarser
+    pack with linear temporal interpolation. `gpu_ensure_level_packs()`
+    builds packs + cross-level maps on first step or regrid. Single
+    `gpu_sync_all_to_host()` at end of global step.
+  - *Solver round-trip elimination:* 7 host↔device round-trips in AMR
+    composite multigrid replaced with device-side kernels.
+    `hip_mg_ghost_cf_fill` kernel for cross-level fill from coarser solver
+    slot. `hip_mg_zero_leaf_rhs` for leaf RHS zeroing. Evolution ghost
+    kernels reused with solver pointers. `backend_mg_ghost_full_packed()`
+    orchestrates 6-phase device-side solver ghost exchange.
+    `gpu_build_cf_maps()` builds per-level cross-level neighbor maps.
 - **GPU diagnostics (all complete):** On-device constraint L2, momentum L2,
   min lapse with position, BH separation (two-pass lapse minimum), NaN/Inf
   check, and Psi4 extraction. Diagnostic-only pack mapping
