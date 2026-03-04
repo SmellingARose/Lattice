@@ -615,7 +615,7 @@ static void umg_precompute_bg_4field(mg_level_amr_t *lev, int n_bh,
                 A_bg[0][idx] = A_total[0][0]; A_bg[1][idx] = A_total[0][1];
                 A_bg[2][idx] = A_total[0][2]; A_bg[3][idx] = A_total[1][1];
                 A_bg[4][idx] = A_total[1][2]; A_bg[5][idx] = A_total[2][2];
-                lev->A2[idx] = bowen_york_A2(A_total);
+                lev->A2[idx] = hispid_A2(A_total, h);
             }
 
     /* Compute R_tilde via FD Christoffel/Ricci */
@@ -803,7 +803,7 @@ static void amr_precompute_bg_4field_block(block_t *blk, int n_bh,
                 A_bg[0][idx] = A_total[0][0]; A_bg[1][idx] = A_total[0][1];
                 A_bg[2][idx] = A_total[0][2]; A_bg[3][idx] = A_total[1][1];
                 A_bg[4][idx] = A_total[1][2]; A_bg[5][idx] = A_total[2][2];
-                g->fields[BG_A2][idx] = bowen_york_A2(A_total);
+                g->fields[BG_A2][idx] = hispid_A2(A_total, h);
             }
 
     /* Compute R_tilde */

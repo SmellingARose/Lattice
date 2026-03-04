@@ -95,6 +95,20 @@ double bowen_york_A2(const double A_tilde[3][3])
     return A2;
 }
 
+double hispid_A2(const double A[3][3], const double h[3][3])
+{
+    /* Conformal metric contraction: A^ij A_ij = h^{ik} h^{jl} A_{kl} A_{ij} */
+    double h_UU[3][3];
+    compute_inverse_sym(h, h_UU);
+    double A2 = 0.0;
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < 3; j++)
+            for (int k = 0; k < 3; k++)
+                for (int l = 0; l < 3; l++)
+                    A2 += h_UU[i][k] * h_UU[j][l] * A[k][l] * A[i][j];
+    return A2;
+}
+
 double brill_lindquist_psi(double x, double y, double z,
                            int n_bh, const puncture_data_t *bhs)
 {
@@ -292,11 +306,9 @@ void set_ccz4_from_hispid(grid_t *g, const double *psi_arr,
                 /* K = 0 (maximal slicing) */
                 g->fields[FIELD_K][idx] = 0.0;
 
-                /* A_bar = psi^{-6} * (A_kerr + A_by).
-                 * A_kerr: CCZ4-weight Kerr extrinsic curvature from hispid_extrinsic.
-                 * A_by: York-weight BY momentum/spin correction.
-                 * Note: these have different conformal weights (see CLAUDE.md).
-                 * The solver compensates via psi, so results are internally consistent. */
+                /* A_bar = psi^{-6} * A_tilde_total.
+                 * Both A_kerr and A_by are York weight +2 (A_tilde convention).
+                 * Ref: arXiv:1410.8607 Eq. (16), B&S Eq. 3.18 */
                 double A_kerr[3][3];
                 hispid_extrinsic(A_kerr, x, y, z, n_bh, bhs);
                 double A_by[3][3];
@@ -541,7 +553,7 @@ void set_ccz4_from_hispid_block(block_t *blk, int n_bh, const puncture_data_t *b
                 double h[3][3];
                 hispid_conformal_metric(h, x, y, z, n_bh, bhs);
 
-                /* A_ij: Kerr + BY */
+                /* A_bar = psi^{-6} * (A_kerr + A_by), both York weight +2 */
                 double A_kerr[3][3];
                 hispid_extrinsic(A_kerr, x, y, z, n_bh, bhs);
                 double A_by[3][3];

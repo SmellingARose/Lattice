@@ -24,8 +24,13 @@
 void bowen_york_Aij(double A_tilde[3][3], double x, double y, double z,
                     int n_bh, const puncture_data_t *bhs);
 
-/* Trace A_ij A^ij with flat metric (A raised/lowered by delta_ij). */
+/* Trace A_ij A^ij with flat metric (A raised/lowered by delta_ij).
+ * Correct for conformally flat BY data where h_ij = delta_ij. */
 double bowen_york_A2(const double A_tilde[3][3]);
+
+/* Trace A_ij A^ij with conformal metric: h^{ik} h^{jl} A_{kl} A_{ij}.
+ * Required for HiSpID where h_ij != delta_ij. */
+double hispid_A2(const double A[3][3], const double h[3][3]);
 
 /* Brill-Lindquist conformal factor: psi = 1 + sum(M/(2r)). */
 double brill_lindquist_psi(double x, double y, double z,

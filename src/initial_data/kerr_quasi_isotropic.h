@@ -32,10 +32,11 @@ void kerr_qi_metric(double h[3][3], double *psi_out,
                     double x, double y, double z,
                     double M, const double spin[3]);
 
-/* Compute the Kerr traceless conformal extrinsic curvature A_ij at (x,y,z).
- * Returns the conformal A_ij (trace-free, raised/lowered with h_ij).
+/* Compute the Kerr traceless extrinsic curvature A_tilde_ij at (x,y,z).
+ * Returns A_tilde in York convention (conformal weight +2): A_tilde = psi^2 * A_phys.
+ * This matches bowen_york_Aij() convention for consistent superposition.
  *
- * Ref: arXiv:1001.4077 Eq. (12)-(13)
+ * Ref: arXiv:1001.4077 Eq. (12)-(13), arXiv:1410.8607 Eq. (16)
  * Ref: GRChombo KerrBH.impl.hpp:152-165 */
 void kerr_qi_extrinsic(double A[3][3],
                        double x, double y, double z,
@@ -52,7 +53,7 @@ void hispid_conformal_metric(double h[3][3],
                              double x, double y, double z,
                              int n_bh, const puncture_data_t *bhs);
 
-/* Gaussian-weighted superposition of N Kerr extrinsic curvatures.
+/* Gaussian-weighted superposition of N Kerr A_tilde (York weight +2).
  * Uses same Gaussian weights as hispid_conformal_metric.
  *
  * Ref: arXiv:1410.8607 Eq. (16) */

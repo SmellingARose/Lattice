@@ -237,7 +237,7 @@ static void mg_precompute_bg_4field(mg_level_t *lev, int n_bh,
                 A_bg[2][idx] = A_total[0][2]; A_bg[3][idx] = A_total[1][1];
                 A_bg[4][idx] = A_total[1][2]; A_bg[5][idx] = A_total[2][2];
 
-                lev->A2[idx] = bowen_york_A2(A_total);
+                lev->A2[idx] = hispid_A2(A_total, h);
             }
 
     /* Compute R_tilde from conformal metric via FD Christoffel/Ricci.

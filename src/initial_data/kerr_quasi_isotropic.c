@@ -332,15 +332,17 @@ void kerr_qi_extrinsic(double A[3][3],
         for (int j = 0; j < 3; j++)
             A[i][j] = K_orig[i][j] - (1.0 / 3.0) * g_orig[i][j] * trK;
 
-    /* 6. Conformal rescaling: Atilde_ij = chi * A_ij
-     * where chi = det(g)^{-1/3}
-     * Ref: GRChombo KerrBH.impl.hpp:79-83 */
+    /* 6. York conformal rescaling: A_tilde_ij = psi^2 * A_phys_ij
+     * where psi = det(g)^{1/12}.  York weight +2 matches bowen_york_Aij().
+     * (Previous code used chi = psi^{-4}, giving CCZ4 weight -4.)
+     * Ref: arXiv:1410.8607 Eq. (16), B&S Eq. 3.18 */
     double det = compute_det_sym(g_orig);
-    double chi = pow(fabs(det), -1.0 / 3.0);
+    double psi_kerr = pow(fabs(det), 1.0 / 12.0);
+    double psi2 = psi_kerr * psi_kerr;
 
     for (int i = 0; i < 3; i++)
         for (int j = 0; j < 3; j++)
-            A[i][j] *= chi;
+            A[i][j] *= psi2;
 }
 
 void hispid_conformal_metric(double h[3][3],
