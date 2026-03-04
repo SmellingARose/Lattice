@@ -569,9 +569,9 @@ static void umg_precompute_bg_1field(mg_level_amr_t *lev, int n_bh,
                 double y = UMG_COORD(lev, j);
                 double z = UMG_COORD(lev, k);
                 lev->psi_BL[idx] = brill_lindquist_psi(x, y, z, n_bh, bhs);
-                double A_phys[3][3];
-                bowen_york_Aij(A_phys, x, y, z, n_bh, bhs);
-                lev->A2[idx] = bowen_york_A2(A_phys);
+                double A_tilde[3][3];
+                bowen_york_Aij(A_tilde, x, y, z, n_bh, bhs);
+                lev->A2[idx] = bowen_york_A2(A_tilde);
             }
 }
 
@@ -756,9 +756,9 @@ static void amr_precompute_bg_1field_block(block_t *blk, int n_bh,
                 double z = BLOCK_COORD(blk, 2, k);
                 g->fields[BG_PSI_BL][idx] =
                     brill_lindquist_psi(x, y, z, n_bh, bhs);
-                double A_phys[3][3];
-                bowen_york_Aij(A_phys, x, y, z, n_bh, bhs);
-                g->fields[BG_A2][idx] = bowen_york_A2(A_phys);
+                double A_tilde[3][3];
+                bowen_york_Aij(A_tilde, x, y, z, n_bh, bhs);
+                g->fields[BG_A2][idx] = bowen_york_A2(A_tilde);
             }
 }
 

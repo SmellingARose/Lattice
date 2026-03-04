@@ -7,7 +7,7 @@
  *   2. A_ij symmetry: |A_ij - A_ji| < 1e-15
  *   3. Falloff: momentum 1/r^2, spin 1/r^3
  *   4. Two-puncture superposition (linearity of A_ij)
- *   5. CCZ4 conversion: chi = psi^{-4}, A_CCZ4 = psi^{-6} * A_phys
+ *   5. CCZ4 conversion: chi = psi^{-4}, A_CCZ4 = psi^{-6} * A_tilde
  *   6. Zero momentum: BL exact, solver converges to u~0
  *   7. Small momentum: solver converges, Ham constraint bounded
  *   8. Convergence order: N=32 vs N=64 Ham violation ratio
@@ -194,7 +194,7 @@ static void test_Aij_superposition(void)
 }
 
 /* ================================================================
- * Test 5: CCZ4 conversion — chi = psi^{-4}, A_CCZ4 = psi^{-6} * A_phys
+ * Test 5: CCZ4 conversion — chi = psi^{-4}, A_CCZ4 = psi^{-6} * A_tilde
  * ================================================================ */
 static void test_ccz4_conversion(void)
 {
@@ -237,19 +237,19 @@ static void test_ccz4_conversion(void)
     printf("  chi = %.10e (expect %.10e)\n", chi_got, chi_expect);
     CHECK(fabs(chi_got - chi_expect) < 1e-14, "chi = psi^{-4}");
 
-    /* Check A_CCZ4 = psi^{-6} * A_phys */
+    /* Check A_CCZ4 = psi^{-6} * A_tilde */
     double x = COORD(g, mid);
     double y = COORD(g, mid);
     double z = COORD(g, mid);
-    double A_phys[3][3];
-    bowen_york_Aij(A_phys, x, y, z, 1, &bh);
+    double A_tilde[3][3];
+    bowen_york_Aij(A_tilde, x, y, z, 1, &bh);
     double psi6_inv = 1.0 / (psi_val * psi_val * psi_val *
                               psi_val * psi_val * psi_val);
-    double A11_expect = psi6_inv * A_phys[0][0];
+    double A11_expect = psi6_inv * A_tilde[0][0];
     double A11_got = g->fields[FIELD_A11][idx];
 
     printf("  A11_CCZ4 = %.10e (expect %.10e)\n", A11_got, A11_expect);
-    CHECK(fabs(A11_got - A11_expect) < 1e-14, "A_CCZ4 = psi^{-6} * A_phys");
+    CHECK(fabs(A11_got - A11_expect) < 1e-14, "A_CCZ4 = psi^{-6} * A_tilde");
 
     /* Check h_ij = delta_ij */
     CHECK(fabs(g->fields[FIELD_H11][idx] - 1.0) < 1e-15, "h_11 = 1");

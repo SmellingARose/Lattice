@@ -2,8 +2,8 @@
  * Lattice — 3D Numerical Relativity
  * Bowen-York initial data with momentum and spin.
  *
- * Computes the physical traceless extrinsic curvature A_ij^phys for
- * punctures with linear momentum P_i and spin S_i, then solves the
+ * Computes the Bowen-York extrinsic curvature A_tilde_ij (York conformal
+ * weight +2) for punctures with linear momentum P_i and spin S_i, then solves the
  * Hamiltonian constraint for the conformal factor via FAS multigrid.
  *
  * Ref: gr-qc/9703066 (Brandt-Brugmann puncture method)
@@ -19,13 +19,13 @@
 #include "../amr/block.h"
 #include "../amr/mesh.h"
 
-/* Compute physical Bowen-York A_ij at point (x,y,z) by summing over
- * all punctures.  A_phys[3][3] is the output (symmetric). */
-void bowen_york_Aij(double A_phys[3][3], double x, double y, double z,
+/* Compute Bowen-York A_tilde_ij at point (x,y,z) by summing over
+ * all punctures.  A_tilde[3][3] is the output (symmetric, York weight +2). */
+void bowen_york_Aij(double A_tilde[3][3], double x, double y, double z,
                     int n_bh, const puncture_data_t *bhs);
 
 /* Trace A_ij A^ij with flat metric (A raised/lowered by delta_ij). */
-double bowen_york_A2(const double A_phys[3][3]);
+double bowen_york_A2(const double A_tilde[3][3]);
 
 /* Brill-Lindquist conformal factor: psi = 1 + sum(M/(2r)). */
 double brill_lindquist_psi(double x, double y, double z,

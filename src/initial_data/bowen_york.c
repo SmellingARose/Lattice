@@ -32,10 +32,10 @@
 #define SOL_PSI_BY   0
 #define BG_PSI_BL_BY 4
 
-void bowen_york_Aij(double A_phys[3][3], double x, double y, double z,
+void bowen_york_Aij(double A_tilde[3][3], double x, double y, double z,
                     int n_bh, const puncture_data_t *bhs)
 {
-    memset(A_phys, 0, sizeof(double) * 9);
+    memset(A_tilde, 0, sizeof(double) * 9);
 
     for (int n = 0; n < n_bh; n++) {
         double rx = x - bhs[n].center[0];
@@ -61,8 +61,8 @@ void bowen_york_Aij(double A_phys[3][3], double x, double y, double z,
                 double dij = (i == j) ? 1.0 : 0.0;
                 double A_P = fac_P * (P[i]*s[j] + P[j]*s[i]
                              - (dij - s[i]*s[j]) * Pdotn);
-                A_phys[i][j] += A_P;
-                if (j != i) A_phys[j][i] += A_P;
+                A_tilde[i][j] += A_P;
+                if (j != i) A_tilde[j][i] += A_P;
             }
         }
 
@@ -78,20 +78,20 @@ void bowen_york_Aij(double A_phys[3][3], double x, double y, double z,
         for (int i = 0; i < 3; i++) {
             for (int j = i; j < 3; j++) {
                 double A_S = fac_S * (nxS[i]*s[j] + nxS[j]*s[i]);
-                A_phys[i][j] += A_S;
-                if (j != i) A_phys[j][i] += A_S;
+                A_tilde[i][j] += A_S;
+                if (j != i) A_tilde[j][i] += A_S;
             }
         }
     }
 }
 
-double bowen_york_A2(const double A_phys[3][3])
+double bowen_york_A2(const double A_tilde[3][3])
 {
     /* Flat metric contraction: A^ij A_ij = sum_{i,j} A_ij^2 */
     double A2 = 0.0;
     for (int i = 0; i < 3; i++)
         for (int j = 0; j < 3; j++)
-            A2 += A_phys[i][j] * A_phys[i][j];
+            A2 += A_tilde[i][j] * A_tilde[i][j];
     return A2;
 }
 
@@ -161,20 +161,23 @@ void set_ccz4_from_psi(grid_t *g, const double *psi_arr,
                 /* K=0 (maximal slicing) */
                 g->fields[FIELD_K][idx] = 0.0;
 
-                /* A_ij^CCZ4 = psi^{-6} * A_ij^phys = chi^{3/2} * A_ij^phys
+                /* A_bar_ij = psi^{-6} * A_tilde_ij (York -> CCZ4 conformal weight)
+                 * A_tilde is the Bowen-York extrinsic curvature (conformal weight +2),
+                 * A_bar is the CCZ4 convention (conformal weight -4): A_bar = chi * K_phys.
+                 * Since K_phys = psi^{-2} * A_tilde, A_bar = psi^{-4} * psi^{-2} * A_tilde.
                  * Ref: B&S Eq. 3.18, GRChombo BinaryBH.impl.hpp:60 */
-                double A_phys[3][3];
-                bowen_york_Aij(A_phys, x, y, z, n_bh, bhs);
+                double A_tilde[3][3];
+                bowen_york_Aij(A_tilde, x, y, z, n_bh, bhs);
 
                 double psi6 = psi4 * psi * psi;
                 double psi6_inv = 1.0 / psi6;
 
-                g->fields[FIELD_A11][idx] = psi6_inv * A_phys[0][0];
-                g->fields[FIELD_A12][idx] = psi6_inv * A_phys[0][1];
-                g->fields[FIELD_A13][idx] = psi6_inv * A_phys[0][2];
-                g->fields[FIELD_A22][idx] = psi6_inv * A_phys[1][1];
-                g->fields[FIELD_A23][idx] = psi6_inv * A_phys[1][2];
-                g->fields[FIELD_A33][idx] = psi6_inv * A_phys[2][2];
+                g->fields[FIELD_A11][idx] = psi6_inv * A_tilde[0][0];
+                g->fields[FIELD_A12][idx] = psi6_inv * A_tilde[0][1];
+                g->fields[FIELD_A13][idx] = psi6_inv * A_tilde[0][2];
+                g->fields[FIELD_A22][idx] = psi6_inv * A_tilde[1][1];
+                g->fields[FIELD_A23][idx] = psi6_inv * A_tilde[1][2];
+                g->fields[FIELD_A33][idx] = psi6_inv * A_tilde[2][2];
 
                 /* Theta, Gamma, shift, B = 0 */
                 g->fields[FIELD_THETA][idx]  = 0.0;
@@ -289,8 +292,11 @@ void set_ccz4_from_hispid(grid_t *g, const double *psi_arr,
                 /* K = 0 (maximal slicing) */
                 g->fields[FIELD_K][idx] = 0.0;
 
-                /* A_ij^CCZ4 = psi^{-6} * A_ij^phys.
-                 * A_phys combines Kerr extrinsic curvature + BY momentum. */
+                /* A_bar = psi^{-6} * (A_kerr + A_by).
+                 * A_kerr: CCZ4-weight Kerr extrinsic curvature from hispid_extrinsic.
+                 * A_by: York-weight BY momentum/spin correction.
+                 * Note: these have different conformal weights (see CLAUDE.md).
+                 * The solver compensates via psi, so results are internally consistent. */
                 double A_kerr[3][3];
                 hispid_extrinsic(A_kerr, x, y, z, n_bh, bhs);
                 double A_by[3][3];
@@ -441,8 +447,8 @@ void set_ccz4_from_psi_block(block_t *blk, int n_bh, const puncture_data_t *bhs,
                 double chi  = 1.0 / psi4;
 
                 /* Conformal rescaling */
-                double A_phys[3][3];
-                bowen_york_Aij(A_phys, x, y, z, n_bh, bhs);
+                double A_tilde[3][3];
+                bowen_york_Aij(A_tilde, x, y, z, n_bh, bhs);
                 double psi6 = psi4 * psi * psi;
                 double psi6_inv = 1.0 / psi6;
 
@@ -456,12 +462,12 @@ void set_ccz4_from_psi_block(block_t *blk, int n_bh, const puncture_data_t *bhs,
                 g->fields[FIELD_H33][idx]  = 1.0;
                 g->fields[FIELD_K][idx]    = 0.0;
 
-                g->fields[FIELD_A11][idx] = psi6_inv * A_phys[0][0];
-                g->fields[FIELD_A12][idx] = psi6_inv * A_phys[0][1];
-                g->fields[FIELD_A13][idx] = psi6_inv * A_phys[0][2];
-                g->fields[FIELD_A22][idx] = psi6_inv * A_phys[1][1];
-                g->fields[FIELD_A23][idx] = psi6_inv * A_phys[1][2];
-                g->fields[FIELD_A33][idx] = psi6_inv * A_phys[2][2];
+                g->fields[FIELD_A11][idx] = psi6_inv * A_tilde[0][0];
+                g->fields[FIELD_A12][idx] = psi6_inv * A_tilde[0][1];
+                g->fields[FIELD_A13][idx] = psi6_inv * A_tilde[0][2];
+                g->fields[FIELD_A22][idx] = psi6_inv * A_tilde[1][1];
+                g->fields[FIELD_A23][idx] = psi6_inv * A_tilde[1][2];
+                g->fields[FIELD_A33][idx] = psi6_inv * A_tilde[2][2];
 
                 g->fields[FIELD_THETA][idx]  = 0.0;
                 g->fields[FIELD_GAMMA1][idx] = 0.0;

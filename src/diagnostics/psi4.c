@@ -560,7 +560,9 @@ static void psi4_compute(const double *const *fields, const grid_t *g,
     /* --- Project Weyl tensors onto tetrad ---
      * Re(Psi4) = (E_vv - E_ww)/2 + B_vw
      * Im(Psi4) = (B_vv - B_ww)/2 - E_vw
-     * Ref: GRChombo Weyl4.impl.hpp (same sign convention) */
+     * Convention: Psi4 = C_{abcd} n^a mbar^b n^c mbar^d with mbar = (v+iw)/sqrt(2).
+     * Note: GRChombo Weyl4.impl.hpp uses the opposite sign on Re (negated real part).
+     * This is a tetrad/conjugation convention choice, not a bug — |Psi4| is the same. */
     double E_vv = 0.0, E_ww = 0.0, E_vw = 0.0;
     double B_vv = 0.0, B_ww = 0.0, B_vw = 0.0;
     FOR2(i, j) {

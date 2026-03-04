@@ -173,9 +173,9 @@ static void mg_precompute_bg_1field(mg_level_t *lev, int n_bh,
                 double y = MG_COORD(lev, j);
                 double z = MG_COORD(lev, k);
                 lev->psi_BL[idx] = brill_lindquist_psi(x, y, z, n_bh, bhs);
-                double A_phys[3][3];
-                bowen_york_Aij(A_phys, x, y, z, n_bh, bhs);
-                lev->A2[idx] = bowen_york_A2(A_phys);
+                double A_tilde[3][3];
+                bowen_york_Aij(A_tilde, x, y, z, n_bh, bhs);
+                lev->A2[idx] = bowen_york_A2(A_tilde);
             }
 }
 
