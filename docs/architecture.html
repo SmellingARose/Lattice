@@ -348,7 +348,7 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 
 <table class="file-table">
 <tr><th>File</th><th>Purpose</th></tr>
-<tr><td><code>constraints.h/c</code></td><td>Hamiltonian (H = R + 2/3 K^2 - A^ij A_ij) and momentum constraints. L2 norms for single-grid and AMR mesh. <code>compute_hamiltonian_at()</code> and <code>compute_momentum_at()</code> annotated <code>LATTICE_DEVICE</code> for GPU diagnostic kernels.</td></tr>
+<tr><td><code>constraints.h/c</code></td><td>Hamiltonian (H = R + 2/3 K^2 - A^ij A_ij) and momentum constraints. Volume-weighted L2 norms for AMR mesh (each cell weighted by dV=dx^3). <code>compute_hamiltonian_at()</code> and <code>compute_momentum_at()</code> annotated <code>LATTICE_DEVICE</code> for GPU diagnostic kernels.</td></tr>
 <tr><td><code>ah_finder.h/c</code></td><td>Hyperbolic flow AH finder (BHaHAHA-inspired). 6th-order off-grid interpolation. Works on single-grid and AMR. Ref: arXiv:2505.15912.</td></tr>
 <tr><td><code>psi4.h/c</code></td><td>Weyl scalar Psi4 for gravitational wave extraction. <code>psi4_at_point()</code> and <code>psi4_compute()</code> annotated <code>LATTICE_DEVICE</code> for GPU extraction kernel. <code>psi4_decompose_modes()</code> factored out for host-only mode decomposition after GPU sphere extraction.</td></tr>
 </table>

@@ -3,6 +3,37 @@
 > **Note:** When adding/removing/renaming files or functions, also update
 > `docs/architecture.html` — the living map of the codebase structure.
 
+## 2026-03-04: Volume-weighted AMR constraint L2 + lapse advection fix
+
+**Volume-weighted constraint norms:** `mesh_constraint_l2()` and `mesh_momentum_l2()`
+(and their packed GPU/CPU variants) were counting every cell equally regardless
+of its physical volume. On AMR meshes, fine cells near punctures (dx=0.125M)
+vastly outnumber coarse cells (dx=2.0M) but represent tiny physical volume. This
+made the L2 norm appear 55x worse after AMR refinement — a diagnostic artifact,
+not a physics problem. Fix: weight each cell by dV = dx^3, normalize by total
+volume. Standard practice in all AMR codes (GRChombo, Carpet, Cactus).
+
+Changed files: `constraints.c` (mesh-level), `backend_cpu.c` (packed CPU),
+`backend_hip.cpp` (GPU kernel — shared memory layout changed from
+`[ham, mom, count]` to `[ham, mom, vol]`, all `double`).
+
+**Lapse/shift advection in inspiral test:** The binary inspiral was crashing at
+t=20M on AMR (but stable to t=1000M on uniform grid at same domain size L=64M).
+Root cause: default `lapse_advec_coeff=0.0` and `shift_advec_coeff=0.0` makes
+the gauge evolution purely local (`∂α/∂t = -2α(K-2Θ)` with no transport term).
+On coarse AMR base grids (dx=2.0M), this is unstable — the lapse collapses to
+zero instead of settling to the trumpet value (~0.3). Every production code
+(GRChombo, BAM, Einstein Toolkit) uses advection coeff=1.0.
+
+Fix: Set `lapse_advec_coeff=1.0` and `shift_advec_coeff=1.0` in the inspiral
+test. Default in `params.h` unchanged (0.0) for backwards compatibility with
+other tests. The advection terms `β^i ∂_i α` and `β^j ∂_j β^i` are already
+computed in `ccz4_rhs.c` — setting the coefficient to 1.0 has zero additional
+computational cost.
+
+Ref: gr-qc/0206072 (Alcubierre et al., Gamma-driver),
+gr-qc/0610128 (Brugmann et al., advection form for moving punctures).
+
 ## 2026-03-03: GPU diagnostics — constraints, lapse, separation, NaN, Psi4
 
 Moved the heaviest per-step diagnostics from CPU to GPU. The binary inspiral

@@ -350,6 +350,13 @@ int main(void)
     p.bc_type   = BC_CONSTRAINT_PRESERVING;
     p.noise.use_ssl = 0;  /* SSL delays gauge formation at fine AMR levels */
 
+    /* Lapse/shift advection: required for stability on coarse AMR base grids.
+     * Without advection, the gauge evolution is purely local and the lapse
+     * collapses to zero on coarse cells. Standard in all production codes
+     * (GRChombo, BAM, Einstein Toolkit). Ref: gr-qc/0206072. */
+    p.gauge.lapse_advec_coeff = 1.0;
+    p.gauge.shift_advec_coeff = 1.0;
+
     amr_params_t ap;
     ap.max_level   = MAX_LEVEL;
     ap.chi_refine  = 0.5;

@@ -1197,9 +1197,9 @@ double backend_constraint_l2_packed(meshblock_pack_t *pack)
     int nf = pack->n_fields;
 
     double sum = 0.0;
-    int count = 0;
+    double vol = 0.0;
 
-    #pragma omp parallel for schedule(static) reduction(+:sum,count)
+    #pragma omp parallel for schedule(static) reduction(+:sum,vol)
     for (int bpt = 0; bpt < nb * N * N * N; bpt++) {
         int b = bpt / (N * N * N);
         int pt = bpt % (N * N * N);
@@ -1221,13 +1221,14 @@ double backend_constraint_l2_packed(meshblock_pack_t *pack)
         g_local.dx = pack->dx_per_block[b];
         g_local.inv_dx = 1.0 / pack->dx_per_block[b];
 
+        double dV = g_local.dx * g_local.dx * g_local.dx;
         double H = compute_hamiltonian_at(
             (const double *const *)src_ptrs, &g_local, i, j, k);
-        sum += H * H;
-        count++;
+        sum += H * H * dV;
+        vol += dV;
     }
 
-    return (count > 0) ? sqrt(sum / count) : 0.0;
+    return (vol > 0.0) ? sqrt(sum / vol) : 0.0;
 }
 
 double backend_momentum_l2_packed(meshblock_pack_t *pack)
@@ -1240,9 +1241,9 @@ double backend_momentum_l2_packed(meshblock_pack_t *pack)
     int nf = pack->n_fields;
 
     double sum = 0.0;
-    int count = 0;
+    double vol = 0.0;
 
-    #pragma omp parallel for schedule(static) reduction(+:sum,count)
+    #pragma omp parallel for schedule(static) reduction(+:sum,vol)
     for (int bpt = 0; bpt < nb * N * N * N; bpt++) {
         int b = bpt / (N * N * N);
         int pt = bpt % (N * N * N);
@@ -1264,14 +1265,15 @@ double backend_momentum_l2_packed(meshblock_pack_t *pack)
         g_local.dx = pack->dx_per_block[b];
         g_local.inv_dx = 1.0 / pack->dx_per_block[b];
 
+        double dV = g_local.dx * g_local.dx * g_local.dx;
         double mom[3];
         compute_momentum_at(
             (const double *const *)src_ptrs, &g_local, i, j, k, mom);
-        sum += mom[0]*mom[0] + mom[1]*mom[1] + mom[2]*mom[2];
-        count++;
+        sum += (mom[0]*mom[0] + mom[1]*mom[1] + mom[2]*mom[2]) * dV;
+        vol += dV;
     }
 
-    return (count > 0) ? sqrt(sum / (3 * count)) : 0.0;
+    return (vol > 0.0) ? sqrt(sum / (3.0 * vol)) : 0.0;
 }
 
 double backend_min_lapse_packed(meshblock_pack_t *pack,

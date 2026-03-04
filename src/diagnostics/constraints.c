@@ -334,29 +334,30 @@ double compute_constraint_l2(const grid_t *g)
 double mesh_constraint_l2(const struct mesh_s *m)
 {
     double sum = 0.0;
-    int count = 0;
+    double vol = 0.0;
 
-    #pragma omp parallel for schedule(dynamic) reduction(+:sum,count)
+    #pragma omp parallel for schedule(dynamic) reduction(+:sum,vol)
     for (int bid = 0; bid < m->num_blocks; bid++) {
         block_t *b = m->blocks[bid];
         if (!b || !b->is_leaf) continue;
         grid_t *g = b->grid;
         int lo = g->ghost;
         int hi = lo + g->N;
+        double dV = g->dx * g->dx * g->dx;
 
         for (int k = lo; k < hi; k++) {
             for (int j = lo; j < hi; j++) {
                 for (int i = lo; i < hi; i++) {
                     double H = compute_hamiltonian_at(
                         (const double *const *)g->fields, g, i, j, k);
-                    sum += H * H;
-                    count++;
+                    sum += H * H * dV;
+                    vol += dV;
                 }
             }
         }
     }
 
-    return (count > 0) ? sqrt(sum / count) : 0.0;
+    return (vol > 0.0) ? sqrt(sum / vol) : 0.0;
 }
 
 /*
@@ -366,15 +367,16 @@ double mesh_constraint_l2(const struct mesh_s *m)
 double mesh_momentum_l2(const struct mesh_s *m)
 {
     double sum = 0.0;
-    int count = 0;
+    double vol = 0.0;
 
-    #pragma omp parallel for schedule(dynamic) reduction(+:sum,count)
+    #pragma omp parallel for schedule(dynamic) reduction(+:sum,vol)
     for (int bid = 0; bid < m->num_blocks; bid++) {
         block_t *b = m->blocks[bid];
         if (!b || !b->is_leaf) continue;
         grid_t *g = b->grid;
         int lo = g->ghost;
         int hi = lo + g->N;
+        double dV = g->dx * g->dx * g->dx;
 
         for (int k = lo; k < hi; k++) {
             for (int j = lo; j < hi; j++) {
@@ -382,12 +384,12 @@ double mesh_momentum_l2(const struct mesh_s *m)
                     double mom[3];
                     compute_momentum_at(
                         (const double *const *)g->fields, g, i, j, k, mom);
-                    sum += mom[0]*mom[0] + mom[1]*mom[1] + mom[2]*mom[2];
-                    count++;
+                    sum += (mom[0]*mom[0] + mom[1]*mom[1] + mom[2]*mom[2]) * dV;
+                    vol += dV;
                 }
             }
         }
     }
 
-    return (count > 0) ? sqrt(sum / (3 * count)) : 0.0;
+    return (vol > 0.0) ? sqrt(sum / (3.0 * vol)) : 0.0;
 }

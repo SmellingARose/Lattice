@@ -197,6 +197,15 @@ work on AMR meshes.
   via `mesh_find_block_at`, GPU calls `psi4_compute` per point (512 threads),
   mode decomposition on host. AH finder remains CPU-only.
   Eliminates ~250s/step diagnostic overhead on large AMR meshes.
+- **Volume-weighted AMR constraint L2:** `mesh_constraint_l2()`, `mesh_momentum_l2()`,
+  and packed variants (CPU + GPU) now weight each cell by dV=dx^3 and normalize by
+  total volume. Eliminates diagnostic artifacts on AMR meshes where fine cells near
+  punctures dominated the unweighted norm. Standard practice in all AMR codes.
+- **Lapse/shift advection:** Inspiral test uses `lapse_advec_coeff=1.0` and
+  `shift_advec_coeff=1.0` for gauge stability on coarse AMR base grids. Without
+  the transport term `β^i ∂_i α`, the gauge is purely local and unstable at
+  dx≥2M. Zero additional cost (derivatives already computed). Default in
+  `params.h` remains 0.0. Ref: gr-qc/0610128 (Brugmann et al.).
 - **Constraint-preserving BCs:** BAM-style CP BCs replace the RHS of constraint
   fields (Theta, K, A_ij, Gamma^i) at boundary points with outgoing-wave equations
   at correct characteristic speeds, while keeping Sommerfeld for metric/gauge fields.
