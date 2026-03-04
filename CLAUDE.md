@@ -259,8 +259,9 @@ work on AMR meshes.
   faster (4 stages vs 5) but uses 25% more memory. All test allocations updated.
 - **Tests:** Flat spacetime, convergence (order 6.5), Bowen-York (33/33 + N-body),
   HiSpID (26/26), AH finder (13/13), Maxwell (15/15), Psi4 (15/15), CCE (49/49),
-  CP-BC (30/30), pack_evolve (8/8), amr_prolong (15/15), binary inspiral (full
-  inspiral+merger+ringdown T=700M: BY+AMR+CCZ4+Psi4+AH+constraints+CSV diagnostics).
+  CP-BC (30/30), pack_evolve (8/8), amr_prolong (15/15), checkpoint (14/14),
+  binary inspiral (full inspiral+merger+ringdown T=700M:
+  BY+AMR+CCZ4+Psi4+AH+constraints+CSV diagnostics).
   N-body smoke tests:
   3-BH line, 5-BH pentagon. Total: 31 evolved fields (25 CCZ4 + 6 EM).
 
@@ -321,7 +322,9 @@ lattice/
 │   │   ├── refine.h/c          # oct-tree split/merge/regrid
 │   │   └── meshblock_pack.h/c  # GPU batch packing (AthenaK-style)
 │   └── io/
-│       └── output.c            # data output
+│       ├── output.c            # data output
+│       ├── checkpoint.h        # checkpoint/restart API
+│       └── checkpoint.c        # binary checkpoint save/restore (AMR-aware)
 ├── tests/
 │   ├── test_flat.c             # flat spacetime stability
 │   ├── test_single_bh.c        # single puncture evolution
@@ -347,6 +350,7 @@ lattice/
 │   ├── test_cp_bc.c         # Constraint-preserving BC tests (30/30)
 │   ├── test_binary_inspiral.c  # Full inspiral+merger+ringdown (T=700M, 10 subsystems, CSV diagnostics)
 │   ├── test_inspiral_convergence.c  # AMR binary inspiral convergence (3 resolutions)
+│   ├── test_checkpoint.c       # Checkpoint/restart validation (uniform + AMR, 14/14)
 │   ├── test_gpu_debug.c       # GPU kernel isolation test (per-kernel sync barriers)
 │   └── convergence.sh          # 3-resolution convergence check
 ├── docs/
@@ -380,6 +384,7 @@ make HDF5=on test-cce  # CCE worldtube HDF5 output (requires libhdf5-dev)
 make test-cp-bc        # Constraint-preserving BCs (speeds, formula, flat, single BH)
 make test-inspiral     # Binary inspiral full system validation (all 10 subsystems)
 make test-inspiral-convergence  # AMR binary inspiral convergence (long run, ~hours)
+make test-checkpoint   # Checkpoint/restart (uniform + AMR, bitwise-identical)
 make test-gpu-debug    # GPU kernel isolation test (requires BACKEND=gpu)
 make clean
 ```

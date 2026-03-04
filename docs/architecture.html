@@ -404,6 +404,7 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 <table class="file-table">
 <tr><th>File</th><th>Purpose</th></tr>
 <tr><td><code>output.c</code></td><td><code>output_1d_slice()</code> (single-grid) and <code>output_mesh_1d_slice()</code> (AMR). Writes to <code>build/slice_NNNNNN.csv</code>.</td></tr>
+<tr><td><code>checkpoint.h/c</code></td><td>Binary checkpoint/restart. <code>checkpoint_write()</code> saves 1024-byte header + per-leaf-block field data (including ghosts). <code>checkpoint_read()</code> reconstructs AMR tree from saved logical locations, loads fields, rebuilds neighbors. Bitwise-identical restart verified. CLI: <code>--checkpoint-every N</code>, <code>--restart &lt;file&gt;</code>.</td></tr>
 </table>
 
 <!-- ========================================== -->
@@ -831,6 +832,7 @@ make clean              # rm -rf build/</code></pre>
 <tr><td><code>make test-cp-bc</code></td><td>Constraint-preserving BCs: char speeds, formula, flat, single BH (30 tests)</td><td><span class="badge badge-green">Passing</span></td></tr>
 <tr><td><code>make test-inspiral</code></td><td>Binary inspiral full system validation (T=700M, D=10M equal-mass quasi-circular, N_BLOCK=32, MAX_LEVEL=4): BY+AMR+CCZ4+Psi4+AH+constraints+CSV diagnostics every step (10 subsystems)</td><td><span class="badge badge-green">Passing</span></td></tr>
 <tr><td><code>make test-inspiral-convergence</code></td><td>AMR binary inspiral convergence at 3 resolutions (long run)</td><td><span class="badge badge-green">Passing</span></td></tr>
+<tr><td><code>make test-checkpoint</code></td><td>Checkpoint/restart: uniform + AMR, bitwise-identical evolution after restart (14 tests)</td><td><span class="badge badge-green">Passing</span></td></tr>
 </table>
 
 <!-- ========================================== -->

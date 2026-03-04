@@ -3,6 +3,36 @@
 > **Note:** When adding/removing/renaming files or functions, also update
 > `docs/architecture.html` — the living map of the codebase structure.
 
+## 2026-03-04: Checkpoint/restart for pause and resume
+
+Binary checkpoint/restart system for long-running simulations. Saves full
+simulation state (all fields on all leaf blocks, mesh structure, sim_params_t)
+to a flat binary file. Bitwise-identical restart verified for both uniform and
+AMR meshes (14/14 tests).
+
+**File format:** 1024-byte header (magic "LATCKPT", version, step, time, mesh
+metadata, full `sim_params_t`) + per-leaf-block records (level, logical location,
+origin, all field data including ghost zones). No external dependencies.
+
+**CLI:** `--checkpoint-every N` saves `build/checkpoint_NNNNNN.lat` every N steps.
+`--restart <file>` resumes from a checkpoint file. The checkpoint contains all
+parameters — only `--restart` and `--steps` needed on the command line.
+
+**AMR tree reconstruction:** On restart, the saved logical locations (level, lx1,
+lx2, lx3) of each leaf block are used to rebuild the oct-tree by iteratively
+refining from the root. Field data (including ghost zones) is loaded directly
+from the file — no ghost exchange needed, ensuring bitwise-identical evolution.
+
+**Integration points:** Checkpoint hook after diagnostics in both AMR and single-
+grid evolution loops in `main.c`. Restart path is a separate `if (restart_file)`
+branch that skips initial data setup entirely.
+
+Follows the same philosophy as Cactus/CarpetIOHDF5 (Einstein Toolkit) and
+GRChombo checkpoint files, but uses a simple flat binary format (no HDF5
+dependency).
+
+Files: `src/io/checkpoint.h`, `src/io/checkpoint.c`, `tests/test_checkpoint.c`.
+
 ## 2026-03-04: Volume-weighted AMR constraint L2 + lapse advection fix
 
 **Volume-weighted constraint norms:** `mesh_constraint_l2()` and `mesh_momentum_l2()`

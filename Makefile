@@ -31,7 +31,7 @@ NUMERICS_SRC  = src/numerics/rk4.c
 INITIAL_SRC   = src/initial_data/puncture.c src/initial_data/bowen_york.c src/initial_data/relaxation.c src/initial_data/relaxation_amr.c src/initial_data/kerr_quasi_isotropic.c
 DIAG_SRC      = src/diagnostics/constraints.c src/diagnostics/ah_finder.c src/diagnostics/psi4.c
 BOUNDARY_SRC  = src/boundary/sommerfeld.c
-IO_SRC        = src/io/output.c
+IO_SRC        = src/io/output.c src/io/checkpoint.c
 AMR_SRC       = src/amr/block.c src/amr/mesh.c src/amr/meshblock_pack.c src/amr/ghost_exchange.c \
                 src/amr/prolongation.c src/amr/restriction.c src/amr/criterion.c src/amr/refine.c
 MAIN_SRC      = src/main.c
@@ -123,7 +123,7 @@ LDFLAGS = $(BACKEND_LIBS) $(HDF5_LIBS) -lm $(LTO_FLAGS)
 BUILD = build
 
 # Targets
-.PHONY: all debug test test-single-bh test-convergence test-constraints test-head-on test-amr-mesh test-amr-ghost test-amr-prolong test-amr-refine test-amr-evolve test-pack-evolve test-subcycle test-bowen-york test-hispid test-maxwell test-ah test-psi4 test-cce test-cp-bc test-inspiral test-inspiral-convergence test-relaxation-amr clean
+.PHONY: all debug test test-single-bh test-convergence test-constraints test-head-on test-amr-mesh test-amr-ghost test-amr-prolong test-amr-refine test-amr-evolve test-pack-evolve test-subcycle test-bowen-york test-hispid test-maxwell test-ah test-psi4 test-cce test-cp-bc test-inspiral test-inspiral-convergence test-relaxation-amr test-checkpoint clean
 
 all: $(BUILD)/lattice
 
@@ -366,6 +366,10 @@ test-relaxation-amr: $(BUILD)/test_relaxation_amr
 test-amr-accuracy: $(BUILD)/test_amr_accuracy
 	@echo "=== Running AMR accuracy comparison ==="
 	$(BUILD)/test_amr_accuracy
+
+test-checkpoint: $(BUILD)/test_checkpoint
+	@echo "=== Running checkpoint/restart test ==="
+	$(BUILD)/test_checkpoint
 
 test-gpu-debug: $(BUILD)/test_gpu_debug
 	@echo "=== Running GPU kernel debug test ==="

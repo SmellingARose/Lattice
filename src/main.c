@@ -22,6 +22,7 @@
 #ifdef LATTICE_HDF5
 #include "diagnostics/cce_worldtube.h"
 #endif
+#include "io/checkpoint.h"
 #include "amr/mesh.h"
 #include "amr/refine.h"
 #include "backend/backend.h"
@@ -107,6 +108,9 @@ static void print_usage(void)
     fprintf(stderr, "  --cce_radius <float>   Extraction radius (default 100)\n");
     fprintf(stderr, "  --cce_lmax <int>       Angular resolution (default 16)\n");
 #endif
+    fprintf(stderr, "\nCheckpoint/restart:\n");
+    fprintf(stderr, "  --checkpoint-every <int>  Save checkpoint every N steps (0=off)\n");
+    fprintf(stderr, "  --restart <file>          Resume from checkpoint file\n");
 }
 
 int main(int argc, char **argv)
@@ -143,6 +147,10 @@ int main(int argc, char **argv)
     double cce_radius = 100.0;
     int cce_lmax = 16;
 #endif
+
+    /* Checkpoint/restart */
+    int checkpoint_every = 0;
+    const char *restart_file = NULL;
 
     /* Parse CLI args */
     for (int a = 1; a < argc; a++) {
@@ -321,6 +329,11 @@ int main(int argc, char **argv)
         } else if (strcmp(argv[a], "--cce_lmax") == 0 && a + 1 < argc) {
             cce_lmax = atoi(argv[++a]);
 #endif
+        /* Checkpoint/restart */
+        } else if (strcmp(argv[a], "--checkpoint-every") == 0 && a + 1 < argc) {
+            checkpoint_every = atoi(argv[++a]);
+        } else if (strcmp(argv[a], "--restart") == 0 && a + 1 < argc) {
+            restart_file = argv[++a];
         /* Initial data */
         } else if (strcmp(argv[a], "--hispid") == 0) {
             set_hispid_override(1);
@@ -339,8 +352,62 @@ int main(int argc, char **argv)
 
     printf("Lattice — 3D Numerical Relativity\n");
 
-    if (p.amr.enabled) {
-        /* === AMR path === */
+    if (restart_file) {
+        /* === Restart path === */
+        mesh_t *m = NULL;
+        int start_step = 0;
+
+        if (checkpoint_read(restart_file, &m, &p, &start_step) != 0) {
+            fprintf(stderr, "Error: failed to read checkpoint %s\n",
+                    restart_file);
+            return 1;
+        }
+
+        /* Recompute derived quantities from restored params */
+        p.dx = m->dx_base;
+        p.dt = p.CFL * p.dx;
+
+        printf("  Resuming from step %d (t=%.4f)\n", start_step, p.time);
+        printf("  AMR mode: N_block=%d, leaves=%d, max_level=%d\n",
+               m->N_block, mesh_num_leaves(m), m->max_level);
+        printf("  L = %.1f, dx = %.6f, dt = %.6f\n", p.L, p.dx, p.dt);
+
+        double ham0 = mesh_constraint_l2(m);
+        printf("  Ham L2 at restart = %.6e\n", ham0);
+
+        /* Select RHS function */
+        rk4_rhs_func_t rhs_func = p.em_enabled
+            ? ccz4_maxwell_rhs_point : ccz4_rhs_point;
+
+        /* Evolution loop (continues from start_step) */
+        for (int step = start_step + 1; step <= p.num_steps; step++) {
+            rk4_step_mesh(m, &p, rhs_func, p.dt);
+            p.time += p.dt;
+
+            if (p.amr.regrid_every > 0 && step % p.amr.regrid_every == 0)
+                mesh_regrid(m, &p.amr);
+
+            if (p.output_every > 0 && step % p.output_every == 0)
+                output_mesh_1d_slice(m, step, p.time);
+
+            if (step % 100 == 0 || step == p.num_steps) {
+                double ham = mesh_constraint_l2(m);
+                printf("  step %5d  t=%.4f  Ham L2=%.6e  blocks=%d\n",
+                       step, p.time, ham, mesh_num_leaves(m));
+            }
+
+            /* Checkpoint */
+            if (checkpoint_every > 0 && step % checkpoint_every == 0) {
+                char ckpt_path[256];
+                snprintf(ckpt_path, sizeof(ckpt_path),
+                         "build/checkpoint_%06d.lat", step);
+                checkpoint_write(m, &p, step, ckpt_path);
+            }
+        }
+
+        mesh_free(m);
+    } else if (p.amr.enabled) {
+        /* === AMR path (fresh start) === */
         /* Resolve solver_levels: default to max_level if not explicitly set */
         if (p.amr.solver_levels < 0)
             p.amr.solver_levels = p.amr.max_level;
@@ -466,6 +533,14 @@ int main(int argc, char **argv)
             if (cce_ws && cce_every > 0 && step % cce_every == 0)
                 cce_extract(cce_ws, m, p.time);
 #endif
+
+            /* Checkpoint (after diagnostics, before next step) */
+            if (checkpoint_every > 0 && step % checkpoint_every == 0) {
+                char ckpt_path[256];
+                snprintf(ckpt_path, sizeof(ckpt_path),
+                         "build/checkpoint_%06d.lat", step);
+                checkpoint_write(m, &p, step, ckpt_path);
+            }
         }
 
 #ifdef LATTICE_HDF5
@@ -587,6 +662,14 @@ int main(int argc, char **argv)
             if (cce_ws && cce_every > 0 && step % cce_every == 0)
                 cce_extract(cce_ws, m, p.time);
 #endif
+
+            /* Checkpoint */
+            if (checkpoint_every > 0 && step % checkpoint_every == 0) {
+                char ckpt_path[256];
+                snprintf(ckpt_path, sizeof(ckpt_path),
+                         "build/checkpoint_%06d.lat", step);
+                checkpoint_write(m, &p, step, ckpt_path);
+            }
         }
 
 #ifdef LATTICE_HDF5
