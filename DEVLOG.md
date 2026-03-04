@@ -2641,3 +2641,152 @@ reused directly with solver pointers — they take raw pointer arguments, not gl
   - HiSpID 26/26: PASSED
   - AMR relaxation: OOM (only 2.5 GB free on P40 — external resource constraint)
 - Convergence: unaffected (CPU paths unchanged)
+
+## Volume-Weighted AMR Constraint Norms + Lapse Advection
+
+### Problem: Inspiral crash at t=20M on AMR meshes
+
+Binary inspiral with 4 AMR levels crashed at t=20M with lapse collapse, despite
+the same physics running stably to t=1000M on uniform grids. Two independent
+issues compounded:
+
+1. **Misleading diagnostics:** Unweighted constraint L2 norms on AMR meshes
+   gave a 55x apparent jump at step 0 vs uniform grids. Fine cells near
+   punctures (dx=0.125M) dominated the norm despite representing tiny physical
+   volume — a pure diagnostic artifact.
+
+2. **Gauge instability:** Without the lapse advection transport term
+   `β^i ∂_i α`, the 1+log gauge is purely local and unstable on coarse AMR
+   base grids (dx≥2M). The advection form couples neighboring cells via the
+   shift vector, essential for stable gauge propagation.
+
+### Fix 1: Volume-weighted L2 norms
+
+Changed `mesh_constraint_l2()` and `mesh_momentum_l2()` from:
+```
+sum += H*H; count++;  →  return sqrt(sum/count)
+```
+to:
+```
+dV = dx³; sum += H*H*dV; vol += dV;  →  return sqrt(sum/vol)
+```
+
+Updated in all three backends:
+- `src/diagnostics/constraints.c` — CPU mesh-level
+- `src/backend/backend_cpu.c` — packed CPU variant
+- `src/backend/backend_hip.cpp` — GPU kernel (shared memory layout changed
+  from `[ham, mom, count(int)]` to `[ham, mom, vol(double)]`)
+
+Standard practice in all AMR NR codes (BAM, Einstein Toolkit, GRChombo).
+
+### Fix 2: Lapse/shift advection
+
+Enabled `lapse_advec_coeff=1.0` and `shift_advec_coeff=1.0` in the inspiral
+test. This adds the transport term `β^i ∂_i α` to the gauge evolution, which
+was already implemented in ccz4_rhs.c but defaulted to 0.0.
+
+Both advection (coeff=1) and non-advection (coeff=0) are valid gauge choices.
+Non-advection is the original Bona-Masso form and works fine on uniform grids.
+Advection is standard in production AMR codes.
+Ref: gr-qc/0610128 (Brugmann et al.).
+
+Zero additional cost — the shift and lapse derivatives are already computed
+for other terms. Default in params.h remains 0.0; inspiral test overrides.
+
+### Result
+
+Inspiral initial data with volume weighting: Ham_L2 = 2.338e-03 (was 1.1e-02
+unweighted — the physics didn't change, just the diagnostic).
+
+### Modified files
+
+| File | Changes |
+|------|---------|
+| `constraints.c` | Volume-weighted mesh_constraint_l2, mesh_momentum_l2 |
+| `backend_cpu.c` | Volume-weighted packed CPU variants |
+| `backend_hip.cpp` | Volume-weighted GPU kernel, shared mem layout |
+| `test_binary_inspiral.c` | Added lapse/shift advection coefficients |
+
+## Checkpoint/Restart: Binary Save and Restore
+
+### Motivation
+
+Long-duration inspiral runs (T=700M+, hours of wall time) need the ability to
+pause and resume. Crashes, timeouts, and iterative debugging all require
+checkpoint/restart.
+
+### File format
+
+Binary, little-endian, 64-bit aligned:
+
+```
+[Header — 1024 bytes]
+  char[8]       magic          "LATCKPT\0"
+  int           version        1
+  int           step           evolution step number
+  double        time           simulation time
+  int           num_leaves     number of leaf blocks saved
+  int           N_block        interior cells per block side
+  int           n_fields       active field count
+  int           rk_method      0=classic, 1=ck45
+  double        L              domain size
+  sim_params_t  params         full parameter struct
+  ... padding to 1024 bytes ...
+
+[Per leaf block — repeated num_leaves times]
+  int           level
+  int           lx1, lx2, lx3  logical location
+  double[3]     origin          physical corner
+  double[n_fields * npoints]    all field arrays (including ghost zones)
+```
+
+Ghost zone data is saved verbatim. On restart, no ghost exchange is needed —
+the saved values are exact. This ensures bitwise-identical restart for uniform
+meshes and sub-epsilon (5.6e-16) for AMR.
+
+### AMR tree reconstruction
+
+On read, the mesh starts as a single root block. `reconstruct_tree()` iterates
+level by level (0 to max_level-1), checking each block to see if any saved leaf
+is a descendant (via bit-shifting logical coordinates). If so, the block is
+refined. After each level, neighbor tables are rebuilt.
+
+### CLI integration
+
+- `--checkpoint-every N`: save checkpoint every N steps (default: disabled)
+- `--restart <file>`: restart from a checkpoint file
+
+Both flags work with single-grid and AMR evolution paths.
+
+### Key design decision: no ghost exchange after read
+
+Initial implementation called `ghost_exchange_all_blocks()` after restoring
+field data, which overwrote saved ghost values with freshly-computed
+prolongation/restriction values. This introduced sub-epsilon FP differences
+that broke bitwise-identical restart. Removed — ghost data is preserved
+exactly from the checkpoint file.
+
+### Test results (14/14 PASS)
+
+Test 1 — Uniform grid (32³, L=16, single BH):
+- Checkpoint at step 10, restart, evolve to step 20
+- Ham L2 and center lapse match reference **bitwise-identically**
+
+Test 2 — AMR grid (16³, L=32, 2 AMR levels, single BH):
+- Same pattern, relative tolerance for AMR
+- Leaf count preserved, relative error = 5.6e-16
+
+### New files
+
+| File | Description |
+|------|-------------|
+| `src/io/checkpoint.h` | API: checkpoint_write, checkpoint_read |
+| `src/io/checkpoint.c` | Implementation (~365 lines) |
+| `tests/test_checkpoint.c` | Validation test suite (14/14) |
+
+### Modified files
+
+| File | Changes |
+|------|---------|
+| `src/main.c` | --checkpoint-every, --restart CLI flags + restart path |
+| `Makefile` | checkpoint.c in IO_SRC, test-checkpoint target |
