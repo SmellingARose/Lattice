@@ -69,6 +69,21 @@ if [ "$GPU_VENDOR" = "nvidia" ]; then
         sudo cp -r "$TMPDIR/HIP/include/hip/"* /opt/rocm/include/hip/
         sudo cp -r "$TMPDIR/hipother/hipnv/include/hip/nvidia_detail" /opt/rocm/include/hip/
 
+        # Generate hip_version.h (normally created by CMake during ROCm build)
+        sudo tee /opt/rocm/include/hip/hip_version.h > /dev/null << 'VEOF'
+#ifndef HIP_VERSION_H
+#define HIP_VERSION_H
+
+#define HIP_VERSION_MAJOR 6
+#define HIP_VERSION_MINOR 2
+#define HIP_VERSION_PATCH 41134
+#define HIP_VERSION (HIP_VERSION_MAJOR * 10000000 + HIP_VERSION_MINOR * 100000 + HIP_VERSION_PATCH)
+#define HIP_VERSION_GITHASH "0"
+#define HIP_VERSION_BUILD_NAME ""
+
+#endif
+VEOF
+
         rm -rf "$TMPDIR"
         echo "  HIP headers installed (ROCm $ROCM_TAG)"
     fi
