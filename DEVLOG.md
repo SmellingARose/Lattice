@@ -3,6 +3,45 @@
 > **Note:** When adding/removing/renaming files or functions, also update
 > `docs/architecture.html` — the living map of the codebase structure.
 
+## 2026-03-04: Binary inspiral test upgraded to D10 benchmark
+
+Upgraded `test_binary_inspiral.c` from a smoke test to a full D10 benchmark
+validation against the Samurai cross-code consensus (arXiv:0901.2437). This
+is the canonical equal-mass nonspinning BBH benchmark — 5 independent NR codes
+(BAM, CCATIE, Hahndol, Lean, SpEC) agreed on the remnant properties.
+
+**Initial data:** Exact D10 QC parameters from Bode et al. 2009
+(arXiv:0902.1127, Table I): m_bare=0.48595, d=10M, P_y=±0.09543.
+E_ADM=0.9895, J_ADM=0.9530.
+
+**Grid (matching BAM):** L=1536M (outer boundary at 768M, BAM uses 773M),
+N_block=32, MAX_LEVEL=11, dx_fine=M/43 (BAM medium: M/44.8). CFL=0.25.
+Psi4 extraction at r=90M (BAM extraction radius). Regrid every global step
+to track puncture motion on the coarse base grid (dx_base=48M).
+
+**Physics parameters matched to BAM (gr-qc/0610128, arXiv:1212.2901):**
+kappa1=0.02 (not 0.1), eta=2/M_ADM (constant, not position-dependent),
+sigma=0.1 (not 0.3), gauge="000" variant (full advection on lapse/shift/B),
+no CAKO, no SSL, no per-field sigma. Constraint-preserving BCs.
+
+**Test structure:** 8 Tier 1 hard tests (fail the build): stability, Ham/Mom
+L2 < 0.1, GW present (>0.01) and sane (<0.20), trumpet lapse (<0.4), inspiral
+motion, merger detected. 4 Tier 2 advisory checks (logged): remnant M_chr vs
+Samurai (0.9516±0.05), remnant χ vs Samurai (0.6865±0.10), orbital count,
+peak Psi4 timing.
+
+**New tracking systems:** GW phase via atan2 unwrapping (counts orbits),
+merger detection (sep<3M), remnant AH search (16×32, r_guess=1.5M, after
+merger+50M). CSV extended to 19 columns including remnant properties.
+
+**Target hardware:** H100 GPU (80 GB). 11 AMR levels → 2048 fine substeps
+per global step. ~58 global steps for T=700M.
+
+Refs: arXiv:0902.1127, arXiv:0901.2437, gr-qc/0610128, arXiv:1212.2901.
+
+Also updated `test_inspiral_convergence.c` to use the same D10 parameters
+(m_bare=0.48595, P_y=0.09543).
+
 ## 2026-03-04: Checkpoint/restart for pause and resume
 
 Binary checkpoint/restart system for long-running simulations. Saves full

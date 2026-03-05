@@ -2,8 +2,8 @@
  * Lattice — 3D Numerical Relativity
  * Binary inspiral AMR convergence test.
  *
- * Standard equal-mass non-spinning quasi-circular binary (Brugmann et al.
- * 2008, arXiv:0709.0838):  m_bare = 0.4824, d = 10M, P_y = ±0.0939 (3PN).
+ * Standard equal-mass non-spinning quasi-circular binary (Bode et al.
+ * 2009, arXiv:0902.1127):  m_bare = 0.48595, d = 10M, P_y = ±0.09543 (QC).
  *
  * Self-convergence test: run 3 resolutions with N_block = 32, 48, 64
  * (ratio 1.5x, effective grids 32/48/64).  Uniform AMR mesh
@@ -23,7 +23,7 @@
  * Memory: peak ~16 GB (HIGH run: 27 blocks + pack, classic RK4).
  * Estimated runtime: ~41 hours total (LOW ~3h, MED ~11h, HIGH ~27h).
  *
- * Ref: arXiv:0709.0838 (Brugmann et al. 2008, BAM calibration binary)
+ * Ref: arXiv:0902.1127 (Bode et al. 2009, D10 QC parameters)
  * Ref: arXiv:2409.10383 (AthenaK self-convergence methodology)
  */
 
@@ -43,10 +43,10 @@
 #include <math.h>
 #include <time.h>
 
-/* ── Physical parameters (Brugmann et al. 2008) ──────────────────── */
-#define M_BARE     0.4824   /* bare puncture mass (M_ADM ≈ 1.0)       */
+/* ── Physical parameters (Bode et al. 2009, arXiv:0902.1127) ─────── */
+#define M_BARE     0.48595  /* bare puncture mass (E_ADM ≈ 0.9895)     */
 #define D_SEP      10.0     /* coordinate separation                   */
-#define P_Y        0.0939   /* 3PN quasi-circular tangential momentum  */
+#define P_Y        0.09543  /* quasi-circular tangential momentum      */
 #define L_DOMAIN   64.0     /* domain size [-32, 32]^3                 */
 #define CFL_FACTOR 0.25
 #define NUM_STEPS  6000
@@ -222,8 +222,8 @@ int main(void)
     printf("================================================================\n");
     printf("  Lattice — Binary Inspiral AMR Convergence Test\n");
     printf("================================================================\n");
-    printf("  Physics: equal-mass non-spinning, d=10M, P_y=%.4f (3PN)\n", P_Y);
-    printf("  Ref: Brugmann et al. 2008, arXiv:0709.0838\n");
+    printf("  Physics: equal-mass non-spinning, d=10M, P_y=%.5f (QC)\n", P_Y);
+    printf("  Ref: Bode et al. 2009, arXiv:0902.1127\n");
     printf("  Resolutions: N_block = 32, 48, 64 (ratio 1.5x)\n");
     printf("  max_level=%d (uniform AMR mesh)\n", MAX_LEVEL);
     printf("  Integrator: classic RK4, CFL=%.2f\n", CFL_FACTOR);
