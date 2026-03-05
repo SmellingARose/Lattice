@@ -268,40 +268,65 @@
   domain or resolving a region where the error is already negligible.
 </p>
 
-<h2>9. Which α to Use?</h2>
+<h2>9. Choice: α = 3 (Riemann Curvature)</h2>
 
 <p>
-  The global discretization error is dominated by the field with the largest
-  truncation error at each level boundary. For multiple fields with different
-  falloff exponents, the bottleneck shifts with distance:
+  We choose <strong>α = 3</strong>, optimizing for the Riemann tensor and
+  extrinsic curvature (K, A<sub>ij</sub>), both of which fall as 1/r³ in the
+  far field. This is the physically motivated choice: the Riemann tensor is
+  the fundamental measure of spacetime curvature, and accurately resolving it
+  across all refinement levels ensures that gravitational dynamics are captured
+  with uniform precision.
 </p>
 
-<ul>
-  <li><strong>Far field</strong> (large r): χ − 1 ~ M/r dominates (α = 1, slowest falloff)</li>
-  <li><strong>Intermediate field</strong>: K, A<sub>ij</sub> ~ 1/r³ may dominate (α = 3)</li>
-  <li><strong>Near field</strong> (r ~ M): all fields have comparable gradients</li>
-</ul>
+<p>
+  Fields with slower falloff (χ − 1 ~ 1/r, Γ<sup>i</sup> ~ 1/r²) will be
+  <em>over-resolved</em> at every level boundary — their truncation error will
+  be smaller than the curvature error. This is safe: over-resolution wastes
+  some compute but never degrades accuracy.
+</p>
 
-<p>Recommendations:</p>
+<h3>Derivation of β for α = 3, p = 6</h3>
 
-<ul>
-  <li><strong>Initial data solver</strong> (computing ψ): the evolved field is
-    ψ − 1 ~ M/r, so α = 1, β ≈ 1.68.</li>
-  <li><strong>Evolution</strong>: the chi-gradient criterion already handles
-    adaptive refinement during evolution. The radius scaling matters most
-    for the initial mesh.</li>
-  <li><strong>Conservative choice</strong>: α = 1 (β ≈ 1.68) ensures the slowest-falling
-    field is well-resolved at all levels. Steeper fields (α = 2, 3) will be
-    over-resolved, which is safe.</li>
-</ul>
+<div class="derivation">
+<p>Starting from the equidistribution condition at two adjacent level boundaries:</p>
+
+<span class="eq">
+  dx<sup>p</sup> / r<sup>α+p+1</sup> = (dx/2)<sup>p</sup> / (r/β)<sup>α+p+1</sup>
+</span>
+
+<p>Cancel dx<sup>p</sup>:</p>
+
+<span class="eq">
+  1 / r<sup>α+p+1</sup> = (1/2<sup>p</sup>) / (r/β)<sup>α+p+1</sup>
+</span>
+
+<p>Rearrange:</p>
+
+<span class="eq">
+  β<sup>α+p+1</sup> = 2<sup>p</sup>
+</span>
+
+<p>Solve:</p>
+
+<span class="eq">
+  β = 2<sup>p/(α+p+1)</sup>
+</span>
+
+<p>Substitute p = 6, α = 3:</p>
+
+<span class="eq" style="font-size: 1.3em; font-weight: bold;">
+  β = 2<sup>6/(3+6+1)</sup> = 2<sup>6/10</sup> = 2<sup>3/5</sup> ≈ 1.516
+</span>
+</div>
 
 <div class="note">
-  <strong>Key result:</strong> For a 6th-order scheme resolving a 1/r field
-  (conformal factor), the optimal refinement radius ratio is
-  <strong>β = 2<sup>3/4</sup> ≈ 1.68</strong>, not 2.
-  Each level's radius should shrink by ~40% (not 50%).
-  This requires ~12 levels instead of ~9 for the same domain coverage,
-  but distributes the truncation error evenly across all levels.
+  <strong>Key result:</strong> For a 6th-order scheme resolving 1/r³ curvature fields,
+  the optimal refinement radius ratio is
+  <strong>β = 2<sup>3/5</sup> ≈ 1.516</strong>, not 2.
+  Each level's radius should shrink by ~34% (not 50%).
+  This requires ~15 levels instead of ~9 for the same domain coverage,
+  but distributes the curvature truncation error evenly across all levels.
 </div>
 
 <h2>10. Refinement Radius Formula</h2>
@@ -312,22 +337,35 @@
   k = n−1 coarsest) is:
 </p>
 
-<span class="eq">
-  r<sub>k</sub>(p) = C · M<sub>p</sub> · β<sup>k</sup>
+<span class="eq" style="font-size: 1.2em; font-weight: bold;">
+  r<sub>k</sub> = C · M<sub>p</sub> · 1.516<sup>k</sup>
 </span>
 
 <p>where:</p>
 <ul>
   <li>C ≈ 4 (finest level covers ~4M, well beyond the horizon at r ≈ M/2)</li>
   <li>M<sub>p</sub> = mass of puncture <em>p</em> (unequal masses scale naturally)</li>
-  <li>β = 2<sup>p/(α+p+1)</sup> (derived from equidistribution)</li>
+  <li>1.516 = 2<sup>3/5</sup> (equidistribution-optimal for 6th-order FD on 1/r³ fields)</li>
   <li>k counts from finest (0) to coarsest (n−1)</li>
 </ul>
+
+<p>The number of levels is derived from the domain half-size S = L/2:</p>
+
+<span class="eq">
+  n<sub>amr</sub> = ⌈ log(S / (C · M)) / log(1.516) ⌉
+</span>
+
+<p>
+  For the D10 inspiral (S = 768M, M = 0.486, C = 4):
+  n<sub>amr</sub> = ⌈ log(768 / 1.94) / log(1.516) ⌉ = 15 levels.
+</p>
 
 <p>
   A block at distance <em>d</em> from puncture <em>p</em> should be refined to at
   least level <em>l</em> if d &lt; r<sub>n−l</sub>(p), where <em>n</em> is the total
-  number of AMR levels.
+  number of AMR levels. For N-body systems with unequal masses, each puncture
+  gets its own refinement sphere scaled by M<sub>p</sub> — heavier black holes
+  automatically receive larger refinement regions.
 </p>
 
 <h2>References</h2>
