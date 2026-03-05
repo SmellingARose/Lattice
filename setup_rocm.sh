@@ -34,36 +34,39 @@ fi
 echo ""
 echo "[2/3] Installing HIP headers..."
 
-# Check if HIP headers already exist
 if [ -f /opt/rocm/include/hip/hip_runtime.h ]; then
     echo "  HIP headers already installed at /opt/rocm/include/hip/"
 else
-    # Try apt first (works on some distros)
+    # Try native apt first (works when ROCm repo matches distro)
     if sudo apt install -y hip-dev 2>/dev/null; then
         echo "  Installed hip-dev via apt"
     else
-        # Fallback: download HIP headers from ROCm GitHub (NVIDIA only needs headers)
-        echo "  hip-dev not available via apt, downloading HIP headers from GitHub..."
-        HIP_VERSION="6.2.4"
-        HIP_TAR="/tmp/hip-headers.tar.gz"
-        wget -q "https://github.com/ROCm/HIP/archive/refs/tags/rocm-${HIP_VERSION}.tar.gz" -O "$HIP_TAR"
-        sudo mkdir -p /opt/rocm/include
-        # Extract just the include/hip directory (lowercase 'hip-rocm' in archive)
-        sudo tar xzf "$HIP_TAR" -C /opt/rocm/include --strip-components=2 "hip-rocm-${HIP_VERSION}/include/hip"
-        # HIP headers reference hip/hip_version.h which we create
-        if [ ! -f /opt/rocm/include/hip/hip_version.h ]; then
-            sudo tee /opt/rocm/include/hip/hip_version.h > /dev/null << 'HIPEOF'
-#ifndef HIP_VERSION_H
-#define HIP_VERSION_H
-#define HIP_VERSION_MAJOR 6
-#define HIP_VERSION_MINOR 2
-#define HIP_VERSION_PATCH 4
-#define HIP_VERSION 60200004
-#endif
-HIPEOF
+        # Fallback: add ROCm jammy repo (headers are distro-independent)
+        echo "  hip-dev not in default repos, adding ROCm apt repo (jammy)..."
+        ROCM_VERSION="6.2.4"
+
+        # Add ROCm GPG key
+        wget -qO - https://repo.radeon.com/rocm/rocm.gpg.key \
+            | sudo gpg --dearmor -o /etc/apt/keyrings/rocm.gpg 2>/dev/null
+
+        # Add ROCm jammy repo (works on any Ubuntu — headers are arch-independent)
+        echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/rocm.gpg] https://repo.radeon.com/rocm/apt/${ROCM_VERSION} jammy main" \
+            | sudo tee /etc/apt/sources.list.d/rocm-jammy.list > /dev/null
+
+        sudo apt update
+
+        if [ "$GPU_VENDOR" = "nvidia" ]; then
+            # NVIDIA: install hip-runtime-nvidia (includes nvidia_detail headers)
+            sudo apt install -y hip-runtime-nvidia hip-dev || {
+                # If hip-dev still fails, just get the runtime (has the headers we need)
+                sudo apt install -y hip-runtime-nvidia
+            }
+        else
+            # AMD: full HIP SDK
+            sudo apt install -y hip-dev rocm-hip-sdk
         fi
-        rm -f "$HIP_TAR"
-        echo "  HIP headers installed to /opt/rocm/include/hip/"
+
+        echo "  HIP headers installed from ROCm ${ROCM_VERSION} repo"
     fi
 fi
 
@@ -98,10 +101,12 @@ echo ""
 echo "=== Verification ==="
 echo "nvcc:        $(nvcc --version 2>&1 | grep 'release' || echo 'NOT FOUND')"
 echo "HIP headers: $(ls /opt/rocm/include/hip/hip_runtime.h 2>/dev/null && echo 'OK' || echo 'MISSING')"
+echo "nvidia_detail: $(ls /opt/rocm/include/hip/nvidia_detail/nvidia_hip_runtime.h 2>/dev/null && echo 'OK' || echo 'MISSING')"
 echo "gcc:         $(gcc --version 2>&1 | head -1)"
 
 echo ""
 echo "=== Done! Build with: ==="
+echo "  export HIP_PLATFORM=nvidia CUDA_PATH=/usr"
 echo "  make clean && make BACKEND=gpu"
 echo ""
 echo "Run inspiral:"
