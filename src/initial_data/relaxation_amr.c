@@ -2105,6 +2105,10 @@ void refine_mesh_near_punctures(mesh_t *m, int n_amr_levels,
     for (int level = base_level; level < base_level + n_amr_levels; level++) {
         double dx_level = m->L / (double)(m->N_block * (1 << level));
         double r_refine = 8.0 * dx_level;
+        printf("[AMR-refine] Level %d/%d: dx=%.4f, r_refine=%.2f, blocks=%d\n",
+               level + 1, base_level + n_amr_levels, dx_level, r_refine,
+               m->num_blocks);
+        fflush(stdout);
 
         /* Find leaf blocks at current max_level that are near punctures */
         int n_to_refine = 0;
@@ -2221,6 +2225,7 @@ double relaxation_solve_amr(grid_t *g, int n_bh, const puncture_data_t *bhs,
     /* Precompute backgrounds on ALL blocks (including non-leaf coarse
      * blocks, since the composite V-cycle operates on all levels) */
     if (verbose) printf("[AMR-MG] Precomputing backgrounds...\n");
+    #pragma omp parallel for schedule(dynamic)
     for (int b = 0; b < m->num_blocks; b++) {
         block_t *blk = m->blocks[b];
         if (!blk) continue;
@@ -2364,6 +2369,7 @@ double relaxation_solve_coupled_amr(grid_t *g, int n_bh,
     for (int l = 0; l < mg.n_mg_levels; l++)
         umg_precompute_bg_4field(&mg.mg_levels[l], n_bh, bhs);
 
+    #pragma omp parallel for schedule(dynamic)
     for (int b = 0; b < m->num_blocks; b++) {
         block_t *blk = m->blocks[b];
         if (!blk) continue;
@@ -2578,6 +2584,7 @@ double relaxation_solve_amr_mesh(mesh_t *m, int n_bh, const puncture_data_t *bhs
 
     /* Precompute backgrounds on ALL blocks */
     if (verbose) printf("[AMR-MG-mesh] Precomputing backgrounds...\n");
+    #pragma omp parallel for schedule(dynamic)
     for (int b = 0; b < m->num_blocks; b++) {
         block_t *blk = m->blocks[b];
         if (!blk) continue;
@@ -2687,6 +2694,7 @@ double relaxation_solve_coupled_amr_mesh(mesh_t *m, int n_bh,
     for (int l = 0; l < mg.n_mg_levels; l++)
         umg_precompute_bg_4field(&mg.mg_levels[l], n_bh, bhs);
 
+    #pragma omp parallel for schedule(dynamic)
     for (int b = 0; b < m->num_blocks; b++) {
         block_t *blk = m->blocks[b];
         if (!blk) continue;
