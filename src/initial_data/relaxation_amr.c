@@ -2533,6 +2533,12 @@ double relaxation_solve_amr_mesh(mesh_t *m, int n_bh, const puncture_data_t *bhs
                                   double tol, int max_iter, int verbose,
                                   int n_amr_levels)
 {
+    if (n_amr_levels > MAX_AMR_LEVELS) {
+        fprintf(stderr, "[AMR-MG-mesh] ERROR: n_amr_levels=%d exceeds "
+                "MAX_AMR_LEVELS=%d\n", n_amr_levels, MAX_AMR_LEVELS);
+        return -1.0;
+    }
+
     if (verbose)
         printf("[AMR-MG-mesh] Starting 1-field solver on evolution mesh, "
                "%d AMR levels, tol=%.2e\n", n_amr_levels, tol);

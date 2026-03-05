@@ -360,7 +360,10 @@ void backend_psi4_extract_packed(meshblock_pack_t *pack,
  * Ref: arXiv:2510.11152 (GPU FAS multigrid, 8-color MCGS)
  * ======================================================================== */
 
-#define MAX_SOLVER_SLOTS 8  /* one per AMR level */
+#ifndef MAX_AMR_LEVELS
+#define MAX_AMR_LEVELS 16
+#endif
+#define MAX_SOLVER_SLOTS MAX_AMR_LEVELS  /* one per AMR level */
 
 /* Solver field slot indices: see MGP_* in mg_smooth_point.h */
 
