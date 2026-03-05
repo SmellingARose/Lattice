@@ -43,22 +43,29 @@ Code: `src/initial_data/relaxation_amr.c`, `refine_mesh_near_punctures()`
 
 ## 2. Zero-PCIe GPU-Resident Berger-Oliger Subcycling
 
-**What every other code does:** Host CPU orchestrates each AMR level's RK step,
-triggering GPU kernels and syncing data back to CPU between levels. Data
-ping-pongs across PCIe at each level boundary. AthenaK (Kokkos) keeps data on
-device but still has host-orchestrated subcycling. CarpetX/AMReX offloads
-individual phases but maintains host-side control flow.
+**What other codes do:** AthenaK/Parthenon keeps data device-resident and
+launches kernels from the host with minimal PCIe data copies — architecturally
+similar. CarpetX/AMReX offloads individual phases but maintains host-side
+control flow. The key distinction is what happens for *cross-level* operations
+during subcycling: ghost exchange, temporal interpolation, restriction.
 
-**What we do:** The entire recursive Berger-Oliger subcycle runs on GPU.
-`subcycle_level_gpu()` / `step_level_gpu()` in `rk4.c` execute all RK stages,
-ghost exchanges, and cross-level interpolation without any PCIe transfer.
-A single `gpu_sync_all_to_host()` at the end of the global step brings data
-back for diagnostics.
+**What we do:** The entire recursive Berger-Oliger subcycle runs on GPU with
+zero host-device data copies. `subcycle_level_gpu()` / `step_level_gpu()` in
+`rk4.c` execute all RK stages, ghost exchanges, and cross-level temporal
+interpolation entirely via device kernels. A single `gpu_sync_all_to_host()`
+at the end of the global step brings data back for diagnostics.
+
+**What's distinct from AthenaK:** Our device-side 5-phase ghost exchange
+includes cross-level temporal interpolation (`hip_cross_level_ghost_fill`
+kernel), restriction, and prolongation — all as GPU kernels with pre-uploaded
+neighbor maps. AthenaK's Parthenon does device-resident data but the
+cross-level ghost fill protocol is less documented. Our explicit guarantee
+is: zero `hipMemcpy(D2H)` or `hipMemcpy(H2D)` between `gpu_sync_all_to_host`
+calls.
 
 **Why it matters:** For the D10 inspiral with 11 AMR levels, one global step
-has 2048 fine substeps. Each substep in a host-orchestrated code requires
-PCIe round-trips. At ~5μs latency per transfer, that's 10+ ms of pure
-stalling per global step — eliminated entirely.
+has 2048 fine substeps. Eliminating PCIe round-trips during cross-level
+operations avoids latency stalling in deep refinement hierarchies.
 
 **Key enablers:**
 - Device-side 5-phase ghost exchange (7 kernel launches, zero host copies)
@@ -74,11 +81,13 @@ Code: `src/numerics/rk4.c` (step_level_gpu, subcycle_level_gpu),
 
 ## 3. Initial Data Solved Directly on Evolution AMR Mesh
 
-**What every other code does:** Create a separate solver grid (often uniform
-or a different AMR hierarchy), solve the constraints there, then interpolate
-back onto the evolution mesh. GRChombo uses GRTresna (standalone solver).
-Einstein Toolkit uses TwoPunctures (spectral, 2-body only). AthenaK uses
-external TwoPunctures. All introduce interpolation error.
+**What other codes do:** Most codes create a separate solver grid, solve the
+constraints there, then interpolate back onto the evolution mesh. GRChombo uses
+GRTresna (standalone solver). Einstein Toolkit uses TwoPunctures (spectral,
+2-body only). AthenaK uses external TwoPunctures. Athena++ (Tomida & Stone 2023)
+demonstrated multigrid on the evolution mesh for MHD, and Alic et al.
+(arXiv:0912.2920) proposed the same idea for GR. The concept is known but
+rarely implemented in production NR codes.
 
 **What we do:** The FAS multigrid constraint solver operates directly on the
 evolution AMR blocks at t=0. Solver fields are stored in the evolution grid's
@@ -88,7 +97,9 @@ at the exact discrete points where evolution will happen — no interpolation.
 **Why it matters:** Measured 218,000x better near-field constraint quality
 vs the old interpolation approach on refined meshes. The solver uses the same
 finite-difference operators as the evolution code, ensuring exact discrete
-operator consistency. There is zero interpolation error by construction.
+operator consistency. Zero interpolation error by construction. While the idea
+has been proposed before, we believe this is the first GPU-accelerated
+implementation for NR constraint solving on the actual evolution AMR hierarchy.
 
 Code: `src/initial_data/bowen_york.c` (set_bowen_york_mesh),
 `src/initial_data/relaxation_amr.c` (AMR composite multigrid)
@@ -97,10 +108,11 @@ Code: `src/initial_data/bowen_york.c` (set_bowen_york_mesh),
 
 ## 4. N-Body Initial Data with GPU-Accelerated AMR Multigrid (N > 2)
 
-**What every other code does:** Use the TwoPunctures spectral solver, which
-is limited to exactly 2 punctures. For N > 2, no standard solver exists.
-GRChombo recently evolved a 25-BH cluster (arXiv:2505.01495) but used
-superposition of conformally flat data — not a constraint-satisfying solve.
+**What other codes have done:** Lousto et al. (arXiv:1004.1353, 2010)
+demonstrated N-puncture multigrid constraint solving for up to 100 BHs on
+CPU using the Cactus framework. TwoPunctures (spectral) is limited to N=2.
+GRChombo evolved a 25-BH cluster (arXiv:2505.01495) but used superposition
+of conformally flat data — not a constraint-satisfying solve.
 
 **What we do:** FAS multigrid with Newton-Gauss-Seidel smoothing, 8-color
 GPU-compatible checkerboard, on the actual AMR evolution mesh. Supports
@@ -108,10 +120,13 @@ arbitrary N (tested up to 5, designed for 32). Both 1-field (Bowen-York)
 and 4-field coupled (HiSpID high-spin) solvers. GPU-accelerated via the
 same device-side ghost exchange as evolution.
 
-**Why it matters:** Enables constraint-satisfying initial data for N > 2
-black holes with arbitrary mass, momentum, spin, and charge. Combined with
-solving on the evolution mesh (#3), this gives exact discrete initial data
-for N-body simulations.
+**What's distinct:** Lousto et al. proved N-body multigrid works but used
+CPU-only uniform grids with the Cactus framework. Our solver combines three
+elements no prior code has together: (1) GPU acceleration with 8-color
+checkerboard compatible with warp-based execution, (2) solving directly on
+the evolution AMR mesh (#3), and (3) both Bowen-York and HiSpID (4-field
+coupled) systems. The combination enables constraint-satisfying N-body
+initial data at GPU speed on the exact mesh used for evolution.
 
 Code: `src/initial_data/relaxation.c` (base FAS solver),
 `src/initial_data/relaxation_amr.c` (AMR composite multigrid),
@@ -148,10 +163,11 @@ Code: `src/core/device.h` (LATTICE_DEVICE macro),
 
 ## 6. Einstein-Maxwell Coupled to CCZ4 on GPU
 
-**What every other code does:** Bozzola & Paschalidis (arXiv:2104.06978)
-evolved charged BH binaries using the Einstein Toolkit — CPU-only, BSSN
-formulation. No other code has Maxwell equations coupled to CCZ4, and no
-code has GPU-accelerated Einstein-Maxwell evolution.
+**What other codes do:** Bozzola & Paschalidis (arXiv:2104.06978) evolved
+charged BH binaries using the Einstein Toolkit — CPU-only, BSSN formulation.
+GRaM-X (arXiv:2510.18968) implements resistive MHD coupled to Z4c on GPU
+via the Einstein Toolkit/AMReX, which is a related but different physical
+system (fluid EM, not vacuum Maxwell). No other code couples vacuum Maxwell equations to CCZ4 on GPU.
 
 **What we do:** 6 additional evolved fields (E^i, B^i) with conformal Maxwell
 evolution, constraint damping, and EM stress-energy coupling to CCZ4. Charged
@@ -160,8 +176,10 @@ dispatch: `make EM=on` sets `COMPILED_NUM_FIELDS=31` so hot loops have
 constant bounds; `make EM=off` (default) uses 25 fields with zero EM overhead.
 
 **Why it matters:** Enables charged black hole simulations on GPU with the
-full CCZ4+Maxwell system. The compile-time dispatch means pure-vacuum runs
-pay zero cost for the EM capability.
+full CCZ4+Maxwell system. The distinction from GRaM-X: we solve vacuum
+Einstein-Maxwell (no fluid, pure E^i/B^i evolution with constraint damping),
+they solve resistive MHD (fluid + EM). The compile-time dispatch means
+pure-vacuum runs pay zero cost for the EM capability.
 
 Code: `src/evolution/maxwell_rhs.c`, `src/evolution/ccz4_rhs.c` (EM source terms)
 
@@ -221,20 +239,25 @@ No other single NR code has all of these:
 | CCZ4 evolution | yes | yes | Z4c | Z4c | yes |
 | GPU acceleration | HIP | no | AMReX | Kokkos | no |
 | Einstein-Maxwell | yes | no | BSSN only | no | no |
-| N-body solver (N>2) | yes | no | no | no | no |
+| N-body solver (N>2) | yes | no | CPU only† | no | no |
 | Solve on evolution mesh | yes | no | no | no | no |
-| AH finder | yes | yes | yes | no | yes |
-| Psi4 extraction | yes | yes | yes | yes | yes |
-| CCE worldtube output | yes | no | no | no | no |
+| AH finder | yes | yes | yes | post‡ | yes |
+| Psi4 extraction | yes | yes | yes | post‡ | yes |
+| CCE worldtube output | yes | no | yes§ | post‡ | no |
 | Constraint-preserving BCs | yes | no | no | no | yes |
 | Zero external dependencies | yes | no | no | no | no |
 
+† Lousto et al. (arXiv:1004.1353) demonstrated N-body multigrid in the Cactus
+framework (CPU-only). ‡ AthenaK provides Psi4, AH, and CCE via external
+post-processing tools rather than inline during evolution. § Einstein Toolkit
+has `CCE_Export` thorn for worldtube output.
+
 GRChombo has the broadest physics (scalar fields, modified gravity) but no
-GPU. AthenaK has the best GPU performance but no integrated solver, no EM,
-no AH finder. Einstein Toolkit has the most thorns but requires the Cactus
+GPU. AthenaK has the best GPU performance but diagnostics require external
+post-processing. Einstein Toolkit has the most thorns but requires the Cactus
 framework. Lattice is the only code that combines GPU-accelerated CCZ4 +
-Maxwell + N-body solver + AMR + full diagnostics in a single dependency-free
-C codebase.
+Maxwell + N-body solver + AMR + integrated inline diagnostics in a single
+dependency-free C codebase.
 
 ---
 
