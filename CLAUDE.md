@@ -260,8 +260,8 @@ work on AMR meshes.
 - **Tests:** Flat spacetime, convergence (order 6.5), Bowen-York (33/33 + N-body),
   HiSpID (26/26), AH finder (13/13), Maxwell (15/15), Psi4 (15/15), CCE (49/49),
   CP-BC (30/30), pack_evolve (8/8), amr_prolong (15/15), checkpoint (14/14),
-  binary inspiral (full inspiral+merger+ringdown T=700M:
-  BY+AMR+CCZ4+Psi4+AH+constraints+CSV diagnostics).
+  binary inspiral D10 benchmark (T=700M, BAM-matched params, Samurai consensus
+  validation, 8 hard + 4 advisory tests, 19-column CSV).
   N-body smoke tests:
   3-BH line, 5-BH pentagon. Total: 31 evolved fields (25 CCZ4 + 6 EM).
 
@@ -348,7 +348,7 @@ lattice/
 │   ├── test_psi4.c          # Psi4 gravitational wave extraction tests (15/15)
 │   ├── test_cce_worldtube.c # CCE worldtube HDF5 output tests (49/49, requires HDF5)
 │   ├── test_cp_bc.c         # Constraint-preserving BC tests (30/30)
-│   ├── test_binary_inspiral.c  # Full inspiral+merger+ringdown (T=700M, 10 subsystems, CSV diagnostics)
+│   ├── test_binary_inspiral.c  # D10 benchmark (Samurai consensus, BAM-matched, T=700M, 8+4 tests, 19-col CSV)
 │   ├── test_inspiral_convergence.c  # AMR binary inspiral convergence (3 resolutions)
 │   ├── test_checkpoint.c       # Checkpoint/restart validation (uniform + AMR, 14/14)
 │   ├── test_gpu_debug.c       # GPU kernel isolation test (per-kernel sync barriers)
@@ -382,7 +382,7 @@ make test-maxwell      # Einstein-Maxwell (flat EM, plane wave, charged BH, cons
 make test-psi4         # Psi4 extraction (GL quadrature, harmonics, modes, flat, Schwarzschild)
 make HDF5=on test-cce  # CCE worldtube HDF5 output (requires libhdf5-dev)
 make test-cp-bc        # Constraint-preserving BCs (speeds, formula, flat, single BH)
-make test-inspiral     # Binary inspiral full system validation (all 10 subsystems)
+make test-inspiral     # D10 benchmark: BAM-matched params, Samurai consensus validation (H100)
 make test-inspiral-convergence  # AMR binary inspiral convergence (long run, ~hours)
 make test-checkpoint   # Checkpoint/restart (uniform + AMR, bitwise-identical)
 make test-gpu-debug    # GPU kernel isolation test (requires BACKEND=gpu)

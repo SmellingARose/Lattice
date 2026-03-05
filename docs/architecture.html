@@ -172,7 +172,7 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 
 <div class="banner">
   <strong>Living document.</strong> This is the single architecture reference for the Lattice codebase. Updated whenever structure changes &mdash; see CLAUDE.md.<br>
-  <strong>Last updated:</strong> 2026-03-02 &nbsp;|&nbsp; <strong>Status:</strong> Phase 2 complete, Phase 3 in progress (Tier 1+2+3 optimizations, N-body validated, persistent packs, binary inspiral validated).
+  <strong>Last updated:</strong> 2026-03-04 &nbsp;|&nbsp; <strong>Status:</strong> Phase 2 complete, Phase 3 in progress (Tier 1+2+3 optimizations, N-body validated, persistent packs, D10 benchmark validated).
 </div>
 
 <!-- ========================================== -->
@@ -830,7 +830,7 @@ make clean              # rm -rf build/</code></pre>
 <tr><td><code>make test-maxwell</code></td><td>Einstein-Maxwell: flat EM, plane wave, charged BH, constraints (15 tests)</td><td><span class="badge badge-green">Passing</span></td></tr>
 <tr><td><code>make test-psi4</code></td><td>Psi4 gravitational wave extraction: quadrature, harmonics, modes (15 tests)</td><td><span class="badge badge-green">Passing</span></td></tr>
 <tr><td><code>make test-cp-bc</code></td><td>Constraint-preserving BCs: char speeds, formula, flat, single BH (30 tests)</td><td><span class="badge badge-green">Passing</span></td></tr>
-<tr><td><code>make test-inspiral</code></td><td>Binary inspiral full system validation (T=700M, D=10M equal-mass quasi-circular, N_BLOCK=32, MAX_LEVEL=4): BY+AMR+CCZ4+Psi4+AH+constraints+CSV diagnostics every step (10 subsystems)</td><td><span class="badge badge-green">Passing</span></td></tr>
+<tr><td><code>make test-inspiral</code></td><td>D10 benchmark validation (arXiv:0901.2437 Samurai consensus): T=700M, L=1536M, MAX_LEVEL=11, dx_fine=M/43, BAM-matched params (kappa1=0.02, eta=2.0, sigma=0.1, CP-BCs, Psi4 at r=90M). 8 hard + 4 advisory tests, 19-column CSV, remnant AH search</td><td><span class="badge badge-green">Passing</span></td></tr>
 <tr><td><code>make test-inspiral-convergence</code></td><td>AMR binary inspiral convergence at 3 resolutions (long run)</td><td><span class="badge badge-green">Passing</span></td></tr>
 <tr><td><code>make test-checkpoint</code></td><td>Checkpoint/restart: uniform + AMR, bitwise-identical evolution after restart (14 tests)</td><td><span class="badge badge-green">Passing</span></td></tr>
 </table>
