@@ -2448,13 +2448,20 @@ typedef struct {
 
 static hip_solver_ptrs_t d_solver[MAX_SOLVER_SLOTS];
 
+/* Fatal check for solver slot range — silent return hid the original
+ * MAX_SOLVER_SLOTS=8 overflow bug for weeks. Never again. */
+#define SOLVER_SLOT_CHECK(slot) do { \
+    if ((slot) < 0 || (slot) >= MAX_SOLVER_SLOTS) { \
+        fprintf(stderr, "%s: solver slot %d out of range [0,%d)\n", \
+                __func__, (slot), MAX_SOLVER_SLOTS); \
+        exit(1); \
+    } \
+} while(0)
+
 extern "C"
 void backend_map_solver_pack(meshblock_pack_t *pack, int slot)
 {
-    if (slot < 0 || slot >= MAX_SOLVER_SLOTS) {
-        fprintf(stderr, "backend_map_solver_pack: slot %d out of range\n", slot);
-        return;
-    }
+    SOLVER_SLOT_CHECK(slot);
 
     hip_solver_ptrs_t *sp = &d_solver[slot];
     memset(sp, 0, sizeof(*sp));
@@ -2544,7 +2551,7 @@ static void hip_free_solver_ptrs(hip_solver_ptrs_t *sp)
 extern "C"
 void backend_unmap_solver_pack_sync(meshblock_pack_t *pack, int slot)
 {
-    if (slot < 0 || slot >= MAX_SOLVER_SLOTS) return;
+    SOLVER_SLOT_CHECK(slot);
     hip_solver_ptrs_t *sp = &d_solver[slot];
     if (!sp->valid) return;
 
@@ -2563,7 +2570,7 @@ void backend_unmap_solver_pack_sync(meshblock_pack_t *pack, int slot)
 extern "C"
 void backend_sync_solver_data_to_host(meshblock_pack_t *pack, int slot)
 {
-    if (slot < 0 || slot >= MAX_SOLVER_SLOTS) return;
+    SOLVER_SLOT_CHECK(slot);
     hip_solver_ptrs_t *sp = &d_solver[slot];
     if (!sp->valid) return;
 
@@ -2577,7 +2584,7 @@ void backend_sync_solver_data_to_host(meshblock_pack_t *pack, int slot)
 extern "C"
 void backend_sync_solver_data_to_device(meshblock_pack_t *pack, int slot)
 {
-    if (slot < 0 || slot >= MAX_SOLVER_SLOTS) return;
+    SOLVER_SLOT_CHECK(slot);
     hip_solver_ptrs_t *sp = &d_solver[slot];
     if (!sp->valid) return;
 
@@ -2693,7 +2700,8 @@ extern "C"
 void backend_mg_smooth_packed(meshblock_pack_t *pack, int slot, int color,
                                int four_field)
 {
-    if (slot < 0 || slot >= MAX_SOLVER_SLOTS || !d_solver[slot].valid) return;
+    SOLVER_SLOT_CHECK(slot);
+    if (!d_solver[slot].valid) return;
     hip_solver_ptrs_t *sp = &d_solver[slot];
 
     int nb = pack->n_blocks;
@@ -2782,7 +2790,8 @@ void backend_mg_ghost_same_level_packed(meshblock_pack_t *pack, int slot, int n_
 {
     /* Device-side same-level ghost exchange. One thread per (block, direction).
      * No PCIe transfers — all data stays on device. */
-    if (slot < 0 || slot >= MAX_SOLVER_SLOTS || !d_solver[slot].valid) return;
+    SOLVER_SLOT_CHECK(slot);
+    if (!d_solver[slot].valid) return;
     hip_solver_ptrs_t *sp = &d_solver[slot];
 
     int nb = pack->n_blocks;
@@ -2839,7 +2848,8 @@ __global__ void hip_mg_bc(
 extern "C"
 void backend_mg_bc_packed(meshblock_pack_t *pack, int slot, int four_field)
 {
-    if (slot < 0 || slot >= MAX_SOLVER_SLOTS || !d_solver[slot].valid) return;
+    SOLVER_SLOT_CHECK(slot);
+    if (!d_solver[slot].valid) return;
     hip_solver_ptrs_t *sp = &d_solver[slot];
 
     int nb = pack->n_blocks;
@@ -2941,7 +2951,8 @@ extern "C"
 void backend_mg_operator_packed(meshblock_pack_t *pack, int slot,
                                  int four_field)
 {
-    if (slot < 0 || slot >= MAX_SOLVER_SLOTS || !d_solver[slot].valid) return;
+    SOLVER_SLOT_CHECK(slot);
+    if (!d_solver[slot].valid) return;
     hip_solver_ptrs_t *sp = &d_solver[slot];
 
     int nb = pack->n_blocks;
@@ -3000,7 +3011,8 @@ extern "C"
 void backend_mg_residual_packed(meshblock_pack_t *pack, int slot,
                                  int four_field)
 {
-    if (slot < 0 || slot >= MAX_SOLVER_SLOTS || !d_solver[slot].valid) return;
+    SOLVER_SLOT_CHECK(slot);
+    if (!d_solver[slot].valid) return;
     hip_solver_ptrs_t *sp = &d_solver[slot];
 
     int nb = pack->n_blocks;
@@ -3039,7 +3051,8 @@ __global__ void hip_mg_save(
 extern "C"
 void backend_mg_save_packed(meshblock_pack_t *pack, int slot, int four_field)
 {
-    if (slot < 0 || slot >= MAX_SOLVER_SLOTS || !d_solver[slot].valid) return;
+    SOLVER_SLOT_CHECK(slot);
+    if (!d_solver[slot].valid) return;
     hip_solver_ptrs_t *sp = &d_solver[slot];
 
     int n_sol = four_field ? 4 : 1;
@@ -3085,7 +3098,8 @@ __global__ void hip_mg_tau(
 extern "C"
 void backend_mg_tau_packed(meshblock_pack_t *pack, int slot, int four_field)
 {
-    if (slot < 0 || slot >= MAX_SOLVER_SLOTS || !d_solver[slot].valid) return;
+    SOLVER_SLOT_CHECK(slot);
+    if (!d_solver[slot].valid) return;
     hip_solver_ptrs_t *sp = &d_solver[slot];
 
     int nb = pack->n_blocks;
@@ -3110,7 +3124,8 @@ extern "C"
 void backend_mg_zero_solution_packed(meshblock_pack_t *pack, int slot,
                                       int four_field)
 {
-    if (slot < 0 || slot >= MAX_SOLVER_SLOTS || !d_solver[slot].valid) return;
+    SOLVER_SLOT_CHECK(slot);
+    if (!d_solver[slot].valid) return;
     hip_solver_ptrs_t *sp = &d_solver[slot];
 
     int n_sol = four_field ? 4 : 1;
@@ -3121,7 +3136,8 @@ void backend_mg_zero_solution_packed(meshblock_pack_t *pack, int slot,
 extern "C"
 void backend_mg_zero_rhs_packed(meshblock_pack_t *pack, int slot, int four_field)
 {
-    if (slot < 0 || slot >= MAX_SOLVER_SLOTS || !d_solver[slot].valid) return;
+    SOLVER_SLOT_CHECK(slot);
+    if (!d_solver[slot].valid) return;
     hip_solver_ptrs_t *sp = &d_solver[slot];
 
     int n_sol = four_field ? 4 : 1;
@@ -3210,8 +3226,10 @@ void backend_mg_restrict_packed(meshblock_pack_t *fine_pack, int fine_slot,
                                  const int *child_map, const int *parent_ids,
                                  int n_parents)
 {
-    if (fine_slot < 0 || fine_slot >= MAX_SOLVER_SLOTS || !d_solver[fine_slot].valid) return;
-    if (coarse_slot < 0 || coarse_slot >= MAX_SOLVER_SLOTS || !d_solver[coarse_slot].valid) return;
+    SOLVER_SLOT_CHECK(fine_slot);
+    if (!d_solver[fine_slot].valid) return;
+    SOLVER_SLOT_CHECK(coarse_slot);
+    if (!d_solver[coarse_slot].valid) return;
     if (n_parents == 0) return;
 
     hip_solver_ptrs_t *fsp = &d_solver[fine_slot];
@@ -3324,8 +3342,10 @@ void backend_mg_prolong_add_packed(meshblock_pack_t *coarse_pack, int coarse_slo
                                     const int *child_map, const int *parent_ids,
                                     int n_parents)
 {
-    if (coarse_slot < 0 || coarse_slot >= MAX_SOLVER_SLOTS || !d_solver[coarse_slot].valid) return;
-    if (fine_slot < 0 || fine_slot >= MAX_SOLVER_SLOTS || !d_solver[fine_slot].valid) return;
+    SOLVER_SLOT_CHECK(coarse_slot);
+    if (!d_solver[coarse_slot].valid) return;
+    SOLVER_SLOT_CHECK(fine_slot);
+    if (!d_solver[fine_slot].valid) return;
     if (n_parents == 0) return;
 
     hip_solver_ptrs_t *csp = &d_solver[coarse_slot];
@@ -3434,8 +3454,10 @@ void backend_mg_prolong_fmg_packed(meshblock_pack_t *coarse_pack, int coarse_slo
                                     const int *child_map, const int *parent_ids,
                                     int n_parents)
 {
-    if (coarse_slot < 0 || coarse_slot >= MAX_SOLVER_SLOTS || !d_solver[coarse_slot].valid) return;
-    if (fine_slot < 0 || fine_slot >= MAX_SOLVER_SLOTS || !d_solver[fine_slot].valid) return;
+    SOLVER_SLOT_CHECK(coarse_slot);
+    if (!d_solver[coarse_slot].valid) return;
+    SOLVER_SLOT_CHECK(fine_slot);
+    if (!d_solver[fine_slot].valid) return;
     if (n_parents == 0) return;
 
     hip_solver_ptrs_t *csp = &d_solver[coarse_slot];
@@ -3531,7 +3553,8 @@ extern "C"
 double backend_mg_l2_norm_packed(meshblock_pack_t *pack, int slot,
                                   int four_field)
 {
-    if (slot < 0 || slot >= MAX_SOLVER_SLOTS || !d_solver[slot].valid) return 0.0;
+    SOLVER_SLOT_CHECK(slot);
+    if (!d_solver[slot].valid) return 0.0;
     hip_solver_ptrs_t *sp = &d_solver[slot];
 
     int nb = pack->n_blocks;
@@ -3746,7 +3769,8 @@ extern "C"
 void backend_mg_ghost_full_packed(meshblock_pack_t *pack, int slot,
                                     int coarse_slot, int four_field)
 {
-    if (slot < 0 || slot >= MAX_SOLVER_SLOTS || !d_solver[slot].valid) return;
+    SOLVER_SLOT_CHECK(slot);
+    if (!d_solver[slot].valid) return;
     hip_solver_ptrs_t *sp = &d_solver[slot];
 
     int nb = pack->n_blocks;
@@ -3755,8 +3779,13 @@ void backend_mg_ghost_full_packed(meshblock_pack_t *pack, int slot,
     int Nt = pack->Ntotal;
     size_t npts = pack->npts;
     int n_sol = four_field ? 4 : 1;
+    /* coarse_data is allocated with sp->n_fields stride per block, so all
+     * kernels touching coarse_data must use n_fields (not n_sol) as nf.
+     * The main data buffer also has n_fields fields, so this is safe.
+     * Costs a few extra scratch-field exchanges — negligible vs correctness. */
+    int nf = sp->n_fields;
 
-    /* Phase 1: Same-level exchange on data */
+    /* Phase 1: Same-level exchange on data (only solution fields) */
     {
         int total = nb * NUM_NEIGHBORS;
         int bs = 256;
@@ -3775,14 +3804,14 @@ void backend_mg_ghost_full_packed(meshblock_pack_t *pack, int slot,
 
         /* Phase 2: Restrict data → coarse_data */
         {
-            int total = nb * n_sol * N_c * N_c;
+            int total = nb * nf * N_c * N_c;
             int bs = 256;
             int gs = (total + bs - 1) / bs;
             hipLaunchKernelGGL(hip_ghost_restrict, gs, bs, 0, gpu_stream,
                                sp->data, sp->coarse_data,
                                sp->refined_map,
                                nb, ghost, Nt, ghost_c, N_c, Nt_c,
-                               npts, cnpts, n_sol);
+                               npts, cnpts, nf);
         }
 
         /* Phase 3: Fill coarse_data ghosts (same-level + cross-level) */
@@ -3793,8 +3822,10 @@ void backend_mg_ghost_full_packed(meshblock_pack_t *pack, int slot,
             const double *coarse_dx = NULL;
             int coarse_nb = 0;
 
-            if (coarse_slot >= 0 && coarse_slot < MAX_SOLVER_SLOTS
-                && d_solver[coarse_slot].valid) {
+            if (coarse_slot >= 0) {
+                SOLVER_SLOT_CHECK(coarse_slot);
+            }
+            if (coarse_slot >= 0 && d_solver[coarse_slot].valid) {
                 hip_solver_ptrs_t *csp = &d_solver[coarse_slot];
                 coarse_level_data = csp->data;
                 coarse_origins = csp->origins;
@@ -3813,19 +3844,19 @@ void backend_mg_ghost_full_packed(meshblock_pack_t *pack, int slot,
                                sp->origins, coarse_origins, coarse_dx,
                                nb, coarse_nb,
                                ghost_c, N_c, Nt_c,
-                               Nt, npts, cnpts, n_sol);
+                               Nt, npts, cnpts, nf);
         }
 
         /* Phase 4: Boundary extrapolation (3 dimensions) */
         {
-            int total = nb * n_sol * Nt_c * Nt_c;
+            int total = nb * nf * Nt_c * Nt_c;
             int bs = 256;
             int gs = (total + bs - 1) / bs;
             for (int dim = 0; dim < 3; dim++) {
                 hipLaunchKernelGGL(hip_ghost_extrap, gs, bs, 0, gpu_stream,
                                    sp->coarse_data, sp->refined_map,
                                    sp->nblevel_table,
-                                   nb, ghost, N_c, Nt_c, cnpts, n_sol, dim);
+                                   nb, ghost, N_c, Nt_c, cnpts, nf, dim);
             }
         }
 
@@ -3839,7 +3870,7 @@ void backend_mg_ghost_full_packed(meshblock_pack_t *pack, int slot,
                                sp->refined_map, sp->levels,
                                sp->nblevel_table,
                                nb, ghost, N, Nt, ghost_c, Nt_c,
-                               npts, cnpts, n_sol);
+                               npts, cnpts, nf);
         }
     }
 
@@ -3859,7 +3890,8 @@ extern "C"
 void backend_mg_zero_leaf_rhs_packed(meshblock_pack_t *pack, int slot,
                                        int four_field)
 {
-    if (slot < 0 || slot >= MAX_SOLVER_SLOTS || !d_solver[slot].valid) return;
+    SOLVER_SLOT_CHECK(slot);
+    if (!d_solver[slot].valid) return;
     hip_solver_ptrs_t *sp = &d_solver[slot];
 
     if (!sp->is_parent) return;  /* no parent info uploaded */
@@ -3881,7 +3913,8 @@ extern "C"
 void backend_mg_upload_cf_data(int slot, const int *cf_map, int nb,
                                 const int *is_parent)
 {
-    if (slot < 0 || slot >= MAX_SOLVER_SLOTS || !d_solver[slot].valid) return;
+    SOLVER_SLOT_CHECK(slot);
+    if (!d_solver[slot].valid) return;
     hip_solver_ptrs_t *sp = &d_solver[slot];
 
     /* Free previous allocations if any */

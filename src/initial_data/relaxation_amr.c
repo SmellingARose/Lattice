@@ -2091,22 +2091,70 @@ static double gpu_solve_amr(mg_amr_t *mg, double tol, int max_iter,
 /*
  * Refine a mesh near punctures for n_amr_levels additional levels.
  * Works on any mesh (solver-owned or evolution mesh).
- * At each level, blocks within r_refine = 8*dx_level of any puncture
- * are refined. After each level, the mesh is compacted and neighbors
- * rebuilt.
  *
- * Ref: Athena++ MeshRefinement pattern.
+ * Refinement radius at each level uses equidistribution-optimal scaling:
+ *
+ *   r_k = C * M_p * beta^(n_amr - 1 - k)
+ *
+ * where k counts from the coarsest refinement (base_level) upward,
+ * beta = 2^(3/5) ≈ 1.516, and C = 4.0 (finest level covers 4M).
+ *
+ * beta is derived from equal truncation error at every level boundary
+ * for a p-th order FD scheme on a field falling as 1/r^alpha:
+ *
+ *   beta = 2^(p / (alpha + p + 1))
+ *
+ * We choose alpha = 3 (Riemann tensor / extrinsic curvature ~ 1/r^3)
+ * with p = 6 (6th-order FD), giving beta = 2^(6/10) = 2^(3/5) ≈ 1.516.
+ * Fields with slower falloff (chi ~ 1/r, Gamma^i ~ 1/r^2) are safely
+ * over-resolved.
+ *
+ * Ref: docs/amr_refinement_ratio.html (full derivation)
+ * Ref: arXiv:2312.05438 (L2 sphere-in-sphere comparison)
  */
+
+/* Equidistribution-optimal ratio for 6th-order FD on 1/r^3 fields.
+ * beta = 2^(p/(alpha+p+1)) = 2^(6/(3+6+1)) = 2^(3/5) ≈ 1.516 */
+static const double REFINE_BETA = 1.5157165665103982;  /* pow(2.0, 0.6) */
+static const double REFINE_C    = 4.0;  /* finest level radius = C * M */
+
 void refine_mesh_near_punctures(mesh_t *m, int n_amr_levels,
                                 int n_bh, const puncture_data_t *bhs)
 {
     int base_level = m->max_level;
+    double S = m->L / 2.0;  /* domain half-size: radius cap */
+
+    /* Cap n_amr_levels so coarsest radius doesn't exceed domain half-size.
+     * Levels beyond this would refine the entire domain (uniform subdivision),
+     * which is wasteful. n_useful = floor(log(S/(C*M_min)) / log(beta)) + 1 */
+    double m_min = bhs[0].mass;
+    for (int p = 1; p < n_bh; p++)
+        if (bhs[p].mass < m_min) m_min = bhs[p].mass;
+    double r_finest = REFINE_C * m_min;
+    if (r_finest < S) {
+        int n_useful = (int)(log(S / r_finest) / log(REFINE_BETA)) + 1;
+        if (n_amr_levels > n_useful) {
+            printf("[AMR-refine] Capping levels from %d to %d "
+                   "(domain S=%.1f, r_finest=%.2f)\n",
+                   n_amr_levels, n_useful, S, r_finest);
+            n_amr_levels = n_useful;
+        }
+    }
 
     for (int level = base_level; level < base_level + n_amr_levels; level++) {
+        int k = level - base_level;  /* 0 = coarsest refinement */
+        int levels_from_finest = n_amr_levels - 1 - k;
         double dx_level = m->L / (double)(m->N_block * (1 << level));
-        double r_refine = 8.0 * dx_level;
+
+        /* Compute representative r_refine for logging (use max puncture mass) */
+        double m_max = 0.0;
+        for (int p = 0; p < n_bh; p++)
+            if (bhs[p].mass > m_max) m_max = bhs[p].mass;
+        double r_log = REFINE_C * m_max * pow(REFINE_BETA, levels_from_finest);
+        if (r_log > S) r_log = S;
+
         printf("[AMR-refine] Level %d/%d: dx=%.4f, r_refine=%.2f, blocks=%d\n",
-               level + 1, base_level + n_amr_levels, dx_level, r_refine,
+               level + 1, base_level + n_amr_levels, dx_level, r_log,
                m->num_blocks);
         fflush(stdout);
 
@@ -2132,6 +2180,12 @@ void refine_mesh_near_punctures(mesh_t *m, int n_amr_levels,
             double bz_max = bz_min + N_blk * block_dx;
 
             for (int p = 0; p < n_bh; p++) {
+                /* Per-puncture radius: C * M_p * beta^(levels_from_finest),
+                 * capped at domain half-size S */
+                double r_refine = REFINE_C * bhs[p].mass
+                                * pow(REFINE_BETA, levels_from_finest);
+                if (r_refine > S) r_refine = S;
+
                 double cx = bhs[p].center[0];
                 double cy = bhs[p].center[1];
                 double cz = bhs[p].center[2];
@@ -2177,111 +2231,123 @@ static mesh_t *create_solver_mesh(int N_base, double L, int n_amr_levels,
     return m;
 }
 
+
 /* ================================================================
- * Public API: 1-field AMR solver
+ * Shared solver helpers — used by all 4 public entry points
  * ================================================================ */
-double relaxation_solve_amr(grid_t *g, int n_bh, const puncture_data_t *bhs,
-                             double tol, int max_iter, int verbose,
-                             int n_amr_levels)
+
+/* Build mg_amr_t and uniform MG hierarchy below level 0 */
+static void init_mg_amr(mg_amr_t *mg, mesh_t *m, int n_amr_levels,
+                         int four_field, int N_base, double L,
+                         int n_bh, const puncture_data_t *bhs)
 {
-    /* Fall back to uniform solver if no AMR levels */
-    if (n_amr_levels <= 0)
-        return relaxation_solve(g, n_bh, bhs, tol, max_iter, verbose);
+    memset(mg, 0, sizeof(*mg));
+    mg->mesh = m;
+    mg->n_amr_levels = n_amr_levels;
+    mg->four_field = four_field;
+    mg->n_bh = n_bh;
+    mg->bhs = bhs;
 
-    if (verbose)
-        printf("[AMR-MG] Starting AMR solver: N_base=%d, %d AMR levels, tol=%.2e\n",
-               g->N, n_amr_levels, tol);
-
-    /* Create solver mesh */
-    mesh_t *m = create_solver_mesh(g->N, g->L, n_amr_levels, n_bh, bhs);
-    if (verbose)
-        printf("[AMR-MG] Solver mesh: %d total blocks, %d leaves, max_level=%d\n",
-               m->num_blocks, mesh_num_leaves(m), m->max_level);
-
-    /* Build mg_amr_t */
-    mg_amr_t mg;
-    memset(&mg, 0, sizeof(mg));
-    mg.mesh = m;
-    mg.n_amr_levels = n_amr_levels;
-    mg.four_field = 0;
-    mg.n_bh = n_bh;
-    mg.bhs = bhs;
-
-    /* Build uniform MG hierarchy below level 0 */
-    mg.n_mg_levels = 1;
+    mg->n_mg_levels = 1;
     {
-        int N = g->N;
-        while (N / (1 << mg.n_mg_levels) >= MG_N_MIN
-               && mg.n_mg_levels < MG_MAX_LEVELS)
-            mg.n_mg_levels++;
+        int N = N_base;
+        while (N / (1 << mg->n_mg_levels) >= MG_N_MIN
+               && mg->n_mg_levels < MG_MAX_LEVELS)
+            mg->n_mg_levels++;
     }
-    mg.mg_levels = calloc(mg.n_mg_levels, sizeof(mg_level_amr_t));
-    for (int l = 0; l < mg.n_mg_levels; l++) {
-        int N_l = g->N / (1 << l);
-        mg_level_amr_init(&mg.mg_levels[l], N_l, g->L, 0);
-        umg_precompute_bg_1field(&mg.mg_levels[l], n_bh, bhs);
+    mg->mg_levels = calloc(mg->n_mg_levels, sizeof(mg_level_amr_t));
+    for (int l = 0; l < mg->n_mg_levels; l++) {
+        int N_l = N_base / (1 << l);
+        mg_level_amr_init(&mg->mg_levels[l], N_l, L, four_field);
+    }
+}
+
+/* Precompute backgrounds on MG hierarchy + all mesh blocks, then zero
+ * solver solution and RHS fields. */
+static void precompute_and_zero(mg_amr_t *mg, int verbose, const char *tag)
+{
+    mesh_t *m = mg->mesh;
+    int ff = mg->four_field;
+    int n_bh = mg->n_bh;
+    const puncture_data_t *bhs = mg->bhs;
+
+    if (verbose)
+        printf("[%s] Precomputing %s backgrounds...\n", tag,
+               ff ? "4-field" : "1-field");
+
+    /* Uniform MG levels */
+    for (int l = 0; l < mg->n_mg_levels; l++) {
+        if (ff) umg_precompute_bg_4field(&mg->mg_levels[l], n_bh, bhs);
+        else    umg_precompute_bg_1field(&mg->mg_levels[l], n_bh, bhs);
     }
 
-    /* Precompute backgrounds on ALL blocks (including non-leaf coarse
-     * blocks, since the composite V-cycle operates on all levels) */
-    if (verbose) printf("[AMR-MG] Precomputing backgrounds...\n");
+    /* AMR blocks */
     #pragma omp parallel for schedule(dynamic)
     for (int b = 0; b < m->num_blocks; b++) {
         block_t *blk = m->blocks[b];
         if (!blk) continue;
-        amr_precompute_bg_1field_block(blk, n_bh, bhs);
+        if (ff) amr_precompute_bg_4field_block(blk, n_bh, bhs);
+        else    amr_precompute_bg_1field_block(blk, n_bh, bhs);
     }
 
     /* Zero solver solution and RHS on all blocks.
      * posix_memalign does not zero memory, so rhs contains garbage.
      * The finest-level equation is L(u) = 0, so rhs must be 0. */
+    int n_sol = ff ? 4 : 1;
     for (int b = 0; b < m->num_blocks; b++) {
         block_t *blk = m->blocks[b];
         if (!blk) continue;
-        memset(blk->grid->fields[SOL_PSI], 0,
-               blk->grid->npoints * sizeof(double));
-        memset(blk->grid->rhs[SOL_PSI], 0,
-               blk->grid->npoints * sizeof(double));
-    }
-
-    /* Ghost exchange so backgrounds are in ghost zones too */
-    solver_ghost_exchange_all(m, 0);
-
-    double residual;
-    if (backend_is_gpu()) {
-        residual = gpu_solve_amr(&mg, tol, max_iter, verbose);
-    } else {
-        /* Run composite FMG */
-        if (verbose) printf("[AMR-MG] Running composite FMG...\n");
-        composite_fmg(&mg);
-
-        residual = amr_residual_norm(&mg);
-        if (verbose) printf("[AMR-MG] FMG done: residual = %.6e\n", residual);
-
-        /* Post-FMG V-cycles */
-        for (int cycle = 0; cycle < max_iter && residual > tol; cycle++) {
-            composite_vcycle(&mg, m->max_level);
-            residual = amr_residual_norm(&mg);
-            if (verbose)
-                printf("[AMR-MG] V-cycle %d: residual = %.6e\n",
-                       cycle + 1, residual);
+        for (int s = 0; s < n_sol; s++) {
+            memset(blk->grid->fields[s], 0,
+                   blk->grid->npoints * sizeof(double));
+            memset(blk->grid->rhs[s], 0,
+                   blk->grid->npoints * sizeof(double));
         }
     }
 
-    /* Transfer AMR solution to the target grid.
-     *
-     * The output grid has level-0 resolution (uniform).  We copy only
-     * level-0 data, which was updated by FAS V-cycle corrections from
-     * fine levels and is consistent with the coarse FD stencils.
-     *
-     * NOTE: Restricting fine-level data to the coarse output grid creates
-     * artifacts at refinement boundaries (discontinuities in FD stencils),
-     * worsening apparent constraint quality.  For AMR evolution meshes,
-     * each block should receive data directly from its corresponding
-     * solver level — that path is in set_bowen_york_mesh() (TODO). */
-    double *psi_full = calloc(g->npoints, sizeof(double));
+    solver_ghost_exchange_all(m, ff);
+}
 
-    /* Copy level-0 data (fills everything including ghost zones) */
+/* Run FMG + post-FMG V-cycles (CPU or GPU path) */
+static double run_solve_loop(mg_amr_t *mg, double tol, int max_iter,
+                              int verbose, const char *tag)
+{
+    mesh_t *m = mg->mesh;
+    double residual;
+
+    if (backend_is_gpu()) {
+        residual = gpu_solve_amr(mg, tol, max_iter, verbose);
+    } else {
+        if (verbose) printf("[%s] Running composite FMG%s...\n", tag,
+                            mg->four_field ? " (4-field)" : "");
+        composite_fmg(mg);
+
+        residual = amr_residual_norm(mg);
+        if (verbose) printf("[%s] FMG done: residual = %.6e\n", tag, residual);
+
+        for (int cycle = 0; cycle < max_iter && residual > tol; cycle++) {
+            composite_vcycle(mg, m->max_level);
+            residual = amr_residual_norm(mg);
+            if (verbose)
+                printf("[%s] V-cycle %d: residual = %.6e\n",
+                       tag, cycle + 1, residual);
+        }
+    }
+    return residual;
+}
+
+/* Free MG hierarchy (not the mesh) */
+static void cleanup_mg_amr(mg_amr_t *mg)
+{
+    for (int l = 0; l < mg->n_mg_levels; l++)
+        mg_level_amr_free(&mg->mg_levels[l]);
+    free(mg->mg_levels);
+}
+
+/* Copy level-0 solver data to a uniform output grid (psi only).
+ * Used by the 1-field grid-based entry point. */
+static void transfer_1field_to_grid(mesh_t *m, grid_t *g, double *psi_full)
+{
     for (int b = 0; b < m->num_blocks; b++) {
         block_t *blk = m->blocks[b];
         if (!blk || blk->loc.level != 0 || !blk->grid) continue;
@@ -2309,117 +2375,14 @@ double relaxation_solve_amr(grid_t *g, int n_bh, const puncture_data_t *bhs,
                     }
                 }
     }
-
-    /* Set CCZ4 fields */
-    set_ccz4_from_psi(g, psi_full, n_bh, bhs);
-
-    /* Cleanup */
-    free(psi_full);
-    for (int l = 0; l < mg.n_mg_levels; l++)
-        mg_level_amr_free(&mg.mg_levels[l]);
-    free(mg.mg_levels);
-    mesh_free(m);
-
-    return residual;
 }
 
-/* ================================================================
- * Public API: 4-field AMR solver (HiSpID coupled)
- * ================================================================ */
-double relaxation_solve_coupled_amr(grid_t *g, int n_bh,
-                                     const puncture_data_t *bhs,
-                                     double tol, int max_iter, int verbose,
-                                     int n_amr_levels)
+/* Copy solver data to a uniform output grid (psi + V).
+ * Pass 1: level-0 data, Pass 2: restricted fine-level data.
+ * Used by the 4-field grid-based entry point. */
+static void transfer_4field_to_grid(mesh_t *m, grid_t *g,
+                                     double *psi_full, double *V_full[3])
 {
-    if (n_amr_levels <= 0)
-        return relaxation_solve_coupled(g, n_bh, bhs, tol, max_iter, verbose);
-
-    if (verbose)
-        printf("[AMR-MG] Starting coupled AMR solver: N_base=%d, %d AMR levels\n",
-               g->N, n_amr_levels);
-
-    mesh_t *m = create_solver_mesh(g->N, g->L, n_amr_levels, n_bh, bhs);
-    if (verbose)
-        printf("[AMR-MG] Solver mesh: %d total blocks, %d leaves, max_level=%d\n",
-               m->num_blocks, mesh_num_leaves(m), m->max_level);
-
-    mg_amr_t mg;
-    memset(&mg, 0, sizeof(mg));
-    mg.mesh = m;
-    mg.n_amr_levels = n_amr_levels;
-    mg.four_field = 1;
-    mg.n_bh = n_bh;
-    mg.bhs = bhs;
-
-    mg.n_mg_levels = 1;
-    {
-        int N = g->N;
-        while (N / (1 << mg.n_mg_levels) >= MG_N_MIN
-               && mg.n_mg_levels < MG_MAX_LEVELS)
-            mg.n_mg_levels++;
-    }
-    mg.mg_levels = calloc(mg.n_mg_levels, sizeof(mg_level_amr_t));
-    for (int l = 0; l < mg.n_mg_levels; l++) {
-        int N_l = g->N / (1 << l);
-        mg_level_amr_init(&mg.mg_levels[l], N_l, g->L, 1);
-    }
-
-    if (verbose)
-        printf("[AMR-MG] Precomputing 4-field backgrounds...\n");
-    for (int l = 0; l < mg.n_mg_levels; l++)
-        umg_precompute_bg_4field(&mg.mg_levels[l], n_bh, bhs);
-
-    #pragma omp parallel for schedule(dynamic)
-    for (int b = 0; b < m->num_blocks; b++) {
-        block_t *blk = m->blocks[b];
-        if (!blk) continue;
-        amr_precompute_bg_4field_block(blk, n_bh, bhs);
-    }
-
-    /* Zero solver solution and RHS on all blocks.
-     * posix_memalign does not zero memory, so rhs contains garbage.
-     * The finest-level equation is L(u) = 0, so rhs must be 0. */
-    for (int b = 0; b < m->num_blocks; b++) {
-        block_t *blk = m->blocks[b];
-        if (!blk) continue;
-        grid_t *bg = blk->grid;
-        memset(bg->fields[SOL_PSI], 0, bg->npoints * sizeof(double));
-        memset(bg->fields[SOL_V1], 0, bg->npoints * sizeof(double));
-        memset(bg->fields[SOL_V2], 0, bg->npoints * sizeof(double));
-        memset(bg->fields[SOL_V3], 0, bg->npoints * sizeof(double));
-        memset(bg->rhs[SOL_PSI], 0, bg->npoints * sizeof(double));
-        memset(bg->rhs[SOL_V1], 0, bg->npoints * sizeof(double));
-        memset(bg->rhs[SOL_V2], 0, bg->npoints * sizeof(double));
-        memset(bg->rhs[SOL_V3], 0, bg->npoints * sizeof(double));
-    }
-
-    solver_ghost_exchange_all(m, 1);
-
-    double residual;
-    if (backend_is_gpu()) {
-        residual = gpu_solve_amr(&mg, tol, max_iter, verbose);
-    } else {
-        if (verbose) printf("[AMR-MG] Running composite FMG (4-field)...\n");
-        composite_fmg(&mg);
-
-        residual = amr_residual_norm(&mg);
-        if (verbose) printf("[AMR-MG] FMG done: residual = %.6e\n", residual);
-
-        for (int cycle = 0; cycle < max_iter && residual > tol; cycle++) {
-            composite_vcycle(&mg, m->max_level);
-            residual = amr_residual_norm(&mg);
-            if (verbose)
-                printf("[AMR-MG] V-cycle %d: residual = %.6e\n",
-                       cycle + 1, residual);
-        }
-    }
-
-    /* Transfer solution: pass 1 (level 0) + pass 2 (fine levels) */
-    double *psi_full = calloc(g->npoints, sizeof(double));
-    double *V_full[3];
-    for (int d = 0; d < 3; d++)
-        V_full[d] = calloc(g->npoints, sizeof(double));
-
     /* Pass 1: level-0 data fills everything */
     for (int b = 0; b < m->num_blocks; b++) {
         block_t *blk = m->blocks[b];
@@ -2506,28 +2469,102 @@ double relaxation_solve_coupled_amr(grid_t *g, int n_bh,
                     }
         }
     }
+}
 
+/* Validate accum arrays present on mesh (required for RK_CLASSIC solver) */
+static int check_accum_arrays(mesh_t *m)
+{
+    for (int b = 0; b < m->num_blocks; b++) {
+        block_t *blk = m->blocks[b];
+        if (!blk || !blk->is_leaf) continue;
+        if (!blk->grid->accum_block) {
+            fprintf(stderr, "[AMR-MG-mesh] ERROR: accum arrays not allocated. "
+                    "Use RK_CLASSIC for evolution mesh solver.\n");
+            return 0;
+        }
+        break;
+    }
+    return 1;
+}
+
+/* ================================================================
+ * Public API: 1-field AMR solver (grid-based, creates internal mesh)
+ * ================================================================ */
+double relaxation_solve_amr(grid_t *g, int n_bh, const puncture_data_t *bhs,
+                             double tol, int max_iter, int verbose,
+                             int n_amr_levels)
+{
+    if (n_amr_levels <= 0)
+        return relaxation_solve(g, n_bh, bhs, tol, max_iter, verbose);
+
+    if (verbose)
+        printf("[AMR-MG] Starting AMR solver: N_base=%d, %d AMR levels, tol=%.2e\n",
+               g->N, n_amr_levels, tol);
+
+    mesh_t *m = create_solver_mesh(g->N, g->L, n_amr_levels, n_bh, bhs);
+    if (verbose)
+        printf("[AMR-MG] Solver mesh: %d total blocks, %d leaves, max_level=%d\n",
+               m->num_blocks, mesh_num_leaves(m), m->max_level);
+
+    mg_amr_t mg;
+    init_mg_amr(&mg, m, n_amr_levels, 0, g->N, g->L, n_bh, bhs);
+    precompute_and_zero(&mg, verbose, "AMR-MG");
+    double residual = run_solve_loop(&mg, tol, max_iter, verbose, "AMR-MG");
+
+    double *psi_full = calloc(g->npoints, sizeof(double));
+    transfer_1field_to_grid(m, g, psi_full);
+    set_ccz4_from_psi(g, psi_full, n_bh, bhs);
+
+    free(psi_full);
+    cleanup_mg_amr(&mg);
+    mesh_free(m);
+    return residual;
+}
+
+/* ================================================================
+ * Public API: 4-field AMR solver (HiSpID coupled, grid-based)
+ * ================================================================ */
+double relaxation_solve_coupled_amr(grid_t *g, int n_bh,
+                                     const puncture_data_t *bhs,
+                                     double tol, int max_iter, int verbose,
+                                     int n_amr_levels)
+{
+    if (n_amr_levels <= 0)
+        return relaxation_solve_coupled(g, n_bh, bhs, tol, max_iter, verbose);
+
+    if (verbose)
+        printf("[AMR-MG] Starting coupled AMR solver: N_base=%d, %d AMR levels\n",
+               g->N, n_amr_levels);
+
+    mesh_t *m = create_solver_mesh(g->N, g->L, n_amr_levels, n_bh, bhs);
+    if (verbose)
+        printf("[AMR-MG] Solver mesh: %d total blocks, %d leaves, max_level=%d\n",
+               m->num_blocks, mesh_num_leaves(m), m->max_level);
+
+    mg_amr_t mg;
+    init_mg_amr(&mg, m, n_amr_levels, 1, g->N, g->L, n_bh, bhs);
+    precompute_and_zero(&mg, verbose, "AMR-MG");
+    double residual = run_solve_loop(&mg, tol, max_iter, verbose, "AMR-MG");
+
+    double *psi_full = calloc(g->npoints, sizeof(double));
+    double *V_full[3];
+    for (int d = 0; d < 3; d++)
+        V_full[d] = calloc(g->npoints, sizeof(double));
+    transfer_4field_to_grid(m, g, psi_full, V_full);
     set_ccz4_from_hispid(g, psi_full, V_full, n_bh, bhs);
 
     free(psi_full);
     for (int d = 0; d < 3; d++)
         free(V_full[d]);
-    for (int l = 0; l < mg.n_mg_levels; l++)
-        mg_level_amr_free(&mg.mg_levels[l]);
-    free(mg.mg_levels);
+    cleanup_mg_amr(&mg);
     mesh_free(m);
-
     return residual;
 }
 
 /* ================================================================
  * Public API: 1-field solver on external (evolution) mesh
  *
- * Solves the Hamiltonian constraint directly on the caller's mesh.
- * The mesh blocks' fields/rhs/scratch/accum arrays are used as
- * solver workspace — at t=0 these are idle.
- *
- * Ref: Tomida & Stone 2023 (Athena++ MG self-gravity on evolution mesh)
+ * Ref: Athena++ MG (Tomida & Stone 2023), arXiv:0912.2920 (Alic et al.)
  * ================================================================ */
 double relaxation_solve_amr_mesh(mesh_t *m, int n_bh, const puncture_data_t *bhs,
                                   double tol, int max_iter, int verbose,
@@ -2538,106 +2575,24 @@ double relaxation_solve_amr_mesh(mesh_t *m, int n_bh, const puncture_data_t *bhs
                 "MAX_AMR_LEVELS=%d\n", n_amr_levels, MAX_AMR_LEVELS);
         return -1.0;
     }
+    if (!check_accum_arrays(m)) return -1.0;
 
     if (verbose)
         printf("[AMR-MG-mesh] Starting 1-field solver on evolution mesh, "
                "%d AMR levels, tol=%.2e\n", n_amr_levels, tol);
 
-    /* Verify accum arrays are present (requires RK_CLASSIC) */
-    for (int b = 0; b < m->num_blocks; b++) {
-        block_t *blk = m->blocks[b];
-        if (!blk || !blk->is_leaf) continue;
-        if (!blk->grid->accum_block) {
-            fprintf(stderr, "[AMR-MG-mesh] ERROR: accum arrays not allocated. "
-                    "Use RK_CLASSIC for evolution mesh solver.\n");
-            return -1.0;
-        }
-        break;
-    }
-
-    /* Refine mesh near punctures */
     if (n_amr_levels > 0)
         refine_mesh_near_punctures(m, n_amr_levels, n_bh, bhs);
-
     if (verbose)
         printf("[AMR-MG-mesh] Mesh: %d blocks, %d leaves, max_level=%d\n",
                m->num_blocks, mesh_num_leaves(m), m->max_level);
 
-    /* Build mg_amr_t (borrows mesh, does not own it) */
     mg_amr_t mg;
-    memset(&mg, 0, sizeof(mg));
-    mg.mesh = m;
-    mg.n_amr_levels = n_amr_levels;
-    mg.four_field = 0;
-    mg.n_bh = n_bh;
-    mg.bhs = bhs;
+    init_mg_amr(&mg, m, n_amr_levels, 0, m->N_block, m->L, n_bh, bhs);
+    precompute_and_zero(&mg, verbose, "AMR-MG-mesh");
+    double residual = run_solve_loop(&mg, tol, max_iter, verbose, "AMR-MG-mesh");
 
-    /* Build uniform MG hierarchy below level 0 */
-    int N_eff = m->N_block;
-    mg.n_mg_levels = 1;
-    {
-        int N = N_eff;
-        while (N / (1 << mg.n_mg_levels) >= MG_N_MIN
-               && mg.n_mg_levels < MG_MAX_LEVELS)
-            mg.n_mg_levels++;
-    }
-    mg.mg_levels = calloc(mg.n_mg_levels, sizeof(mg_level_amr_t));
-    for (int l = 0; l < mg.n_mg_levels; l++) {
-        int N_l = N_eff / (1 << l);
-        mg_level_amr_init(&mg.mg_levels[l], N_l, m->L, 0);
-        umg_precompute_bg_1field(&mg.mg_levels[l], n_bh, bhs);
-    }
-
-    /* Precompute backgrounds on ALL blocks */
-    if (verbose) printf("[AMR-MG-mesh] Precomputing backgrounds...\n");
-    #pragma omp parallel for schedule(dynamic)
-    for (int b = 0; b < m->num_blocks; b++) {
-        block_t *blk = m->blocks[b];
-        if (!blk) continue;
-        amr_precompute_bg_1field_block(blk, n_bh, bhs);
-    }
-
-    /* Zero solver solution and RHS on all blocks.
-     * posix_memalign does not zero memory, so rhs contains garbage.
-     * The finest-level equation is L(u) = 0, so rhs must be 0.
-     * Coarser-level rhs is set by tau correction during V-cycles. */
-    for (int b = 0; b < m->num_blocks; b++) {
-        block_t *blk = m->blocks[b];
-        if (!blk) continue;
-        memset(blk->grid->fields[SOL_PSI], 0,
-               blk->grid->npoints * sizeof(double));
-        memset(blk->grid->rhs[SOL_PSI], 0,
-               blk->grid->npoints * sizeof(double));
-    }
-
-    solver_ghost_exchange_all(m, 0);
-
-    double residual;
-    if (backend_is_gpu()) {
-        residual = gpu_solve_amr(&mg, tol, max_iter, verbose);
-    } else {
-        /* Run composite FMG */
-        if (verbose) printf("[AMR-MG-mesh] Running composite FMG...\n");
-        composite_fmg(&mg);
-
-        residual = amr_residual_norm(&mg);
-        if (verbose) printf("[AMR-MG-mesh] FMG done: residual = %.6e\n", residual);
-
-        /* Post-FMG V-cycles */
-        for (int cycle = 0; cycle < max_iter && residual > tol; cycle++) {
-            composite_vcycle(&mg, m->max_level);
-            residual = amr_residual_norm(&mg);
-            if (verbose)
-                printf("[AMR-MG-mesh] V-cycle %d: residual = %.6e\n",
-                       cycle + 1, residual);
-        }
-    }
-
-    /* Free MG hierarchy only — mesh is caller-owned */
-    for (int l = 0; l < mg.n_mg_levels; l++)
-        mg_level_amr_free(&mg.mg_levels[l]);
-    free(mg.mg_levels);
-
+    cleanup_mg_amr(&mg);
     return residual;
 }
 
@@ -2649,106 +2604,23 @@ double relaxation_solve_coupled_amr_mesh(mesh_t *m, int n_bh,
                                           double tol, int max_iter, int verbose,
                                           int n_amr_levels)
 {
+    if (!check_accum_arrays(m)) return -1.0;
+
     if (verbose)
         printf("[AMR-MG-mesh] Starting 4-field solver on evolution mesh, "
                "%d AMR levels, tol=%.2e\n", n_amr_levels, tol);
 
-    /* Verify accum arrays are present */
-    for (int b = 0; b < m->num_blocks; b++) {
-        block_t *blk = m->blocks[b];
-        if (!blk || !blk->is_leaf) continue;
-        if (!blk->grid->accum_block) {
-            fprintf(stderr, "[AMR-MG-mesh] ERROR: accum arrays not allocated. "
-                    "Use RK_CLASSIC for evolution mesh solver.\n");
-            return -1.0;
-        }
-        break;
-    }
-
-    /* Refine mesh near punctures */
     if (n_amr_levels > 0)
         refine_mesh_near_punctures(m, n_amr_levels, n_bh, bhs);
-
     if (verbose)
         printf("[AMR-MG-mesh] Mesh: %d blocks, %d leaves, max_level=%d\n",
                m->num_blocks, mesh_num_leaves(m), m->max_level);
 
     mg_amr_t mg;
-    memset(&mg, 0, sizeof(mg));
-    mg.mesh = m;
-    mg.n_amr_levels = n_amr_levels;
-    mg.four_field = 1;
-    mg.n_bh = n_bh;
-    mg.bhs = bhs;
+    init_mg_amr(&mg, m, n_amr_levels, 1, m->N_block, m->L, n_bh, bhs);
+    precompute_and_zero(&mg, verbose, "AMR-MG-mesh");
+    double residual = run_solve_loop(&mg, tol, max_iter, verbose, "AMR-MG-mesh");
 
-    int N_eff = m->N_block;
-    mg.n_mg_levels = 1;
-    {
-        int N = N_eff;
-        while (N / (1 << mg.n_mg_levels) >= MG_N_MIN
-               && mg.n_mg_levels < MG_MAX_LEVELS)
-            mg.n_mg_levels++;
-    }
-    mg.mg_levels = calloc(mg.n_mg_levels, sizeof(mg_level_amr_t));
-    for (int l = 0; l < mg.n_mg_levels; l++) {
-        int N_l = N_eff / (1 << l);
-        mg_level_amr_init(&mg.mg_levels[l], N_l, m->L, 1);
-    }
-
-    if (verbose)
-        printf("[AMR-MG-mesh] Precomputing 4-field backgrounds...\n");
-    for (int l = 0; l < mg.n_mg_levels; l++)
-        umg_precompute_bg_4field(&mg.mg_levels[l], n_bh, bhs);
-
-    #pragma omp parallel for schedule(dynamic)
-    for (int b = 0; b < m->num_blocks; b++) {
-        block_t *blk = m->blocks[b];
-        if (!blk) continue;
-        amr_precompute_bg_4field_block(blk, n_bh, bhs);
-    }
-
-    /* Zero solver solution and RHS on all blocks.
-     * posix_memalign does not zero memory, so rhs contains garbage.
-     * The finest-level equation is L(u) = 0, so rhs must be 0. */
-    for (int b = 0; b < m->num_blocks; b++) {
-        block_t *blk = m->blocks[b];
-        if (!blk) continue;
-        grid_t *g = blk->grid;
-        memset(g->fields[SOL_PSI], 0, g->npoints * sizeof(double));
-        memset(g->fields[SOL_V1], 0, g->npoints * sizeof(double));
-        memset(g->fields[SOL_V2], 0, g->npoints * sizeof(double));
-        memset(g->fields[SOL_V3], 0, g->npoints * sizeof(double));
-        memset(g->rhs[SOL_PSI], 0, g->npoints * sizeof(double));
-        memset(g->rhs[SOL_V1], 0, g->npoints * sizeof(double));
-        memset(g->rhs[SOL_V2], 0, g->npoints * sizeof(double));
-        memset(g->rhs[SOL_V3], 0, g->npoints * sizeof(double));
-    }
-
-    solver_ghost_exchange_all(m, 1);
-
-    double residual;
-    if (backend_is_gpu()) {
-        residual = gpu_solve_amr(&mg, tol, max_iter, verbose);
-    } else {
-        if (verbose) printf("[AMR-MG-mesh] Running composite FMG (4-field)...\n");
-        composite_fmg(&mg);
-
-        residual = amr_residual_norm(&mg);
-        if (verbose) printf("[AMR-MG-mesh] FMG done: residual = %.6e\n", residual);
-
-        for (int cycle = 0; cycle < max_iter && residual > tol; cycle++) {
-            composite_vcycle(&mg, m->max_level);
-            residual = amr_residual_norm(&mg);
-            if (verbose)
-                printf("[AMR-MG-mesh] V-cycle %d: residual = %.6e\n",
-                       cycle + 1, residual);
-        }
-    }
-
-    /* Free MG hierarchy only — mesh is caller-owned */
-    for (int l = 0; l < mg.n_mg_levels; l++)
-        mg_level_amr_free(&mg.mg_levels[l]);
-    free(mg.mg_levels);
-
+    cleanup_mg_amr(&mg);
     return residual;
 }

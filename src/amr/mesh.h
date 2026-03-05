@@ -24,7 +24,7 @@
 
 EXTERN_C_BEGIN
 
-#define MAX_AMR_LEVELS 16
+#define MAX_AMR_LEVELS 20
 
 typedef struct mesh_s {
     block_t   **blocks;       /* array of all blocks (indexed by ID)       */

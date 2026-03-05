@@ -360,8 +360,10 @@ void backend_psi4_extract_packed(meshblock_pack_t *pack,
  * Ref: arXiv:2510.11152 (GPU FAS multigrid, 8-color MCGS)
  * ======================================================================== */
 
+/* MAX_AMR_LEVELS: authoritative definition in mesh.h (= 20).
+ * This guard ensures backend.h compiles even without mesh.h. */
 #ifndef MAX_AMR_LEVELS
-#define MAX_AMR_LEVELS 16
+#define MAX_AMR_LEVELS 20
 #endif
 #define MAX_SOLVER_SLOTS MAX_AMR_LEVELS  /* one per AMR level */
 

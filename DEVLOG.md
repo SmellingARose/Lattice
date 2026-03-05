@@ -3,6 +3,33 @@
 > **Note:** When adding/removing/renaming files or functions, also update
 > `docs/architecture.html` — the living map of the codebase structure.
 
+## 2026-03-05: Equidistribution-optimal AMR refinement radius scaling
+
+Replaced the ad-hoc `r = 8*dx` refinement radius formula in
+`refine_mesh_near_punctures()` with a physics-derived formula:
+
+    r_k = C · M_p · β^k,  β = 2^(3/5) ≈ 1.516,  C = 4
+
+β is derived from the equidistribution principle: equal truncation error
+at every level boundary for a p-th order FD scheme on a 1/r^α field:
+
+    β = 2^(p / (α + p + 1))
+
+We choose α = 3 (Riemann curvature / extrinsic curvature ~ 1/r³) with
+p = 6 (6th-order FD), giving β = 2^(6/10) = 2^(3/5) ≈ 1.516. This is
+less than the standard halving (β = 2), which is only optimal for a
+constant field (α = 0). Fields with slower falloff (χ ~ 1/r, Γ^i ~ 1/r²)
+are safely over-resolved.
+
+The radius is now per-puncture (scaled by M_p), so unequal-mass binaries
+automatically get mass-appropriate refinement regions. Domain half-size
+cap prevents excessive levels on small domains.
+
+Old formula depended on N_block (grid-dependent); new formula depends only
+on BH mass (physics-dependent).
+
+Full derivation: docs/amr_refinement_ratio.html
+
 ## 2026-03-04: Fix GPU solver slot limit for deep AMR
 
 `MAX_SOLVER_SLOTS` was hardcoded to 8 in `backend.h`, but the D10 benchmark

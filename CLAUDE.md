@@ -228,6 +228,13 @@ work on AMR meshes.
   strain at scri+. Optional dependency on libhdf5 (`make HDF5=on`). CLI: `--cce`,
   `--cce_every`, `--cce_radius`, `--cce_lmax`.
 - **AMR:** Block-structured Berger-Oliger with subcycling, Morton-ordered mesh, 6th-order prolongation/restriction, multi-level ghost exchange. AMR-aware 1D output slices and AH finder.
+  Refinement radius per level uses equidistribution-optimal scaling:
+  `r_k = C · M_p · β^k` where β = 2^(3/5) ≈ 1.516 (derived from equal
+  truncation error at every level boundary for 6th-order FD on 1/r³ Riemann
+  curvature fields), C = 4 (finest level covers 4M), M_p = puncture mass.
+  Number of levels auto-capped at domain half-size. Per-puncture radii scale
+  with mass — heavier BHs get larger refinement regions.
+  Ref: docs/amr_refinement_ratio.html (full derivation).
 - **Solve on evolution mesh:** AMR initial data constraint solver operates directly
   on evolution blocks (`set_bowen_york_mesh()`), eliminating interpolation error
   and ensuring exact discrete operator consistency. Solver reuses idle evolution
