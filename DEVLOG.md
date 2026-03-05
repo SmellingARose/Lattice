@@ -3,6 +3,15 @@
 > **Note:** When adding/removing/renaming files or functions, also update
 > `docs/architecture.html` — the living map of the codebase structure.
 
+## 2026-03-04: Fix GPU solver slot limit for deep AMR
+
+`MAX_SOLVER_SLOTS` was hardcoded to 8 in `backend.h`, but the D10 benchmark
+uses 11 AMR levels (slots 0–11 = 12 slots). Slots 8–11 silently failed to map
+in `backend_map_solver_pack`, causing the GPU multigrid solver to return
+residual=0.0 and produce -nan constraints. Fixed by deriving
+`MAX_SOLVER_SLOTS` from `MAX_AMR_LEVELS` (16). Added runtime validation in
+`relaxation_solve_amr_mesh` to catch future mismatches.
+
 ## 2026-03-04: Binary inspiral test upgraded to D10 benchmark
 
 Upgraded `test_binary_inspiral.c` from a smoke test to a full D10 benchmark
