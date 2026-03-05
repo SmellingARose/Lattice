@@ -34,9 +34,18 @@ fi
 echo ""
 echo "[2/3] Installing HIP headers..."
 
+HEADERS_OK=0
 if [ -f /opt/rocm/include/hip/hip_runtime.h ]; then
-    echo "  HIP headers already installed at /opt/rocm/include/hip/"
-else
+    if [ "$GPU_VENDOR" = "nvidia" ] && [ ! -f /opt/rocm/include/hip/nvidia_detail/nvidia_hip_runtime.h ]; then
+        echo "  HIP headers found but nvidia_detail missing — reinstalling..."
+        sudo rm -rf /opt/rocm/include/hip
+    else
+        echo "  HIP headers already installed at /opt/rocm/include/hip/"
+        HEADERS_OK=1
+    fi
+fi
+
+if [ "$HEADERS_OK" -eq 0 ]; then
     # Try native apt first (works when ROCm repo matches distro)
     if sudo apt install -y hip-dev 2>/dev/null; then
         echo "  Installed hip-dev via apt"
