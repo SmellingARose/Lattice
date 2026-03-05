@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AMR Refinement — How It Works</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+  color: #2d333b; background: #f6f8fa; line-height: 1.7;
+  max-width: 860px; margin: 0 auto; padding: 40px 28px 80px;
+}
+h1 { font-size: 1.8rem; margin-bottom: 8px; color: #1c2128; }
+h2 { font-size: 1.3rem; margin-top: 36px; margin-bottom: 10px; color: #1c2128;
+     border-bottom: 2px solid #d0d7de; padding-bottom: 6px; }
+h3 { font-size: 1.05rem; margin-top: 24px; margin-bottom: 8px; color: #444c56; }
+p { margin-bottom: 14px; }
+code { background: #eff1f3; padding: 2px 6px; border-radius: 4px; font-size: 0.9em; }
+pre { background: #1c2128; color: #e6edf3; padding: 18px 20px; border-radius: 8px;
+      overflow-x: auto; font-size: 0.85rem; line-height: 1.5; margin: 16px 0; }
+.subtitle { color: #636e7b; font-size: 0.95rem; margin-bottom: 28px; }
+table { border-collapse: collapse; width: 100%; margin: 16px 0; }
+th, td { border: 1px solid #d0d7de; padding: 8px 12px; text-align: left; font-size: 0.9rem; }
+th { background: #f0f3f6; font-weight: 600; }
+tr:nth-child(even) { background: #f8f9fb; }
+.highlight { background: #dafbe1; }
+
+/* Diagram styling */
+.diagram {
+  margin: 24px 0; padding: 24px; background: #fff; border: 1px solid #d0d7de;
+  border-radius: 10px; text-align: center;
+}
+.diagram svg { max-width: 100%; height: auto; }
+.caption { font-size: 0.82rem; color: #636e7b; margin-top: 10px; font-style: italic; }
+
+/* Step cards */
+.steps { display: flex; flex-direction: column; gap: 16px; margin: 20px 0; }
+.step {
+  background: #fff; border: 1px solid #d0d7de; border-radius: 8px;
+  padding: 16px 20px; display: flex; gap: 16px; align-items: flex-start;
+}
+.step-num {
+  background: #1c2128; color: #fff; width: 32px; height: 32px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center; font-weight: 700;
+  font-size: 0.9rem; flex-shrink: 0;
+}
+.step-body h3 { margin-top: 0; margin-bottom: 4px; }
+.step-body p { margin-bottom: 0; font-size: 0.92rem; }
+
+.formula-box {
+  background: #fff; border: 2px solid #0969da; border-radius: 8px;
+  padding: 20px 24px; margin: 20px 0; text-align: center;
+}
+.formula-box .formula { font-size: 1.2rem; font-weight: 600; color: #0969da; margin-bottom: 6px; }
+.formula-box .explain { font-size: 0.85rem; color: #636e7b; }
+</style>
+</head>
+<body>
+
+<h1>AMR Refinement — How It Works</h1>
+<p class="subtitle">
+  How Lattice decides where to add resolution around black holes.
+  <br>See also: <a href="amr_refinement_ratio.html">mathematical derivation of beta=1.516</a>
+</p>
+
+<!-- ===== THE IDEA ===== -->
+<h2>The Idea</h2>
+
+<p>Black holes have steep gradients — curvature falls off as 1/r&sup3;. We need
+fine grid cells near the puncture and coarse cells far away. AMR (Adaptive Mesh
+Refinement) achieves this by nesting progressively smaller, finer boxes around
+each black hole.</p>
+
+<div class="diagram">
+<svg viewBox="0 0 600 320" xmlns="http://www.w3.org/2000/svg">
+  <!-- Domain -->
+  <rect x="20" y="20" width="560" height="280" fill="#f6f8fa" stroke="#636e7b" stroke-width="1.5" rx="4"/>
+  <text x="40" y="46" font-size="12" fill="#636e7b">Domain (dx = 48M)</text>
+
+  <!-- Level 1 -->
+  <rect x="120" y="60" width="360" height="220" fill="#dbeafe" stroke="#3b82f6" stroke-width="1.5" rx="4" opacity="0.6"/>
+  <text x="135" y="82" font-size="11" fill="#1e40af">Level 1 (dx = 24M, r = 124M)</text>
+
+  <!-- Level 2 -->
+  <rect x="170" y="95" width="260" height="170" fill="#bfdbfe" stroke="#2563eb" stroke-width="1.5" rx="4" opacity="0.6"/>
+  <text x="185" y="115" font-size="11" fill="#1e40af">Level 2 (dx = 12M, r = 82M)</text>
+
+  <!-- Level 3 -->
+  <rect x="210" y="125" width="180" height="120" fill="#93c5fd" stroke="#1d4ed8" stroke-width="1.5" rx="4" opacity="0.7"/>
+  <text x="222" y="145" font-size="11" fill="#1e3a8a">Level 3 (dx = 6M, r = 54M)</text>
+
+  <!-- Fine nests around each BH -->
+  <!-- BH 1 (left) -->
+  <rect x="240" y="155" width="50" height="50" fill="#60a5fa" stroke="#1d4ed8" stroke-width="1" rx="3" opacity="0.7"/>
+  <circle cx="265" cy="180" r="8" fill="#1e3a8a"/>
+  <text x="248" y="220" font-size="9" fill="#1e3a8a">BH 1</text>
+
+  <!-- BH 2 (right) -->
+  <rect x="320" y="155" width="50" height="50" fill="#60a5fa" stroke="#1d4ed8" stroke-width="1" rx="3" opacity="0.7"/>
+  <circle cx="345" cy="180" r="8" fill="#1e3a8a"/>
+  <text x="328" y="220" font-size="9" fill="#1e3a8a">BH 2</text>
+
+  <!-- Labels -->
+  <text x="270" y="250" font-size="10" fill="#636e7b">Finest levels: separate nests per BH</text>
+
+  <!-- Fine level labels -->
+  <text x="237" y="168" font-size="8" fill="#fff">L9-11</text>
+  <text x="317" y="168" font-size="8" fill="#fff">L9-11</text>
+</svg>
+<div class="caption">Nested refinement boxes around a binary. Coarse levels (1-8) cover both BHs; fine levels (9-11) wrap each puncture individually.</div>
+</div>
+
+<!-- ===== THE FORMULA ===== -->
+<h2>The Radius Formula</h2>
+
+<p>Each level's refinement radius is set by physics, not the grid spacing:</p>
+
+<div class="formula-box">
+  <div class="formula">r<sub>k</sub> = C &middot; M &middot; &beta;<sup>(levels_from_finest)</sup></div>
+  <div class="explain">
+    C = 4 (finest level covers 4M around puncture) &nbsp;|&nbsp;
+    M = puncture mass &nbsp;|&nbsp;
+    &beta; = 2<sup>3/5</sup> &asymp; 1.516
+  </div>
+</div>
+
+<p>&beta; = 1.516 is derived from equalizing truncation error at every level boundary
+for 6th-order finite differences on 1/r&sup3; curvature fields.
+<a href="amr_refinement_ratio.html">Full derivation here.</a></p>
+
+<h3>D10 Inspiral Example (M = 0.486)</h3>
+
+<table>
+<tr><th>Level</th><th>dx (M)</th><th>r_refine (M)</th><th>Coverage</th></tr>
+<tr><td>1</td><td>48.0</td><td>124.4</td><td>Both BHs (shared)</td></tr>
+<tr><td>2</td><td>24.0</td><td>82.1</td><td>Both BHs (shared)</td></tr>
+<tr><td>3</td><td>12.0</td><td>54.1</td><td>Both BHs (shared)</td></tr>
+<tr><td>4</td><td>6.0</td><td>35.7</td><td>Both BHs (shared)</td></tr>
+<tr><td>5</td><td>3.0</td><td>23.6</td><td>Both BHs (shared)</td></tr>
+<tr><td>6</td><td>1.5</td><td>15.6</td><td>Both BHs (shared)</td></tr>
+<tr><td>7</td><td>0.75</td><td>10.3</td><td>Both BHs (shared)</td></tr>
+<tr><td>8</td><td>0.375</td><td>6.8</td><td>Both BHs (shared)</td></tr>
+<tr class="highlight"><td>9</td><td>0.1875</td><td>4.5</td><td>Per-puncture</td></tr>
+<tr class="highlight"><td>10</td><td>0.094</td><td>2.9</td><td>Per-puncture</td></tr>
+<tr class="highlight"><td>11</td><td>0.047</td><td>1.9</td><td>Per-puncture</td></tr>
+</table>
+
+<p>Levels 1-8 have <code>r &gt; D/2 = 5M</code>, so both punctures share one refined region.
+At level 9 the radius drops below 5M and each BH gets its own nest.</p>
+
+<!-- ===== STEP BY STEP ===== -->
+<h2>Step by Step</h2>
+
+<div class="steps">
+  <div class="step">
+    <div class="step-num">1</div>
+    <div class="step-body">
+      <h3>Cap useless levels</h3>
+      <p>If the coarsest refinement radius would exceed the domain half-size (S = L/2),
+      cap the number of levels. Prevents wasting work refining the entire domain uniformly.</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num">2</div>
+    <div class="step-body">
+      <h3>Compute radius for this level</h3>
+      <p>For each puncture: <code>r = 4 &times; M_puncture &times; 1.516^(levels_from_finest)</code>.
+      Heavier BHs get larger radii automatically.</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num">3</div>
+    <div class="step-body">
+      <h3>Find blocks within radius</h3>
+      <p>Loop over every leaf block at the current level. Compute the minimum distance from
+      each puncture to the block's bounding box (AABB-point distance). If a puncture is
+      <em>inside</em> the block, distance = 0.</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num">4</div>
+    <div class="step-body">
+      <h3>Flag and split</h3>
+      <p>If distance &lt; r_refine, flag the block. Then split every flagged block
+      into 8 children (oct-tree refinement). Each child has half the grid spacing.</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="step-num">5</div>
+    <div class="step-body">
+      <h3>Rebuild and repeat</h3>
+      <p>Compact the mesh, rebuild neighbor connectivity, then move to the next level
+      and repeat with a smaller radius and finer blocks.</p>
+    </div>
+  </div>
+</div>
+
+<!-- ===== DISTANCE CHECK DIAGRAM ===== -->
+<h2>The Distance Check</h2>
+
+<p>We use <strong>AABB-point distance</strong> (minimum distance from the puncture to the
+block's axis-aligned bounding box), not center-to-center distance. This matters for
+large blocks where the puncture might be inside or touching the edge.</p>
+
+<div class="diagram">
+<svg viewBox="0 0 520 240" xmlns="http://www.w3.org/2000/svg">
+  <!-- Block A: puncture inside -->
+  <rect x="30" y="40" width="120" height="120" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5" rx="3"/>
+  <circle cx="75" cy="95" r="7" fill="#dc2626"/>
+  <text x="55" y="30" font-size="11" font-weight="600" fill="#2d333b">Block A</text>
+  <text x="35" y="185" font-size="10" fill="#636e7b">Puncture inside block</text>
+  <text x="45" y="200" font-size="10" fill="#16a34a" font-weight="600">dist = 0 (REFINE)</text>
+
+  <!-- Block B: puncture nearby -->
+  <rect x="200" y="40" width="120" height="120" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5" rx="3"/>
+  <circle cx="175" cy="80" r="7" fill="#dc2626"/>
+  <line x1="182" y1="80" x2="200" y2="80" stroke="#dc2626" stroke-width="1.5" stroke-dasharray="4,3"/>
+  <text x="183" y="73" font-size="9" fill="#dc2626">18M</text>
+  <text x="225" y="30" font-size="11" font-weight="600" fill="#2d333b">Block B</text>
+  <text x="195" y="185" font-size="10" fill="#636e7b">Puncture near block edge</text>
+  <text x="200" y="200" font-size="10" fill="#16a34a" font-weight="600">dist = 18 &lt; r (REFINE)</text>
+
+  <!-- Block C: puncture far away -->
+  <rect x="370" y="40" width="120" height="120" fill="#f0f3f6" stroke="#adb5bd" stroke-width="1.5" rx="3"/>
+  <circle cx="340" cy="60" r="7" fill="#dc2626"/>
+  <line x1="347" y1="60" x2="370" y2="60" stroke="#dc2626" stroke-width="1.5" stroke-dasharray="4,3"/>
+  <text x="348" y="53" font-size="9" fill="#dc2626">200M</text>
+  <text x="395" y="30" font-size="11" font-weight="600" fill="#2d333b">Block C</text>
+  <text x="375" y="185" font-size="10" fill="#636e7b">Puncture far from block</text>
+  <text x="380" y="200" font-size="10" fill="#dc2626" font-weight="600">dist = 200 &gt; r (SKIP)</text>
+
+  <!-- Legend -->
+  <circle cx="195" cy="228" r="5" fill="#dc2626"/>
+  <text x="205" y="232" font-size="10" fill="#636e7b">= puncture position</text>
+</svg>
+<div class="caption">AABB-point distance: clamp puncture position to the block bounds, then measure Euclidean distance. Puncture inside block = distance 0.</div>
+</div>
+
+<!-- ===== UNEQUAL MASS ===== -->
+<h2>Unequal Masses</h2>
+
+<p>The radius is <strong>per-puncture</strong>, scaled by each BH's mass. A 10M black hole
+gets refinement regions 10x larger than a 1M black hole at every level. This is
+automatic — no tuning needed.</p>
+
+<div class="diagram">
+<svg viewBox="0 0 520 200" xmlns="http://www.w3.org/2000/svg">
+  <!-- Big BH nest -->
+  <rect x="40" y="20" width="220" height="170" fill="none" stroke="#2563eb" stroke-width="1.5" stroke-dasharray="6,3" rx="6"/>
+  <rect x="80" y="50" width="140" height="110" fill="none" stroke="#2563eb" stroke-width="1.5" rx="4"/>
+  <rect x="115" y="75" width="70" height="60" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5" rx="3"/>
+  <circle cx="150" cy="105" r="12" fill="#1e3a8a"/>
+  <text x="133" y="110" font-size="10" fill="#fff" font-weight="600">10M</text>
+  <text x="100" y="165" font-size="10" fill="#636e7b">Large nests</text>
+
+  <!-- Small BH nest -->
+  <rect x="350" y="55" width="120" height="100" fill="none" stroke="#dc2626" stroke-width="1.5" stroke-dasharray="6,3" rx="6"/>
+  <rect x="375" y="75" width="70" height="60" fill="none" stroke="#dc2626" stroke-width="1.5" rx="4"/>
+  <rect x="393" y="90" width="34" height="30" fill="#fee2e2" stroke="#dc2626" stroke-width="1.5" rx="3"/>
+  <circle cx="410" cy="105" r="6" fill="#991b1b"/>
+  <text x="402" y="108" font-size="8" fill="#fff" font-weight="600">1M</text>
+  <text x="370" y="165" font-size="10" fill="#636e7b">Small nests</text>
+
+  <!-- Label -->
+  <text x="185" y="195" font-size="11" fill="#2d333b" font-weight="600">r = 4 &times; M &times; 1.516^k &mdash; scales with mass</text>
+</svg>
+<div class="caption">A 10:1 mass ratio binary. Each puncture's refinement region is proportional to its mass.</div>
+</div>
+
+<!-- ===== OLD vs NEW ===== -->
+<h2>Old vs New Formula</h2>
+
+<table>
+<tr><th></th><th>Old (r = 8 &times; dx)</th><th>New (r = C &middot; M &middot; &beta;<sup>k</sup>)</th></tr>
+<tr><td>Depends on</td><td>Grid spacing (dx)</td><td>BH mass (M)</td></tr>
+<tr><td>Finest level radius</td><td>0.375 M (too small)</td><td>1.94 M (covers strong field)</td></tr>
+<tr><td>Coarsest level radius</td><td>384 M (too large)</td><td>124 M (tighter)</td></tr>
+<tr><td>Unequal mass</td><td>Same radius for all BHs</td><td>Per-puncture, mass-weighted</td></tr>
+<tr><td>Theory</td><td>Ad-hoc rule of thumb</td><td>Equal truncation error at every boundary</td></tr>
+</table>
+
+<p>The new formula puts more resolution where it matters (near the puncture)
+and wastes less on the coarse levels. For the D10 inspiral, it produces
+<strong>fewer total blocks</strong> at coarse levels and <strong>better coverage</strong>
+at fine levels.</p>
+
+<!-- ===== CODE REFERENCE ===== -->
+<h2>Code Reference</h2>
+
+<pre>
+/* src/initial_data/relaxation_amr.c — refine_mesh_near_punctures() */
+
+static const double REFINE_BETA = 1.5157165665103982;  /* pow(2.0, 0.6) */
+static const double REFINE_C    = 4.0;  /* finest level = 4M */
+
+for (int level = base_level; level &lt; base_level + n_amr_levels; level++) {
+    int levels_from_finest = n_amr_levels - 1 - (level - base_level);
+
+    for (each puncture p) {
+        double r_refine = REFINE_C * bhs[p].mass
+                        * pow(REFINE_BETA, levels_from_finest);
+
+        for (each leaf block at this level) {
+            double dist = AABB_point_distance(block, puncture);
+            if (dist &lt; r_refine)
+                flag_for_refinement(block);  /* split into 8 children */
+        }
+    }
+}
+</pre>
+
+<p style="margin-top: 24px; color: #636e7b; font-size: 0.85rem;">
+  Lattice &mdash; 3D Numerical Relativity Simulator<br>
+  Last updated: 2026-03-05
+</p>
+
+</body>
+</html>
