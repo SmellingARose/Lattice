@@ -295,7 +295,7 @@ lattice/
 │   │   ├── backend_cpu.c       # OpenMP threads (CPU)
 │   │   └── backend_hip.cpp     # HIP GPU kernels (AMD + NVIDIA)
 │   ├── evolution/
-│   │   ├── ccz4_rhs.c          # CCZ4 right-hand-side (+EM source terms)
+│   │   ├── ccz4_rhs.h/c        # CCZ4 right-hand-side (+EM source terms)
 │   │   ├── maxwell_rhs.h/c     # Maxwell evolution equations (E^i, B^i)
 │   │   └── dissipation.c       # Kreiss-Oliger dissipation
 │   ├── geometry/
@@ -303,20 +303,21 @@ lattice/
 │   ├── numerics/
 │   │   ├── finite_diff.h       # FD_D1, FD_D2 macros (6th-order)
 │   │   ├── interpolate.h       # 6th-order off-grid Lagrange interpolation
-│   │   └── rk4.c               # RK4 time integrator (+mesh stepping)
+│   │   └── rk4.h/c             # RK4 time integrator (+mesh stepping)
 │   ├── initial_data/
-│   │   ├── puncture.c          # Brill-Lindquist puncture data
+│   │   ├── puncture.h/c        # Brill-Lindquist puncture data
 │   │   ├── bowen_york.h/c      # BY A_ij (momentum+spin) + CCZ4 conversion (+mesh-level API)
 │   │   ├── relaxation.h/c      # FAS multigrid constraint solver (1-field + 4-field coupled)
 │   │   ├── relaxation_amr.h/c  # AMR composite multigrid (FAS + uniform MG hierarchy)
+│   │   ├── mg_smooth_point.h   # Multigrid smoothing point kernels (shared by relaxation solvers)
 │   │   └── kerr_quasi_isotropic.h/c  # QI Kerr metric for HiSpID (high-spin data)
 │   ├── diagnostics/
-│   │   ├── constraints.c       # Hamiltonian + momentum constraints
+│   │   ├── constraints.h/c     # Hamiltonian + momentum constraints
 │   │   ├── ah_finder.h/c       # Apparent horizon finder (hyperbolic flow)
 │   │   ├── psi4.h/c            # Psi4 gravitational wave extraction
 │   │   └── cce_worldtube.h/c   # CCE worldtube HDF5 output (optional, HDF5=on)
 │   ├── boundary/
-│   │   ├── sommerfeld.c        # radiative BCs (+block-aware variant)
+│   │   ├── sommerfeld.h/c      # radiative BCs (+block-aware variant)
 │   │   └── constraint_preserving.h  # CP BCs: characteristic speeds + CP RHS formula
 │   ├── amr/
 │   │   ├── morton.h             # Morton (Z-order) encoding for SFC
@@ -358,15 +359,14 @@ lattice/
 │   ├── test_binary_inspiral.c  # D10 benchmark (Samurai consensus, BAM-matched, T=700M, 8+4 tests, 19-col CSV)
 │   ├── test_inspiral_convergence.c  # AMR binary inspiral convergence (3 resolutions)
 │   ├── test_checkpoint.c       # Checkpoint/restart validation (uniform + AMR, 14/14)
-│   ├── test_gpu_debug.c       # GPU kernel isolation test (per-kernel sync barriers)
-│   └── convergence.sh          # 3-resolution convergence check
+│   └── test_gpu_debug.c       # GPU kernel isolation test (per-kernel sync barriers)
 ├── docs/
 │   ├── architecture.html       # consolidated architecture & design reference
+│   ├── amr_refinement_ratio.html  # equidistribution-optimal β=1.516 derivation
 │   └── archive/                # older deep-dive guides (preserved, not primary)
 └── tools/
     ├── compute_amr_weights.py  # SymPy derivation of AMR stencil weights
-    ├── verify_weights.c        # bit-exact verification of pre-computed weight tables
-    └── plot_convergence.py
+    └── verify_weights.c        # bit-exact verification of pre-computed weight tables
 ```
 
 ## Build & Test
@@ -376,13 +376,20 @@ make                    # CPU build (-O3 -ffast-math -march=native -flto)
 make BACKEND=gpu        # GPU build (HIP — AMD + NVIDIA, requires ROCm)
 make debug              # debug build (-O0 -g -fsanitize=address,undefined)
 make test               # all tests
+make test-single-bh     # single puncture evolution
 make test-convergence   # 3-resolution convergence verification
+make test-constraints   # Hamiltonian + momentum constraint tests
+make test-head-on       # head-on binary collision
 make test-amr-mesh      # AMR mesh creation + Morton ordering
 make test-amr-ghost     # ghost exchange + multi-block evolution
 make test-amr-prolong   # prolongation + noise reduction (CAKO/CAHD/SSL)
 make test-amr-refine    # oct-tree refinement + multi-level ghost exchange
+make test-amr-evolve    # AMR evolution integration (8/8)
+make test-amr-accuracy  # AMR accuracy validation
+make test-pack-evolve   # packed batch kernel validation (8/8)
 make test-subcycle      # Berger-Oliger subcycling validation
 make test-bowen-york   # Bowen-York initial data (A_ij, solver, evolution)
+make test-relaxation-amr  # AMR composite multigrid solver (14/14)
 make test-hispid       # HiSpID high-spin initial data (QI Kerr + coupled solver)
 make test-ah           # Apparent horizon finder (interpolation, Schwarzschild, diagnostics)
 make test-maxwell      # Einstein-Maxwell (flat EM, plane wave, charged BH, constraints)

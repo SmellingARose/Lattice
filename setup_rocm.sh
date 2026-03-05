@@ -1,7 +1,7 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
-# Lattice GPU setup for vast.ai containers (any template, Ubuntu 22.04).
+# Lattice GPU setup for vast.ai containers (Ubuntu 22.04/24.04, x86_64).
 # Template: vastai/base-image:stock-ubuntu22.04
 #
 # Key constraint: vast.ai bind-mounts NVIDIA drivers into containers.
@@ -11,9 +11,22 @@ set -e
 #
 # Solution: cuda-toolkit-12-4 (toolkit only, no drivers) + git clone for
 # HIP headers (no apt dependency chain).
+#
+# Override ROCm tag: ROCM_TAG=rocm-7.2.0 ./setup_rocm.sh
 
 echo "=== Lattice GPU Setup ==="
 echo ""
+
+# Sanity checks
+if ! command -v apt-get &>/dev/null; then
+    echo "ERROR: apt-get not found. This script requires Ubuntu/Debian."
+    exit 1
+fi
+ARCH=$(uname -m)
+if [ "$ARCH" != "x86_64" ]; then
+    echo "ERROR: Only x86_64 is supported (detected: $ARCH)."
+    exit 1
+fi
 
 # 1. Build tools
 echo "[1/4] Installing build tools..."
@@ -59,18 +72,19 @@ if [ "$GPU_VENDOR" = "nvidia" ]; then
         echo "  HIP headers already installed"
     else
         echo "  Installing HIP headers from GitHub..."
-        ROCM_TAG="rocm-6.2.4"
-        TMPDIR=$(mktemp -d)
+        ROCM_TAG="${ROCM_TAG:-rocm-6.2.4}"
+        CLONE_DIR=$(mktemp -d)
+        trap 'rm -rf "$CLONE_DIR"' EXIT
 
         # Need headers from 3 repos: HIP (main), clr (amd_detail), hipother (nvidia_detail)
-        git clone --depth 1 --branch "$ROCM_TAG" https://github.com/ROCm/HIP.git "$TMPDIR/HIP"
-        git clone --depth 1 --branch "$ROCM_TAG" https://github.com/ROCm/clr.git "$TMPDIR/clr"
-        git clone --depth 1 --branch "$ROCM_TAG" https://github.com/ROCm/hipother.git "$TMPDIR/hipother"
+        git clone --depth 1 --branch "$ROCM_TAG" https://github.com/ROCm/HIP.git "$CLONE_DIR/HIP"
+        git clone --depth 1 --branch "$ROCM_TAG" https://github.com/ROCm/clr.git "$CLONE_DIR/clr"
+        git clone --depth 1 --branch "$ROCM_TAG" https://github.com/ROCm/hipother.git "$CLONE_DIR/hipother"
 
         sudo mkdir -p /opt/rocm/include/hip
-        sudo cp -r "$TMPDIR/HIP/include/hip/"* /opt/rocm/include/hip/
-        sudo cp -r "$TMPDIR/clr/hipamd/include/hip/amd_detail" /opt/rocm/include/hip/
-        sudo cp -r "$TMPDIR/hipother/hipnv/include/hip/nvidia_detail" /opt/rocm/include/hip/
+        sudo cp -r "$CLONE_DIR/HIP/include/hip/"* /opt/rocm/include/hip/
+        sudo cp -r "$CLONE_DIR/clr/hipamd/include/hip/amd_detail" /opt/rocm/include/hip/
+        sudo cp -r "$CLONE_DIR/hipother/hipnv/include/hip/nvidia_detail" /opt/rocm/include/hip/
 
         # Generate hip_version.h (normally created by CMake during ROCm build)
         sudo tee /opt/rocm/include/hip/hip_version.h > /dev/null << 'VEOF'
@@ -87,11 +101,20 @@ if [ "$GPU_VENDOR" = "nvidia" ]; then
 #endif
 VEOF
 
-        rm -rf "$TMPDIR"
+        rm -rf "$CLONE_DIR"
+        trap - EXIT
         echo "  HIP headers installed (ROCm $ROCM_TAG)"
     fi
 else
     echo "  Installing ROCm HIP SDK..."
+    # Add ROCm apt repository if not already present
+    if ! apt-cache policy 2>/dev/null | grep -q "repo.radeon.com"; then
+        echo "  Adding ROCm apt repository..."
+        wget -q -O - https://repo.radeon.com/rocm/rocm.gpg.key | sudo gpg --dearmor -o /etc/apt/keyrings/rocm.gpg
+        echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/rocm.gpg] https://repo.radeon.com/rocm/apt/latest jammy main" | \
+            sudo tee /etc/apt/sources.list.d/rocm.list > /dev/null
+        sudo apt-get update -qq
+    fi
     sudo apt-get install -y hip-dev rocm-hip-sdk
 fi
 
@@ -127,10 +150,14 @@ fi
 echo ""
 echo "=== Verification ==="
 echo "gcc:           $(gcc --version 2>&1 | head -1)"
-echo "nvcc:          $(nvcc --version 2>&1 | grep 'release' || echo 'NOT FOUND')"
-echo "HIP headers:   $(test -f /opt/rocm/include/hip/hip_runtime.h && echo 'OK' || echo 'MISSING')"
 if [ "$GPU_VENDOR" = "nvidia" ]; then
+    echo "nvcc:          $(nvcc --version 2>&1 | grep 'release' || echo 'NOT FOUND')"
+    echo "HIP headers:   $(test -f /opt/rocm/include/hip/hip_runtime.h && echo 'OK' || echo 'MISSING')"
     echo "nvidia_detail: $(test -f /opt/rocm/include/hip/nvidia_detail/nvidia_hip_runtime.h && echo 'OK' || echo 'MISSING')"
+    echo "hip_version.h: $(test -f /opt/rocm/include/hip/hip_version.h && echo 'OK' || echo 'MISSING')"
+else
+    echo "hipcc:         $(hipcc --version 2>&1 | head -1 || echo 'NOT FOUND')"
+    echo "HIP headers:   $(test -f /opt/rocm/include/hip/hip_runtime.h && echo 'OK' || echo 'MISSING')"
 fi
 
 echo ""
@@ -139,5 +166,7 @@ echo "  source ~/.bashrc"
 echo "  make clean && make BACKEND=gpu"
 echo ""
 echo "=== Run inspiral ==="
-echo "  nohup ./build/test_binary_inspiral > inspiral.log 2>&1 &"
+echo "  make BACKEND=gpu test-inspiral"
+echo "  # Or in background:"
+echo "  nohup make BACKEND=gpu test-inspiral > inspiral.log 2>&1 &"
 echo "  tail -f inspiral.log"

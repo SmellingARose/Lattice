@@ -172,7 +172,7 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 
 <div class="banner">
   <strong>Living document.</strong> This is the single architecture reference for the Lattice codebase. Updated whenever structure changes &mdash; see CLAUDE.md.<br>
-  <strong>Last updated:</strong> 2026-03-04 &nbsp;|&nbsp; <strong>Status:</strong> Phase 2 complete, Phase 3 in progress (Tier 1+2+3 optimizations, N-body validated, persistent packs, D10 benchmark validated).
+  <strong>Last updated:</strong> 2026-03-05 &nbsp;|&nbsp; <strong>Status:</strong> Phase 2 complete, Phase 3 in progress (Tier 1+2+3 optimizations, N-body validated, persistent packs, D10 benchmark validated, equidistribution-optimal AMR refinement).
 </div>
 
 <!-- ========================================== -->
@@ -334,10 +334,11 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 
 <table class="file-table">
 <tr><th>File</th><th>Purpose</th></tr>
-<tr><td><code>puncture.c</code></td><td>Brill-Lindquist multi-puncture (up to 32 BHs at rest). Block-aware variant for AMR.</td></tr>
+<tr><td><code>puncture.h/c</code></td><td>Brill-Lindquist multi-puncture (up to 32 BHs at rest). Block-aware variant for AMR.</td></tr>
 <tr><td><code>bowen_york.h/c</code></td><td>Bowen-York extrinsic curvature A_ij for linear momentum + spin. CCZ4 field conversion pipeline. Mesh-level API (<code>set_bowen_york_mesh</code>) solves directly on evolution blocks. After leaf-block CCZ4 conversion, restricts data from fine to coarse (max_level down to 1) so non-leaf parent blocks have valid CCZ4 fields &mdash; required because <code>ghost_fill_from_coarser()</code> reads non-leaf data during subcycled evolution.</td></tr>
 <tr><td><code>relaxation.h/c</code></td><td>FAS multigrid constraint solver. 1-field (BY) and 4-field coupled (HiSpID). Full Multigrid cycle + Newton-Gauss-Seidel smoothing, 8-color GPU-compatible. O(N^3) to discretization accuracy.</td></tr>
-<tr><td><code>relaxation_amr.h/c</code></td><td>AMR composite multigrid: FAS V-cycles on AMR block levels + uniform MG hierarchy below level 0. <code>refine_mesh_near_punctures()</code> uses AABB-point distance for correct refinement targeting on large blocks. <code>solver_ghost_exchange()</code> wraps <code>ghost_exchange_all_blocks()</code> with solver BC re-application. Composite V-cycle zeros rhs on childless blocks before tau correction to prevent stale accumulation. Mesh-level solvers borrow the evolution mesh (no copy).</td></tr>
+<tr><td><code>relaxation_amr.h/c</code></td><td>AMR composite multigrid: FAS V-cycles on AMR block levels + uniform MG hierarchy below level 0. <code>refine_mesh_near_punctures()</code> uses equidistribution-optimal refinement radius r<sub>k</sub> = C&middot;M<sub>p</sub>&middot;&beta;<sup>k</sup> with &beta; = 2<sup>3/5</sup> &asymp; 1.516 (see <a href="amr_refinement_ratio.html">derivation</a>). Composite V-cycle zeros rhs on childless blocks before tau correction to prevent stale accumulation. Mesh-level solvers borrow the evolution mesh (no copy).</td></tr>
+<tr><td><code>mg_smooth_point.h</code></td><td>Multigrid smoothing point kernels shared by 1-field and 4-field relaxation solvers. <code>LATTICE_DEVICE</code>-annotated for GPU.</td></tr>
 <tr><td><code>kerr_quasi_isotropic.h/c</code></td><td>Quasi-isotropic Kerr metric for HiSpID high-spin initial data. Conformal factor and conformal metric from analytic Kerr solution.</td></tr>
 </table>
 
@@ -351,6 +352,7 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 <tr><td><code>constraints.h/c</code></td><td>Hamiltonian (H = R + 2/3 K^2 - A^ij A_ij) and momentum constraints. Volume-weighted L2 norms for AMR mesh (each cell weighted by dV=dx^3). <code>compute_hamiltonian_at()</code> and <code>compute_momentum_at()</code> annotated <code>LATTICE_DEVICE</code> for GPU diagnostic kernels.</td></tr>
 <tr><td><code>ah_finder.h/c</code></td><td>Hyperbolic flow AH finder (BHaHAHA-inspired). 6th-order off-grid interpolation. Works on single-grid and AMR. Ref: arXiv:2505.15912.</td></tr>
 <tr><td><code>psi4.h/c</code></td><td>Weyl scalar Psi4 for gravitational wave extraction. <code>psi4_at_point()</code> and <code>psi4_compute()</code> annotated <code>LATTICE_DEVICE</code> for GPU extraction kernel. <code>psi4_decompose_modes()</code> factored out for host-only mode decomposition after GPU sphere extraction.</td></tr>
+<tr><td><code>cce_worldtube.h/c</code></td><td>SpECTRE-compatible CCE worldtube HDF5 output. Interpolates conformal CCZ4 fields on extraction sphere, reconstructs physical ADM quantities, writes 49 datasets. Optional: requires <code>make HDF5=on</code>.</td></tr>
 </table>
 
 <!-- ========================================== -->
@@ -817,22 +819,31 @@ make clean              # rm -rf build/</code></pre>
 
 <table class="file-table">
 <tr><th>Make target</th><th>What it validates</th><th>Status</th></tr>
-<tr><td><code>make test</code></td><td>Flat spacetime + convergence + AMR evolution (quick suite)</td><td><span class="badge badge-green">Passing</span></td></tr>
+<tr><td><code>make test</code></td><td>Flat spacetime + convergence + AMR evolution + Maxwell (quick suite)</td><td><span class="badge badge-green">Passing</span></td></tr>
+<tr><td><code>make test-single-bh</code></td><td>Single Schwarzschild puncture evolution</td><td><span class="badge badge-green">Passing</span></td></tr>
 <tr><td><code>make test-convergence</code></td><td>Convergence: single BH at 3 resolutions (order > 3.5, measured 6.5 with 6th-order FD)</td><td><span class="badge badge-green">Passing</span></td></tr>
+<tr><td><code>make test-constraints</code></td><td>Hamiltonian + momentum constraint validation</td><td><span class="badge badge-green">Passing</span></td></tr>
+<tr><td><code>make test-head-on</code></td><td>Head-on binary collision (merger visible in lapse)</td><td><span class="badge badge-green">Passing</span></td></tr>
 <tr><td><code>make test-amr-mesh</code></td><td>AMR mesh creation, Morton ordering, MeshBlockPack round-trip (33 tests)</td><td><span class="badge badge-green">Passing</span></td></tr>
 <tr><td><code>make test-amr-ghost</code></td><td>Ghost exchange, multi-block evolution (13 tests)</td><td><span class="badge badge-green">Passing</span></td></tr>
 <tr><td><code>make test-amr-prolong</code></td><td>Prolongation convergence, restriction, CAKO, CAHD, SSL (15 tests)</td><td><span class="badge badge-green">Passing</span></td></tr>
 <tr><td><code>make test-amr-refine</code></td><td>Oct-tree refine/coarsen, 2:1 constraint, multilevel ghost (72 tests)</td><td><span class="badge badge-green">Passing</span></td></tr>
+<tr><td><code>make test-amr-evolve</code></td><td>AMR evolution integration (8 tests)</td><td><span class="badge badge-green">Passing</span></td></tr>
+<tr><td><code>make test-amr-accuracy</code></td><td>AMR accuracy validation</td><td><span class="badge badge-green">Passing</span></td></tr>
+<tr><td><code>make test-pack-evolve</code></td><td>Packed batch kernel validation (8 tests)</td><td><span class="badge badge-green">Passing</span></td></tr>
 <tr><td><code>make test-subcycle</code></td><td>Berger-Oliger subcycling validation</td><td><span class="badge badge-green">Passing</span></td></tr>
 <tr><td><code>make test-bowen-york</code></td><td>Bowen-York A_ij, multigrid solver, evolution, N-body (33 tests)</td><td><span class="badge badge-green">Passing</span></td></tr>
+<tr><td><code>make test-relaxation-amr</code></td><td>AMR composite multigrid solver (14 tests)</td><td><span class="badge badge-green">Passing</span></td></tr>
 <tr><td><code>make test-hispid</code></td><td>HiSpID high-spin initial data, coupled solver (26 tests)</td><td><span class="badge badge-green">Passing</span></td></tr>
 <tr><td><code>make test-ah</code></td><td>Apparent horizon finder: interpolation, Schwarzschild, diagnostics (13 tests)</td><td><span class="badge badge-green">Passing</span></td></tr>
 <tr><td><code>make test-maxwell</code></td><td>Einstein-Maxwell: flat EM, plane wave, charged BH, constraints (15 tests)</td><td><span class="badge badge-green">Passing</span></td></tr>
 <tr><td><code>make test-psi4</code></td><td>Psi4 gravitational wave extraction: quadrature, harmonics, modes (15 tests)</td><td><span class="badge badge-green">Passing</span></td></tr>
+<tr><td><code>make HDF5=on test-cce</code></td><td>CCE worldtube HDF5 output: 49 datasets, SpECTRE-compatible (requires libhdf5-dev)</td><td><span class="badge badge-green">Passing</span></td></tr>
 <tr><td><code>make test-cp-bc</code></td><td>Constraint-preserving BCs: char speeds, formula, flat, single BH (30 tests)</td><td><span class="badge badge-green">Passing</span></td></tr>
 <tr><td><code>make test-inspiral</code></td><td>D10 benchmark validation (arXiv:0901.2437 Samurai consensus): T=700M, L=1536M, MAX_LEVEL=11, dx_fine=M/43, BAM-matched params (kappa1=0.02, eta=2.0, sigma=0.1, CP-BCs, Psi4 at r=90M). 8 hard + 4 advisory tests, 19-column CSV, remnant AH search</td><td><span class="badge badge-green">Passing</span></td></tr>
 <tr><td><code>make test-inspiral-convergence</code></td><td>AMR binary inspiral convergence at 3 resolutions (long run)</td><td><span class="badge badge-green">Passing</span></td></tr>
 <tr><td><code>make test-checkpoint</code></td><td>Checkpoint/restart: uniform + AMR, bitwise-identical evolution after restart (14 tests)</td><td><span class="badge badge-green">Passing</span></td></tr>
+<tr><td><code>make test-gpu-debug</code></td><td>GPU kernel isolation test with per-kernel sync barriers (requires BACKEND=gpu)</td><td><span class="badge badge-green">Passing</span></td></tr>
 </table>
 
 <!-- ========================================== -->
