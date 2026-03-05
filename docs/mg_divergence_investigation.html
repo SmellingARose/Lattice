@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Lattice — Multigrid Solver Divergence Investigation (March 2026)</title>
+<style>
+  body { font-family: 'Segoe UI', Tahoma, sans-serif; max-width: 1000px; margin: 0 auto; padding: 20px; line-height: 1.6; color: #1a1a1a; background: #fafafa; }
+  h1 { border-bottom: 3px solid #c0392b; padding-bottom: 10px; color: #c0392b; }
+  h2 { border-bottom: 2px solid #2980b9; padding-bottom: 6px; margin-top: 40px; color: #2c3e50; }
+  h3 { color: #2c3e50; margin-top: 30px; }
+  code { background: #ecf0f1; padding: 2px 6px; border-radius: 3px; font-size: 0.95em; }
+  pre { background: #2c3e50; color: #ecf0f1; padding: 16px; border-radius: 6px; overflow-x: auto; font-size: 0.9em; line-height: 1.4; }
+  pre code { background: none; padding: 0; color: inherit; }
+  .bug { background: #fdf2f2; border-left: 4px solid #c0392b; padding: 16px; margin: 16px 0; border-radius: 0 6px 6px 0; }
+  .bug h4 { color: #c0392b; margin: 0 0 8px 0; }
+  .note { background: #fef9e7; border-left: 4px solid #f39c12; padding: 16px; margin: 16px 0; border-radius: 0 6px 6px 0; }
+  .note h4 { color: #e67e22; margin: 0 0 8px 0; }
+  .ok { background: #eafaf1; border-left: 4px solid #27ae60; padding: 16px; margin: 16px 0; border-radius: 0 6px 6px 0; }
+  .ok h4 { color: #27ae60; margin: 0 0 8px 0; }
+  table { border-collapse: collapse; width: 100%; margin: 16px 0; }
+  th, td { border: 1px solid #bdc3c7; padding: 10px 14px; text-align: left; }
+  th { background: #34495e; color: white; }
+  tr:nth-child(even) { background: #f2f3f4; }
+  .severity-critical { color: #c0392b; font-weight: bold; }
+  .severity-high { color: #e67e22; font-weight: bold; }
+  .severity-medium { color: #f39c12; font-weight: bold; }
+  .tag { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 0.85em; font-weight: bold; }
+  .tag-gpu { background: #3498db; color: white; }
+  .tag-cpu { background: #27ae60; color: white; }
+  .tag-both { background: #8e44ad; color: white; }
+  .log { background: #1a1a2e; color: #00ff41; padding: 16px; border-radius: 6px; font-family: monospace; font-size: 0.9em; white-space: pre; overflow-x: auto; }
+  .fix-section { background: #eaf2f8; border: 1px solid #2980b9; padding: 16px; margin: 16px 0; border-radius: 6px; }
+  .fix-section h4 { color: #2980b9; margin: 0 0 8px 0; }
+  .arrow { color: #c0392b; font-weight: bold; }
+</style>
+</head>
+<body>
+
+<h1>Multigrid Solver Divergence Investigation</h1>
+<p><strong>Date:</strong> March 5, 2026<br>
+<strong>Platform:</strong> NVIDIA H100 GPU<br>
+<strong>Configuration:</strong> N=32, L=6144, 11 AMR levels, 649 leaf blocks, BY initial data<br>
+<strong>Symptom:</strong> FAS V-cycle residual diverges exponentially after FMG</p>
+
+<div class="log">[AMR-MG-GPU] Mesh: 713 blocks, 624 leaves, max_level=11
+[AMR-MG-GPU] Precomputing backgrounds...
+[AMR-MG-GPU] Running composite FMG...
+[AMR-MG-GPU] FMG done: residual = 1.620552e-01
+[AMR-MG-GPU] V-cycle 1: residual = 1.210965e+00     <span class="arrow">&larr; 7.5x increase</span>
+[AMR-MG-GPU] V-cycle 2: residual = 9.264808e+00     <span class="arrow">&larr; 7.7x increase</span>
+[AMR-MG-GPU] V-cycle 3: residual = 7.226263e+01     <span class="arrow">&larr; 7.8x increase</span>
+[AMR-MG-GPU] V-cycle 4: residual = 3.658807e+05     <span class="arrow">&larr; 5062x explosion</span>
+[AMR-MG-GPU] V-cycle 5: residual = 2.455571e+06     <span class="arrow">&larr; divergent</span>
+^C</div>
+
+<p><strong>Key context:</strong> The solver converges on CPU at lower AMR levels (2&ndash;5 levels).
+All unit tests pass at small scale (2&ndash;3 levels). The divergence is specific to the GPU path at high level counts.</p>
+
+<!-- ======================================== -->
+<h2>Bug #1 (Critical): <code>MAX_SOLVER_SLOTS</code> Overflow</h2>
+<!-- ======================================== -->
+
+<div class="bug">
+<h4>ROOT CAUSE &mdash; GPU solver slots limited to 8, but 11 AMR levels requested</h4>
+<p>Levels 8&ndash;10 are <strong>complete no-ops</strong> on GPU. The solver never initializes, smooths, restricts, or prolongates data at the finest 3 levels. All 3 independent audit agents confirmed this as the primary cause.</p>
+</div>
+
+<h3>Location</h3>
+<pre><code>// src/backend/backend.h:363
+#define MAX_SOLVER_SLOTS 8  /* one per AMR level */
+
+// src/backend/backend_hip.cpp:2449
+static hip_solver_ptrs_t d_solver[MAX_SOLVER_SLOTS];
+
+// src/initial_data/relaxation_amr.c:1759 — slot = level index directly
+levels[L].slot = L;  // L=8,9,10 exceed array bounds</code></pre>
+
+<h3>Mechanism</h3>
+<p>The GPU solver in <code>gpu_build_level_packs()</code> maps AMR level L directly to device solver slot L:
+<code>levels[L].slot = L</code>. With 11 AMR levels (0&ndash;10), it attempts to use slots 0&ndash;10.</p>
+
+<p>For levels 8, 9, 10:</p>
+<ol>
+  <li><code>backend_map_solver_pack(pack, slot)</code> prints <code>"slot %d out of range"</code> to stderr and <strong>returns early</strong> &mdash; the slot is never initialized (<code>valid = 0</code>).</li>
+  <li>Every subsequent GPU operation checks <code>!d_solver[slot].valid</code> and <strong>returns silently as a no-op</strong>:
+    <ul>
+      <li><code>backend_mg_smooth_packed</code> &mdash; no smoothing</li>
+      <li><code>backend_mg_operator_packed</code> &mdash; no operator evaluation</li>
+      <li><code>backend_mg_ghost_full_packed</code> &mdash; no ghost exchange</li>
+      <li><code>backend_mg_restrict_packed</code> &mdash; no restriction</li>
+      <li><code>backend_mg_prolong_add_packed</code> &mdash; no prolongation</li>
+      <li><code>backend_mg_prolong_fmg_packed</code> &mdash; no FMG prolongation</li>
+    </ul>
+  </li>
+  <li><code>backend_mg_l2_norm_packed</code> returns <code>0.0</code> for invalid slots.</li>
+</ol>
+
+<h3>Consequence</h3>
+<p>The V-cycle recurses through levels 10 &rarr; 9 &rarr; 8 doing nothing, then levels 7 &rarr; 0 work correctly.
+The fine levels (where the solution matters most &mdash; near the punctures with dx=0.047&ndash;0.188) are never solved.
+The FMG prolongation from level 7 to level 8 is also a no-op, so levels 8&ndash;10 contain uninitialized/zero correction data.</p>
+
+<p>The residual computation at the finest level sees unsolved data (zero correction + BL background), which is far from the true solution. The V-cycle cannot fix this because the fine-level operations are all no-ops. The reported residual blows up because the CPU-side residual norm (called after GPU operations) sees the unsolved fine data.</p>
+
+<h3>Why tests pass</h3>
+<p>All tests use &le; 5 AMR levels, well within the 8-slot limit. The bug only triggers at &ge; 9 AMR levels.</p>
+
+<div class="fix-section">
+<h4>Proposed Fix</h4>
+<pre><code>// backend.h — change:
+#define MAX_SOLVER_SLOTS 8
+// to:
+#define MAX_SOLVER_SLOTS MAX_AMR_LEVELS  // = 16, defined in mesh.h</code></pre>
+<p>One-line fix. This alone should make the 11-level run work on GPU.</p>
+</div>
+
+<!-- ======================================== -->
+<h2>Bug #2 (High): Coarse-Data Stride Mismatch in Solver Ghost Exchange</h2>
+<!-- ======================================== -->
+
+<div class="bug">
+<h4>GPU ghost exchange kernels index coarse_data with wrong field stride</h4>
+<p>The solver ghost exchange reuses evolution ghost kernels but passes <code>n_sol</code> (1 or 4) as the field count, while the coarse_data buffer was allocated with stride <code>MG_AMR_N_FIELDS = 10</code>.</p>
+</div>
+
+<h3>Location</h3>
+<pre><code>// backend_hip.cpp — backend_mg_ghost_full_packed()
+// Passes n_sol (1 or 4) to ghost kernels as "nf" parameter
+// But coarse_data was allocated at pack creation with pack->n_fields = 10
+
+// The ghost kernels index as: r * nf * cnpts + f * cnpts
+// With nf = 4: block r=1 field 0 is at offset 4*cnpts
+// But actual stride in allocation is 10*cnpts — MISMATCH</code></pre>
+
+<h3>Mechanism</h3>
+<p>The ghost exchange kernels (<code>hip_ghost_restrict</code>, <code>hip_ghost_extrap</code>,
+<code>hip_ghost_prolong</code>, <code>hip_mg_ghost_cf_fill</code>) index coarse_data as
+<code>r * nf * cnpts + f * cnpts</code>. When called from the solver with <code>nf = n_sol = 4</code>,
+block r=1 field 0 lands at offset <code>4*cnpts</code>. But the actual data for that block starts at
+offset <code>10*cnpts</code> (since the allocation uses <code>MG_AMR_N_FIELDS = 10</code>).
+This reads/writes the wrong memory, corrupting ghost zone data at every coarse-fine interface.</p>
+
+<h3>Consequence</h3>
+<p>Incorrect ghost zone values in the FD stencils near refinement boundaries.
+The error compounds with level count &mdash; at 11 levels there are 10 coarse-fine interfaces,
+each contributing corrupted ghost data to the smoother and operator evaluation.</p>
+
+<p>This bug affects <strong>all GPU AMR solver runs</strong>, but its impact is small at low level counts
+where there are few refined blocks and the corrections are small.</p>
+
+<div class="fix-section">
+<h4>Proposed Fix</h4>
+<p>Pass the actual coarse_data field count (<code>sp-&gt;n_fields</code> or <code>pack-&gt;n_fields</code>)
+instead of <code>n_sol</code> to the ghost exchange kernels when indexing coarse_data.
+Alternatively, allocate coarse_data with <code>n_sol</code> fields and use <code>n_sol</code> consistently.</p>
+</div>
+
+<!-- ======================================== -->
+<h2>Bug #3 (Medium): 6th-Order Stencils in 8-Color Gauss-Seidel Smoother</h2>
+<!-- ======================================== -->
+
+<div class="bug">
+<h4>8-color (stride-2) ordering is incompatible with 6th-order (radius-3) stencils under OpenMP</h4>
+<p>Same-color points at distance 2 share stencil dependencies, creating data races when OpenMP parallelizes the sweep.</p>
+</div>
+
+<h3>Affected Functions</h3>
+<table>
+<tr><th>Function</th><th>File</th><th>OMP Parallel?</th></tr>
+<tr><td><code>newton_gs_sweep_1field</code></td><td>relaxation.c:495</td><td>No (serial)</td></tr>
+<tr><td><code>newton_gs_sweep_4field</code></td><td>relaxation.c:549</td><td>No (serial)</td></tr>
+<tr><td><code>umg_sweep_1field</code></td><td>relaxation_amr.c:188</td><td><strong>Yes</strong></td></tr>
+<tr><td><code>umg_sweep_4field</code></td><td>relaxation_amr.c:222</td><td><strong>Yes</strong></td></tr>
+<tr><td><code>smooth_block_1field</code></td><td>relaxation_amr.c:900</td><td><strong>Yes</strong> (block-level)</td></tr>
+<tr><td><code>smooth_block_4field</code></td><td>relaxation_amr.c:936</td><td><strong>Yes</strong> (block-level)</td></tr>
+</table>
+
+<p>All call <code>fd_d2()</code> which is a 7-point stencil (radius 3) when <code>FD_ORDER=6</code>.
+The 4-field variants additionally call <code>fd_d2_mixed()</code> which accesses a full 7&times;7 cross-stencil.</p>
+
+<h3>The Race Condition</h3>
+<pre><code>// 8-color loop structure (stride 2 in each dim):
+for (int color = 0; color &lt; 8; color++) {
+    int c0 = color &amp; 1, c1 = (color &gt;&gt; 1) &amp; 1, c2 = (color &gt;&gt; 2) &amp; 1;
+    #pragma omp parallel for schedule(static)
+    for (int k = gw + c2; k &lt; gw + N; k += 2)
+        for (int j = gw + c1; j &lt; gw + N; j += 2)
+            for (int i = gw + c0; i &lt; gw + N; i += 2)
+                // fd_d2(psi, idx, sx=1, inv_dx) reads psi[idx-3] to psi[idx+3]
+                // Point i and point i+2 are SAME COLOR but i+2 is IN THE STENCIL of i</code></pre>
+
+<p>For 8-color ordering to be safe, the stencil radius must be &le; 1 (2nd-order, 3-point).
+A 6th-order stencil (radius 3) requires stride &ge; 7 in each dimension.</p>
+
+<h3>Why it works at small scale</h3>
+<ul>
+  <li>The <strong>uniform-grid solver</strong> (<code>relaxation.c</code>) runs the smoother <strong>serially</strong> (no OMP pragma).
+    The stencil overlap makes it a &ldquo;Gauss-Seidel with leakage&rdquo; that converges deterministically.</li>
+  <li>At <strong>low AMR levels</strong> with OMP, the corrections are small and the race impact is bounded.</li>
+  <li>At <strong>11 levels</strong> with many blocks and full OMP parallelization, the races become severe.</li>
+</ul>
+
+<h3>GPU smoother note</h3>
+<p>The GPU smoother kernel also uses 8-color ordering. GPU threads within a warp execute in lockstep,
+so same-color points in the same warp do have stencil interference. However, the GPU's execution model
+(warps of 32 threads) makes the interference pattern different from CPU OMP. On GPU, the primary solver
+issue is Bug #1 (MAX_SOLVER_SLOTS), not the stencil race.</p>
+
+<div class="fix-section">
+<h4>Proposed Fix (Defect Correction)</h4>
+<p>The standard approach (HPGMG, AMReX, Dendro, arXiv:2510.11152):</p>
+<ol>
+  <li><strong>Smoother:</strong> Use 2nd-order Laplacian (3-point, radius 1). Compatible with 8-color ordering.
+    The smoother only needs to damp high-frequency error, not be high-order accurate.</li>
+  <li><strong>Residual/operator:</strong> Keep the full 6th-order stencil. The residual computation reads from
+    a frozen solution (no in-place updates), so there is no race.</li>
+  <li><strong>Jacobian diagonal:</strong> Update <code>FD_D2_CENTER_WEIGHT</code> in the smoother to <code>-2.0</code>
+    (2nd-order center weight) instead of <code>-49/18</code>.</li>
+</ol>
+</div>
+
+<!-- ======================================== -->
+<h2>Summary</h2>
+<!-- ======================================== -->
+
+<table>
+<tr>
+  <th>Bug</th>
+  <th>Severity</th>
+  <th>Scope</th>
+  <th>Root Cause</th>
+  <th>Fix Effort</th>
+</tr>
+<tr>
+  <td>#1: MAX_SOLVER_SLOTS=8</td>
+  <td class="severity-critical">Critical</td>
+  <td><span class="tag tag-gpu">GPU only</span></td>
+  <td>Levels &ge; 8 are complete no-ops &mdash; never solved</td>
+  <td>1 line</td>
+</tr>
+<tr>
+  <td>#2: coarse_data stride mismatch</td>
+  <td class="severity-high">High</td>
+  <td><span class="tag tag-gpu">GPU only</span></td>
+  <td>Ghost kernels use n_sol stride but buffer has 10-field stride</td>
+  <td>Small (~10 lines)</td>
+</tr>
+<tr>
+  <td>#3: 6th-order stencil + 8-color GS</td>
+  <td class="severity-medium">Medium</td>
+  <td><span class="tag tag-both">CPU+GPU</span></td>
+  <td>Data race under OMP; benign serially but incorrect at scale</td>
+  <td>Medium (defect correction refactor)</td>
+</tr>
+</table>
+
+<div class="ok">
+<h4>Diagnosis Confidence: High</h4>
+<p>Bug #1 is almost certainly the sole cause of the observed divergence on the H100.
+The run used 11 AMR levels; <code>MAX_SOLVER_SLOTS = 8</code>; levels 8&ndash;10 (the finest 3 levels,
+containing the blocks nearest the punctures at dx=0.047&ndash;0.188) were never solved.
+All 3 independent audit agents confirmed this. One-line fix should resolve it.</p>
+</div>
+
+<!-- ======================================== -->
+<h2>Verified: No Issues Found</h2>
+<!-- ======================================== -->
+
+<table>
+<tr><th>Component</th><th>Status</th></tr>
+<tr><td>FAS tau correction formula</td><td>Correct</td></tr>
+<tr><td>V-cycle recursion structure (CPU)</td><td>Correct</td></tr>
+<tr><td>Restriction operator (8-child average)</td><td>Correct (standard for MG)</td></tr>
+<tr><td>Prolongation operator (trilinear)</td><td>Correct (standard for MG correction)</td></tr>
+<tr><td>GPU kernel synchronization (single stream)</td><td>Correct &mdash; in-order guaranteed</td></tr>
+<tr><td>GPU smoother kernel vs CPU smoother</td><td>Identical point function</td></tr>
+<tr><td>Level-0 CPU fallback (UMG solve)</td><td>Correct</td></tr>
+<tr><td>Newton-GS Jacobian diagonal</td><td>Consistent with stencil order</td></tr>
+<tr><td>CF ghost exchange protocol</td><td>Correct (restrict &rarr; fill buf &rarr; prolongate)</td></tr>
+<tr><td>Boundary conditions (zero-Dirichlet)</td><td>Correct at all levels</td></tr>
+<tr><td>Neighbor lookup at deep levels</td><td>Correct (hash table, no off-by-one)</td></tr>
+<tr><td>FMG ascending loop</td><td>Correct</td></tr>
+<tr><td>Field slot consistency (0&ndash;3 solution, 4&ndash;9 background)</td><td>Correct</td></tr>
+<tr><td>Leaf block RHS zeroing</td><td>Correct</td></tr>
+</table>
+
+<!-- ======================================== -->
+<h2>Recommended Fix Priority</h2>
+<!-- ======================================== -->
+
+<ol>
+  <li><strong>Bug #1 (immediate):</strong> Change <code>MAX_SOLVER_SLOTS</code> from 8 to <code>MAX_AMR_LEVELS</code> (16).
+    One-line fix in <code>backend.h</code>. This alone should make the 11-level run converge on GPU.</li>
+  <li><strong>Bug #2 (before production):</strong> Fix the coarse_data field stride in <code>backend_mg_ghost_full_packed</code>.
+    Pass <code>sp-&gt;n_fields</code> instead of <code>n_sol</code>. Small surgical fix, ~10 lines.</li>
+  <li><strong>Bug #3 (robustness):</strong> Implement defect correction (2nd-order smoother + 6th-order residual).
+    Larger refactor but makes the solver mathematically correct under parallelism.
+    Can be deferred if Bug #1 + #2 fixes resolve the immediate divergence.</li>
+</ol>
+
+<p style="margin-top: 40px; color: #7f8c8d; font-size: 0.9em;">
+Investigation conducted March 5, 2026 by 3 parallel code audit agents examining:
+<code>relaxation.c</code>, <code>relaxation_amr.c</code>, <code>backend_hip.cpp</code>,
+<code>backend.h</code>, <code>backend_cpu.c</code>, <code>finite_diff.h</code>, <code>mesh.h</code>,
+<code>mg_smooth_point.h</code>.
+</p>
+
+</body>
+</html>
