@@ -48,8 +48,8 @@ else
         HIP_TAR="/tmp/hip-headers.tar.gz"
         wget -q "https://github.com/ROCm/HIP/archive/refs/tags/rocm-${HIP_VERSION}.tar.gz" -O "$HIP_TAR"
         sudo mkdir -p /opt/rocm/include
-        # Extract just the include/hip directory
-        sudo tar xzf "$HIP_TAR" -C /opt/rocm/include --strip-components=2 "HIP-rocm-${HIP_VERSION}/include/hip"
+        # Extract just the include/hip directory (lowercase 'hip-rocm' in archive)
+        sudo tar xzf "$HIP_TAR" -C /opt/rocm/include --strip-components=2 "hip-rocm-${HIP_VERSION}/include/hip"
         # HIP headers reference hip/hip_version.h which we create
         if [ ! -f /opt/rocm/include/hip/hip_version.h ]; then
             sudo tee /opt/rocm/include/hip/hip_version.h > /dev/null << 'HIPEOF'
