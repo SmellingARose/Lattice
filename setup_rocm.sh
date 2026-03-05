@@ -62,11 +62,14 @@ if [ "$GPU_VENDOR" = "nvidia" ]; then
         ROCM_TAG="rocm-6.2.4"
         TMPDIR=$(mktemp -d)
 
+        # Need headers from 3 repos: HIP (main), clr (amd_detail), hipother (nvidia_detail)
         git clone --depth 1 --branch "$ROCM_TAG" https://github.com/ROCm/HIP.git "$TMPDIR/HIP"
+        git clone --depth 1 --branch "$ROCM_TAG" https://github.com/ROCm/clr.git "$TMPDIR/clr"
         git clone --depth 1 --branch "$ROCM_TAG" https://github.com/ROCm/hipother.git "$TMPDIR/hipother"
 
         sudo mkdir -p /opt/rocm/include/hip
         sudo cp -r "$TMPDIR/HIP/include/hip/"* /opt/rocm/include/hip/
+        sudo cp -r "$TMPDIR/clr/hipamd/include/hip/amd_detail" /opt/rocm/include/hip/
         sudo cp -r "$TMPDIR/hipother/hipnv/include/hip/nvidia_detail" /opt/rocm/include/hip/
 
         # Generate hip_version.h (normally created by CMake during ROCm build)
