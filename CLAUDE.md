@@ -280,6 +280,7 @@ Update as milestones are reached.
 lattice/
 ├── CLAUDE.md
 ├── DEVLOG.md
+├── novel.md               # novel contributions vs existing NR codes
 ├── Makefile
 ├── setup_rocm.sh           # GPU setup script (CUDA + ROCm + env vars)
 ├── grchombo-ref/           # read-only reference (not compiled)
