@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Optimal AMR Refinement Radius Scaling — Lattice</title>
+<style>
+  body {
+    max-width: 820px;
+    margin: 2em auto;
+    padding: 0 1.5em;
+    font-family: "Georgia", serif;
+    line-height: 1.7;
+    color: #222;
+    background: #fdfdfd;
+  }
+  h1 { font-size: 1.6em; border-bottom: 2px solid #333; padding-bottom: 0.3em; }
+  h2 { font-size: 1.3em; margin-top: 2em; color: #444; }
+  h3 { font-size: 1.1em; margin-top: 1.5em; }
+  table { border-collapse: collapse; margin: 1em 0; width: 100%; }
+  th, td { border: 1px solid #bbb; padding: 0.4em 0.8em; text-align: center; }
+  th { background: #eee; }
+  .eq {
+    display: block;
+    text-align: center;
+    margin: 1.2em 0;
+    font-family: "Cambria Math", "Latin Modern Math", serif;
+    font-size: 1.15em;
+  }
+  .derivation {
+    background: #f7f7f0;
+    border-left: 3px solid #999;
+    padding: 0.8em 1.2em;
+    margin: 1em 0;
+  }
+  code {
+    font-family: "Menlo", "Consolas", monospace;
+    font-size: 0.92em;
+    background: #f0f0f0;
+    padding: 0.1em 0.3em;
+    border-radius: 3px;
+  }
+  .note {
+    background: #fff8e0;
+    border: 1px solid #e0d080;
+    padding: 0.8em 1.2em;
+    margin: 1em 0;
+    border-radius: 4px;
+  }
+  .ref { font-size: 0.9em; color: #555; }
+  a { color: #2255aa; }
+</style>
+</head>
+<body>
+
+<h1>Optimal AMR Refinement Radius Scaling</h1>
+
+<p>
+  In block-structured AMR with 2:1 refinement, each level halves the grid spacing:
+  <code>dx_l = dx_0 / 2^l</code>. The standard practice is to also halve the
+  refinement radius at each level (each finer level covers half the distance
+  from the puncture). This document derives the mathematically optimal radius
+  ratio from first principles and shows that halving is only optimal for a
+  constant field.
+</p>
+
+<h2>1. Truncation Error of a Finite Difference Stencil</h2>
+
+<p>
+  A <em>p</em>-th order finite difference approximation of a derivative has
+  local truncation error given by the Taylor remainder:
+</p>
+
+<span class="eq">
+  ε = C · dx<sup>p</sup> · f<sup>(p+1)</sup>(r)
+</span>
+
+<p>
+  where <em>f</em><sup>(<em>p</em>+1)</sup> is the (<em>p</em>+1)-th derivative of the
+  field, and <em>C</em> is a constant depending on the stencil coefficients.
+</p>
+
+<h2>2. Radial Falloff of Evolved Fields</h2>
+
+<p>
+  Near a Schwarzschild puncture in isotropic coordinates, the evolved fields
+  have power-law behavior at large distance:
+</p>
+
+<span class="eq">f(r) ~ 1 / r<sup>α</sup></span>
+
+<p>
+  The <em>n</em>-th derivative of such a field scales as:
+</p>
+
+<span class="eq">f<sup>(n)</sup>(r) ~ 1 / r<sup>α + n</sup></span>
+
+<p>
+  The relevant values of α for the CCZ4 evolved fields:
+</p>
+
+<table>
+  <tr><th>Field</th><th>Far-field behavior</th><th>α</th></tr>
+  <tr><td>χ − 1 (conformal factor deviation)</td><td>M / r</td><td>1</td></tr>
+  <tr><td>Γ<sup>i</sup> (connection functions)</td><td>1 / r²</td><td>2</td></tr>
+  <tr><td>K, A<sub>ij</sub> (extrinsic curvature)</td><td>1 / r³</td><td>3</td></tr>
+  <tr><td>R<sub>abcd</sub> (Riemann tensor)</td><td>1 / r³</td><td>3</td></tr>
+  <tr><td>K (Kretschmann scalar)</td><td>1 / r⁶</td><td>6</td></tr>
+</table>
+
+<p>
+  For the Brill-Lindquist conformal factor ψ = 1 + M/(2r), the solver field
+  ψ − 1 has α = 1. During evolution, the steepest far-field quantity is the
+  extrinsic curvature K ~ 1/r³ with α = 3.
+</p>
+
+<h2>3. Truncation Error at a Level Boundary</h2>
+
+<p>
+  Substituting the power-law derivative into the truncation error formula:
+</p>
+
+<span class="eq">
+  ε(r, dx) ~ dx<sup>p</sup> / r<sup>α + p + 1</sup>
+</span>
+
+<p>
+  On AMR level <em>l</em>, with grid spacing <code>dx_l = dx_0 / 2^l</code> and
+  refinement radius <code>r_l</code> (the outer boundary of level <em>l</em>),
+  the truncation error at the level boundary is:
+</p>
+
+<span class="eq">
+  ε<sub>l</sub> = (dx<sub>0</sub> / 2<sup>l</sup>)<sup>p</sup> / r<sub>l</sub><sup>α + p + 1</sup>
+</span>
+
+<p>
+  This is largest at <code>r = r_l</code> (the outer edge), where the grid is
+  coarsest relative to the field structure.
+</p>
+
+<h2>4. Equidistribution: Equal Error at Every Level</h2>
+
+<p>
+  The optimal refinement places each level boundary such that no single level
+  is the accuracy bottleneck. This is the <strong>equidistribution principle</strong>:
+  require ε<sub>l</sub> = ε<sub>l+1</sub> for all <em>l</em>.
+</p>
+
+<div class="derivation">
+<h3>Derivation</h3>
+
+<p>Set ε<sub>l</sub> = ε<sub>l+1</sub>:</p>
+
+<span class="eq">
+  (dx<sub>0</sub> / 2<sup>l</sup>)<sup>p</sup> / r<sub>l</sub><sup>α+p+1</sup>
+  =
+  (dx<sub>0</sub> / 2<sup>l+1</sup>)<sup>p</sup> / r<sub>l+1</sub><sup>α+p+1</sup>
+</span>
+
+<p>Cancel dx<sub>0</sub> and simplify 2<sup>l</sup> terms:</p>
+
+<span class="eq">
+  2<sup>p</sup> · r<sub>l+1</sub><sup>α+p+1</sup> = r<sub>l</sub><sup>α+p+1</sup>
+</span>
+
+<p>Take the (α+p+1)-th root:</p>
+
+<span class="eq" style="font-size: 1.3em; margin: 1.5em 0; font-weight: bold;">
+  r<sub>l</sub> / r<sub>l+1</sub> = 2<sup>p / (α + p + 1)</sup> ≡ β
+</span>
+
+<p>
+  The ratio β between consecutive level radii depends only on the FD order
+  <em>p</em> and the field falloff exponent α. It is independent of the grid
+  spacing, domain size, or puncture mass.
+</p>
+</div>
+
+<h2>5. Properties of β</h2>
+
+<p>Since 0 &lt; p/(α + p + 1) &lt; 1 for all α &gt; 0:</p>
+
+<span class="eq">1 &lt; β &lt; 2 &nbsp;&nbsp; for all α &gt; 0</span>
+
+<p>Limiting cases:</p>
+<ul>
+  <li><strong>α → 0</strong> (constant field): β → 2. Halving is optimal. A uniform
+    grid would also work — all levels see the same error regardless of radius.</li>
+  <li><strong>α → ∞</strong> (infinitely steep falloff): β → 1. All resolution
+    should be concentrated at the puncture. Coarser levels are irrelevant.</li>
+</ul>
+
+<p>
+  <strong>Halving (β = 2) is only optimal for a constant field.</strong>
+  For any field that falls off with distance (α &gt; 0), the optimal ratio is
+  strictly less than 2.
+</p>
+
+<h2>6. Values for 6th-Order Finite Differences (p = 6)</h2>
+
+<table>
+  <tr>
+    <th>α</th>
+    <th>Dominant field</th>
+    <th>β = 2<sup>6/(α+7)</sup></th>
+    <th>Radius shrinks by</th>
+  </tr>
+  <tr><td>0</td><td>constant (flat spacetime)</td><td>2.000</td><td>50% per level</td></tr>
+  <tr><td>1</td><td>χ − 1, ψ − 1 (conformal factor)</td><td>1.682</td><td>40% per level</td></tr>
+  <tr><td>2</td><td>Γ<sup>i</sup> (connections)</td><td>1.587</td><td>37% per level</td></tr>
+  <tr><td>3</td><td>K, A<sub>ij</sub> (extrinsic curvature)</td><td>1.516</td><td>34% per level</td></tr>
+  <tr><td>6</td><td>Kretschmann scalar</td><td>1.382</td><td>28% per level</td></tr>
+</table>
+
+<h2>7. Comparison: Halving vs Optimal</h2>
+
+<p>
+  For a binary inspiral with bare mass M = 0.486, finest radius C·M = 4M ≈ 1.94M:
+</p>
+
+<table>
+  <tr>
+    <th>Level (from finest)</th>
+    <th>Halving (β=2)</th>
+    <th>α=1 (β=1.68)</th>
+    <th>α=3 (β=1.52)</th>
+  </tr>
+  <tr><td>0 (finest)</td><td>1.9 M</td><td>1.9 M</td><td>1.9 M</td></tr>
+  <tr><td>1</td><td>3.9 M</td><td>3.3 M</td><td>2.9 M</td></tr>
+  <tr><td>3</td><td>16 M</td><td>9.3 M</td><td>6.8 M</td></tr>
+  <tr><td>5</td><td>62 M</td><td>26 M</td><td>14 M</td></tr>
+  <tr><td>7</td><td>249 M</td><td>74 M</td><td>29 M</td></tr>
+  <tr><td>10</td><td>1990 M</td><td>352 M</td><td>92 M</td></tr>
+</table>
+
+<p>
+  With halving, the coarsest radius (1990M) far exceeds the domain half-size
+  (~768M), wasting 2–3 refinement levels that simply refine everything.
+  With α = 1, the coarsest radius (352M) fits within the domain. With α = 3,
+  even tighter (92M), requiring more levels to reach the domain boundary.
+</p>
+
+<h2>8. Number of Levels</h2>
+
+<p>
+  Given the finest radius r<sub>fine</sub> = C · M and the domain half-size S = L/2,
+  the number of refinement levels to span from r<sub>fine</sub> to S is:
+</p>
+
+<span class="eq">
+  n<sub>amr</sub> = ⌈ log(S / r<sub>fine</sub>) / log(β) ⌉
+</span>
+
+<p>For the inspiral (S = 768M, r<sub>fine</sub> = 1.94M):</p>
+
+<table>
+  <tr><th>α</th><th>β</th><th>n<sub>amr</sub></th></tr>
+  <tr><td>0 (halving)</td><td>2.000</td><td>9</td></tr>
+  <tr><td>1</td><td>1.682</td><td>12</td></tr>
+  <tr><td>2</td><td>1.587</td><td>13</td></tr>
+  <tr><td>3</td><td>1.516</td><td>14</td></tr>
+</table>
+
+<p>
+  The optimal β requires more levels than halving to span the same domain,
+  but each level is doing useful work — no level is wasted refining the entire
+  domain or resolving a region where the error is already negligible.
+</p>
+
+<h2>9. Which α to Use?</h2>
+
+<p>
+  The global discretization error is dominated by the field with the largest
+  truncation error at each level boundary. For multiple fields with different
+  falloff exponents, the bottleneck shifts with distance:
+</p>
+
+<ul>
+  <li><strong>Far field</strong> (large r): χ − 1 ~ M/r dominates (α = 1, slowest falloff)</li>
+  <li><strong>Intermediate field</strong>: K, A<sub>ij</sub> ~ 1/r³ may dominate (α = 3)</li>
+  <li><strong>Near field</strong> (r ~ M): all fields have comparable gradients</li>
+</ul>
+
+<p>Recommendations:</p>
+
+<ul>
+  <li><strong>Initial data solver</strong> (computing ψ): the evolved field is
+    ψ − 1 ~ M/r, so α = 1, β ≈ 1.68.</li>
+  <li><strong>Evolution</strong>: the chi-gradient criterion already handles
+    adaptive refinement during evolution. The radius scaling matters most
+    for the initial mesh.</li>
+  <li><strong>Conservative choice</strong>: α = 1 (β ≈ 1.68) ensures the slowest-falling
+    field is well-resolved at all levels. Steeper fields (α = 2, 3) will be
+    over-resolved, which is safe.</li>
+</ul>
+
+<div class="note">
+  <strong>Key result:</strong> For a 6th-order scheme resolving a 1/r field
+  (conformal factor), the optimal refinement radius ratio is
+  <strong>β = 2<sup>3/4</sup> ≈ 1.68</strong>, not 2.
+  Each level's radius should shrink by ~40% (not 50%).
+  This requires ~12 levels instead of ~9 for the same domain coverage,
+  but distributes the truncation error evenly across all levels.
+</div>
+
+<h2>10. Refinement Radius Formula</h2>
+
+<p>
+  Combining the optimal ratio with mass-based anchoring (finest radius = C · M<sub>p</sub>
+  per puncture), the refinement radius at level <em>k</em> (k = 0 finest,
+  k = n−1 coarsest) is:
+</p>
+
+<span class="eq">
+  r<sub>k</sub>(p) = C · M<sub>p</sub> · β<sup>k</sup>
+</span>
+
+<p>where:</p>
+<ul>
+  <li>C ≈ 4 (finest level covers ~4M, well beyond the horizon at r ≈ M/2)</li>
+  <li>M<sub>p</sub> = mass of puncture <em>p</em> (unequal masses scale naturally)</li>
+  <li>β = 2<sup>p/(α+p+1)</sup> (derived from equidistribution)</li>
+  <li>k counts from finest (0) to coarsest (n−1)</li>
+</ul>
+
+<p>
+  A block at distance <em>d</em> from puncture <em>p</em> should be refined to at
+  least level <em>l</em> if d &lt; r<sub>n−l</sub>(p), where <em>n</em> is the total
+  number of AMR levels.
+</p>
+
+<h2>References</h2>
+
+<ul class="ref">
+  <li>Berger &amp; Oliger, "Adaptive mesh refinement for hyperbolic partial
+    differential equations," J. Comput. Phys. 53, 484 (1984) — original AMR algorithm</li>
+  <li>Rashti et al., "Adaptive mesh refinement in binary black holes simulations,"
+    <a href="https://arxiv.org/abs/2312.05438">arXiv:2312.05438</a> (2023) —
+    L∞ vs L₂ vs truncation error comparison</li>
+  <li>Radia et al., "Lessons for adaptive mesh refinement in numerical relativity,"
+    <a href="https://arxiv.org/abs/2112.10567">arXiv:2112.10567</a> (2022) —
+    GRChombo tagging criteria comparison</li>
+  <li>Aurrekoetxea et al., "Evolution of a black hole cluster in full general relativity,"
+    <a href="https://arxiv.org/abs/2505.01495">arXiv:2505.01495</a> (2025) —
+    25-BH GRChombo simulation</li>
+  <li>Aurrekoetxea et al., "GRTresna: An open-source code to solve the initial
+    data constraints," <a href="https://arxiv.org/abs/2501.13046">arXiv:2501.13046</a>
+    (2025) — source-based AMR tagging for elliptic solver</li>
+</ul>
+
+<p style="font-size: 0.85em; color: #888; margin-top: 3em; border-top: 1px solid #ddd; padding-top: 1em;">
+  Lattice — 3D Numerical Relativity Simulator<br>
+  Document created 2026-03-05.
+</p>
+
+</body>
+</html>
