@@ -52,11 +52,19 @@ fi
 echo ""
 echo "[3/4] Installing GPU toolkit..."
 if [ "$GPU_VENDOR" = "nvidia" ]; then
-    # CUDA toolkit (no driver packages — safe in containers)
-    if nvcc --version &>/dev/null; then
-        echo "  nvcc already installed: $(nvcc --version 2>&1 | grep 'release')"
+    # CUDA toolkit (no driver packages — safe in containers).
+    # Check common paths since nvcc may not be in PATH yet.
+    NVCC_BIN=""
+    for p in /usr/local/cuda/bin/nvcc /usr/bin/nvcc; do
+        if [ -x "$p" ]; then NVCC_BIN="$p"; break; fi
+    done
+    if [ -n "$NVCC_BIN" ]; then
+        echo "  nvcc already installed: $($NVCC_BIN --version 2>&1 | grep 'release')"
     else
         echo "  Installing CUDA 12.4 toolkit..."
+        # Remove conflicting keyring configs (vast.ai containers may have stale ones)
+        sudo rm -f /etc/apt/sources.list.d/cuda*.list 2>/dev/null || true
+        sudo rm -f /usr/share/keyrings/cuda-*.gpg /usr/share/keyrings/nvidia-cuda.gpg 2>/dev/null || true
         wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb \
             -O /tmp/cuda-keyring.deb
         sudo dpkg -i /tmp/cuda-keyring.deb
