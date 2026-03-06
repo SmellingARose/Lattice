@@ -118,18 +118,15 @@ of conformally flat data — not a constraint-satisfying solve.
 GPU-compatible checkerboard, on the actual AMR evolution mesh. Supports
 arbitrary N (tested up to 5, designed for 32). Both 1-field (Bowen-York)
 and 4-field coupled (HiSpID high-spin) solvers. GPU-accelerated via the
-same device-side ghost exchange as evolution. Defect correction: 2nd-order
-smoother (radius 1, race-free with 8-color on GPU) + 6th-order
-operator/residual.
+same device-side ghost exchange as evolution.
 
 **What's distinct:** Lousto et al. proved N-body multigrid works but used
 CPU-only uniform grids with the Cactus framework. Our solver combines three
 elements no prior code has together: (1) GPU acceleration with 8-color
-checkerboard and under-relaxed Newton-GS (6th-order Laplacian with
-2nd-order Jacobian weight for race-free stability), (2) solving directly on the evolution AMR mesh (#3), and
-(3) both Bowen-York and HiSpID (4-field coupled) systems. The combination
-enables constraint-satisfying N-body initial data at GPU speed on the exact
-mesh used for evolution.
+checkerboard compatible with warp-based execution, (2) solving directly on
+the evolution AMR mesh (#3), and (3) both Bowen-York and HiSpID (4-field
+coupled) systems. The combination enables constraint-satisfying N-body
+initial data at GPU speed on the exact mesh used for evolution.
 
 Code: `src/initial_data/relaxation.c` (base FAS solver),
 `src/initial_data/relaxation_amr.c` (AMR composite multigrid),

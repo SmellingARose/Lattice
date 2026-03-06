@@ -215,7 +215,7 @@ work on AMR meshes.
 - **Position-dependent eta:** `eta(x) = eta_0 / W(x)` where `W = sqrt(chi)` for
   stable unequal-mass binary evolution. Gated behind `position_dependent_eta` flag
   (default 1). Ref: arXiv:1003.0859 (Muller & Brugmann).
-- **N-body initial data:** FAS multigrid constraint solver (FMG + Newton-Gauss-Seidel, 8-color GPU-compatible), O(N³) solve to discretization accuracy, arbitrary puncture count. BY 1-field + HiSpID 4-field coupled solvers. Under-relaxed Newton-GS: 6th-order Laplacian with 2nd-order Jacobian weight (-2.0 vs -49/18, factor ~0.735) for GPU 8-color stability.
+- **N-body initial data:** FAS multigrid constraint solver (FMG + Newton-Gauss-Seidel, 8-color GPU-compatible), O(N³) solve to discretization accuracy, arbitrary puncture count. BY 1-field + HiSpID 4-field coupled solvers.
 - **Einstein-Maxwell:** 6 new evolved fields (E^i, B^i), conformal Maxwell evolution with constraint damping, EM stress-energy coupling to CCZ4 (gated by `--em` flag), charged puncture initial data via `--puncture M,x,y,z,Px,Py,Pz,Sx,Sy,Sz,Q`.
 - **Spin:** Bowen-York spinning punctures + HiSpID high-spin initial data (quasi-isotropic Kerr conformal metric, coupled 4-field relaxation).
 - **Apparent horizons:** Hyperbolic flow method (BHaHAHA-inspired) with 6th-order off-grid interpolation, mass/spin/area extraction, `--ah` CLI flag. Works on both single-grid and AMR meshes.
@@ -310,7 +310,7 @@ lattice/
 │   │   ├── bowen_york.h/c      # BY A_ij (momentum+spin) + CCZ4 conversion (+mesh-level API)
 │   │   ├── relaxation.h/c      # FAS multigrid constraint solver (1-field + 4-field coupled)
 │   │   ├── relaxation_amr.h/c  # AMR composite multigrid (FAS + uniform MG hierarchy)
-│   │   ├── mg_smooth_point.h   # Multigrid smoothing point kernels (under-relaxed Newton-GS + 6th-order operator)
+│   │   ├── mg_smooth_point.h   # Multigrid smoothing point kernels (shared by relaxation solvers)
 │   │   └── kerr_quasi_isotropic.h/c  # QI Kerr metric for HiSpID (high-spin data)
 │   ├── diagnostics/
 │   │   ├── constraints.h/c     # Hamiltonian + momentum constraints
@@ -562,14 +562,7 @@ fine resolution, so constraint quality scales with the finest dx, not the base d
 Higher `--amr-levels` is more accurate but costs more compute (each level adds
 up to 8x fine blocks that must be solved).
 
-Under-relaxed Newton-GS: smoother uses full 6th-order `fd_d2` Laplacian for
-accurate residual evaluation, but the Newton step denominator uses the 2nd-order
-center weight (`-2.0` instead of `-49/18`), giving an under-relaxation factor of
-~0.735. This ensures stability with 8-color Gauss-Seidel on GPU where concurrent
-same-color updates produce slightly stale neighbor reads. The conservative step
-size damps these perturbations while maintaining correct descent direction.
-Ref: arXiv:0705.1486 (Natchu & Matzner), arXiv:2510.11152 (GPU FAS multigrid),
-HPGMG, AMReX MLMG.
+Ref: arXiv:0705.1486 (Natchu & Matzner), arXiv:2510.11152 (GPU FAS multigrid).
 
 ## Workflow Rules
 

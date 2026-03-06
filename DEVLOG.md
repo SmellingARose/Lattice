@@ -3,34 +3,48 @@
 > **Note:** When adding/removing/renaming files or functions, also update
 > `docs/architecture.html` — the living map of the codebase structure.
 
-## 2026-03-06: Under-relaxed Newton-GS for GPU multigrid stability
+## 2026-03-06: GPU multigrid V-cycle divergence — investigation & plan
 
-Fixed GPU multigrid solver V-cycle divergence (18x/cycle on H100 with 11
-AMR levels). Root cause: 6th-order stencil (radius 3) in Newton-GS smoother
-races with 8-color checkerboard (stride 2) on GPU — same-color points at
-distance 2 overlap in each other's 7-point stencils.
+**Problem:** GPU multigrid solver V-cycle diverges (18x/cycle on H100 with 11
+AMR levels). CPU converges at ~0.24/cycle. Documented in
+`docs/mg_divergence_investigation.html`.
 
-Fix: under-relaxed Newton-GS Jacobian:
-- **Smoother Laplacian:** Kept 6th-order `fd_d2` (accurate residual evaluation).
-- **Newton step denominator:** Uses 2nd-order center weight `-2.0` instead of
-  6th-order `-49/18`, giving under-relaxation factor ~0.735. The conservative
-  step size damps perturbations from racy reads on GPU while maintaining
-  correct descent direction.
-- **Operator/residual:** Unchanged, 6th-order `fd_d2`.
+**Root cause:** 8-color Gauss-Seidel (stride 2) + 6th-order FD stencil
+(radius 3) = race condition on GPU. Same-color points at distance 2 overlap
+in each other's 7-point stencils. All same-color points execute simultaneously
+on GPU, so reads see non-deterministic pre/post-update values.
 
-Initial attempt used 2nd-order `fd_d2_smooth` for the smoother Laplacian itself
-(true defect correction), but this caused the solver to stall at the 2nd-order
-discretization floor (~2.87e-6 at N=32, 22,000+ V-cycles). Reverting to
-6th-order Laplacian with only the Jacobian weight changed fixes both the
-stalling and the GPU race condition.
+**Approaches tried (reverted — no code changes committed):**
 
-Changed files: `mg_smooth_point.h`, `relaxation.c`, `relaxation_amr.c`.
-Changed `FD_D2_CENTER_WEIGHT` / `MGP_FD_D2_CENTER` from `-49/18` to `-2.0`.
-Removed unused 2nd-order stencil functions (`fd_d2_smooth`, `fd_d2_mixed_smooth`)
-and local shadowing definitions.
+1. *2nd-order smoother Laplacian (`fd_d2_smooth`, radius 1):* Race-free, but
+   solver stalls at 2nd-order discretization floor (~2.87e-6 at N=32, 22,000+
+   V-cycles). The smoother converges `L_2nd(u) = f` perfectly, but the
+   6th-order operator still sees O(h^4) residual. Post-smoothing undoes the
+   coarse grid correction by driving the solution back toward the 2nd-order
+   answer each V-cycle.
 
-Also deleted stale investigation files (`docs/mg_divergence_investigation.html`,
-`investigation.md`).
+2. *Under-relaxed Jacobian (6th-order Laplacian, -2.0 Jacobian weight):*
+   Works on CPU (0.1/cycle convergence), but racy reads on GPU are still
+   present — under-relaxation dampens but doesn't eliminate the race.
+   Not provably safe.
+
+**Correct fix (TODO):** Two-pass GPU smoothing per color:
+- Pass 1 (compute): All same-color threads compute Newton deltas (read-only,
+  no writes → no race even with 6th-order radius-3 stencil)
+- Pass 2 (apply): All threads apply stored deltas (write-only)
+
+This is Jacobi-within-color (deterministic) while preserving GS across colors.
+Both CPU and GPU use the same 6th-order `fd_d2` stencils. CPU keeps single-pass
+(sequential within block, no race). GPU gets two kernel launches per color
+(16 total vs current 8) with a small scratch buffer for deltas.
+
+Implementation plan:
+- Add `mg_smooth_1field_delta` / `mg_smooth_4field_delta` to `mg_smooth_point.h`
+  (compute delta without writing to solution)
+- Add `smooth_delta` buffer to `hip_solver_ptrs_t` in `backend_hip.cpp`
+- Replace `hip_mg_smooth_{1,4}field` with compute-delta + apply-delta kernel pairs
+- CPU `backend_mg_smooth_packed` unchanged (already race-free)
+- Files: `mg_smooth_point.h`, `backend_hip.cpp` (no changes to relaxation.c/amr)
 
 ## 2026-03-05: Equidistribution-optimal AMR refinement radius scaling
 
