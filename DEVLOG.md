@@ -3,6 +3,35 @@
 > **Note:** When adding/removing/renaming files or functions, also update
 > `docs/architecture.html` — the living map of the codebase structure.
 
+## 2026-03-06: Under-relaxed Newton-GS for GPU multigrid stability
+
+Fixed GPU multigrid solver V-cycle divergence (18x/cycle on H100 with 11
+AMR levels). Root cause: 6th-order stencil (radius 3) in Newton-GS smoother
+races with 8-color checkerboard (stride 2) on GPU — same-color points at
+distance 2 overlap in each other's 7-point stencils.
+
+Fix: under-relaxed Newton-GS Jacobian:
+- **Smoother Laplacian:** Kept 6th-order `fd_d2` (accurate residual evaluation).
+- **Newton step denominator:** Uses 2nd-order center weight `-2.0` instead of
+  6th-order `-49/18`, giving under-relaxation factor ~0.735. The conservative
+  step size damps perturbations from racy reads on GPU while maintaining
+  correct descent direction.
+- **Operator/residual:** Unchanged, 6th-order `fd_d2`.
+
+Initial attempt used 2nd-order `fd_d2_smooth` for the smoother Laplacian itself
+(true defect correction), but this caused the solver to stall at the 2nd-order
+discretization floor (~2.87e-6 at N=32, 22,000+ V-cycles). Reverting to
+6th-order Laplacian with only the Jacobian weight changed fixes both the
+stalling and the GPU race condition.
+
+Changed files: `mg_smooth_point.h`, `relaxation.c`, `relaxation_amr.c`.
+Changed `FD_D2_CENTER_WEIGHT` / `MGP_FD_D2_CENTER` from `-49/18` to `-2.0`.
+Removed unused 2nd-order stencil functions (`fd_d2_smooth`, `fd_d2_mixed_smooth`)
+and local shadowing definitions.
+
+Also deleted stale investigation files (`docs/mg_divergence_investigation.html`,
+`investigation.md`).
+
 ## 2026-03-05: Equidistribution-optimal AMR refinement radius scaling
 
 Replaced the ad-hoc `r = 8*dx` refinement radius formula in

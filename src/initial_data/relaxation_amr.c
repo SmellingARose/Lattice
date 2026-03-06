@@ -64,12 +64,14 @@
 #define MG_NU_COARSE  50
 #define MG_MAX_LEVELS  8
 
-/* FD_D2 center weight for Jacobian diagonal */
-#if FD_ORDER == 6
-#define FD_D2_CENTER_WEIGHT (-49.0 / 18.0)
-#else
-#define FD_D2_CENTER_WEIGHT (-5.0 / 2.0)
-#endif
+/* Under-relaxed Jacobian weight for Newton-GS denominator.
+ * Smoother uses full 6th-order fd_d2 from finite_diff.h for accurate
+ * residual evaluation. The Newton step denominator uses the 2nd-order
+ * center weight (-2.0) instead of the 6th-order weight (-49/18),
+ * giving under-relaxation factor ~0.735. This ensures stability with
+ * 8-color Gauss-Seidel on GPU where racy reads produce stale values.
+ * Ref: HPGMG, AMReX, arXiv:2510.11152 */
+#define FD_D2_CENTER_WEIGHT (-2.0)
 
 /* ================================================================
  * mg_amr_t: composite AMR + uniform multigrid hierarchy
@@ -260,11 +262,11 @@ static void umg_sweep_4field(mg_level_amr_t *lev)
                         for (int e = 0; e < 3; e++) {
                             if (e == d)
                                 d_divV += fd_d2(lev->V[e], idx,
-                                                strides[e], inv_dx);
+                                                       strides[e], inv_dx);
                             else
                                 d_divV += fd_d2_mixed(lev->V[e], idx,
-                                                      strides[d],
-                                                      strides[e], inv_dx);
+                                                             strides[d],
+                                                             strides[e], inv_dx);
                         }
                         double res_V = lap_V + d_divV / 3.0
                                      + lev->S_M[d][idx] - lev->f_V[d][idx];

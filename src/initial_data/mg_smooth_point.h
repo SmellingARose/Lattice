@@ -35,13 +35,16 @@
 #define MGP_BG_SM3     9
 #define MGP_N_FIELDS   10
 
-/* FD_D2 center weight for Newton-GS Jacobian diagonal.
- * Ref: relaxation_amr.c line 66 */
-#if FD_ORDER == 6
-#define MGP_FD_D2_CENTER (-49.0 / 18.0)
-#else
-#define MGP_FD_D2_CENTER (-5.0 / 2.0)
-#endif
+/* Under-relaxed Jacobian weight for Newton-GS denominator.
+ * The smoother uses the full 6th-order fd_d2 Laplacian (center weight
+ * -49/18) for accurate residual evaluation, but the Newton step
+ * denominator uses the 2nd-order weight (-2.0). This gives an
+ * under-relaxation factor of 2/(49/18) ≈ 0.735, ensuring stability
+ * with 8-color Gauss-Seidel on GPU where racy reads from neighboring
+ * colors produce slightly stale values. The conservative step size
+ * damps these perturbations while maintaining correct descent direction.
+ * Ref: HPGMG, AMReX, arXiv:2510.11152 Section 3.1 */
+#define MGP_FD_D2_CENTER (-2.0)
 
 /* ================================================================
  * Pack buffer pointer helper
