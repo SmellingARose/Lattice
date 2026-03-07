@@ -166,6 +166,112 @@ static inline void mg_smooth_4field_point(
 }
 
 /* ================================================================
+ * 1-field Newton-GS delta (single point) — GPU two-pass variant
+ *
+ * Same math as mg_smooth_1field_point, but computes the delta
+ * without writing to psi. Returns delta via output pointer.
+ * Pass 1 of two-pass GPU smoother: all threads read psi (frozen),
+ * no writes → no race even with 6th-order radius-3 stencil.
+ *
+ * Ref: HPGMG out-of-place GSRB (Sec. 3.2, Adams et al. 2014)
+ * ================================================================ */
+LATTICE_DEVICE
+static inline void mg_smooth_1field_delta(
+    const double *psi, const double *psi_BL, const double *A2,
+    const double *f_psi, double *delta_psi,
+    int idx, int sx, int sy, int sz, double inv_dx, double dx2)
+{
+    double J_lap = 3.0 * MGP_FD_D2_CENTER / dx2;
+
+    double psi_tot = psi_BL[idx] + psi[idx];
+    if (psi_tot < 0.1) psi_tot = 0.1;
+
+    double lap = fd_d2(psi, idx, sx, inv_dx)
+               + fd_d2(psi, idx, sy, inv_dx)
+               + fd_d2(psi, idx, sz, inv_dx);
+
+    double p2 = psi_tot * psi_tot;
+    double p4 = p2 * p2;
+    double p7 = p4 * p2 * psi_tot;
+    double p8 = p7 * psi_tot;
+
+    double source = 0.125 * A2[idx] / p7;
+    double residual = lap + source - f_psi[idx];
+    double dS = -0.875 * A2[idx] / p8;
+
+    delta_psi[idx] = -residual / (J_lap + dS);
+}
+
+/* ================================================================
+ * 4-field Newton-GS delta (single point) — GPU two-pass variant
+ *
+ * Same math as mg_smooth_4field_point, but writes deltas to
+ * separate output buffers instead of updating solution in-place.
+ *
+ * Ref: HPGMG out-of-place GSRB (Sec. 3.2, Adams et al. 2014)
+ * ================================================================ */
+LATTICE_DEVICE
+static inline void mg_smooth_4field_delta(
+    const double *psi, const double *V0, const double *V1,
+    const double *V2,
+    const double *psi_BL, const double *A2,
+    const double *R_tilde, const double *SM0, const double *SM1,
+    const double *SM2,
+    const double *f_psi, const double *f_V0, const double *f_V1,
+    const double *f_V2,
+    double *delta_psi, double *delta_V0, double *delta_V1,
+    double *delta_V2,
+    int idx, int sx, int sy, int sz, double inv_dx, double dx2)
+{
+    double J_lap = 3.0 * MGP_FD_D2_CENTER / dx2;
+    double J_V_diag = J_lap + (1.0 / 3.0) * MGP_FD_D2_CENTER / dx2;
+
+    /* Psi delta */
+    double psi_tot = psi_BL[idx] + psi[idx];
+    if (psi_tot < 0.1) psi_tot = 0.1;
+
+    double lap_psi = fd_d2(psi, idx, sx, inv_dx)
+                   + fd_d2(psi, idx, sy, inv_dx)
+                   + fd_d2(psi, idx, sz, inv_dx);
+
+    double p2 = psi_tot * psi_tot;
+    double p4 = p2 * p2;
+    double p7 = p4 * p2 * psi_tot;
+    double p8 = p7 * psi_tot;
+
+    double src_H = R_tilde[idx] * 0.125 * psi_tot
+                 + A2[idx] * 0.125 / p7;
+    double res_psi = lap_psi + src_H - f_psi[idx];
+    double dS_psi = 0.125 * R_tilde[idx]
+                  - 0.875 * A2[idx] / p8;
+    delta_psi[idx] = -res_psi / (J_lap + dS_psi);
+
+    /* V^d deltas */
+    const double *V[3] = { V0, V1, V2 };
+    const double *f_V[3] = { f_V0, f_V1, f_V2 };
+    const double *SM[3] = { SM0, SM1, SM2 };
+    double *delta_V[3] = { delta_V0, delta_V1, delta_V2 };
+    int strides[3] = { sx, sy, sz };
+
+    for (int d = 0; d < 3; d++) {
+        double lap_V = fd_d2(V[d], idx, sx, inv_dx)
+                     + fd_d2(V[d], idx, sy, inv_dx)
+                     + fd_d2(V[d], idx, sz, inv_dx);
+        double d_divV = 0.0;
+        for (int e = 0; e < 3; e++) {
+            if (e == d)
+                d_divV += fd_d2(V[e], idx, strides[e], inv_dx);
+            else
+                d_divV += fd_d2_mixed(V[e], idx,
+                                      strides[d], strides[e], inv_dx);
+        }
+        double res_V = lap_V + d_divV / 3.0
+                     + SM[d][idx] - f_V[d][idx];
+        delta_V[d][idx] = -res_V / J_V_diag;
+    }
+}
+
+/* ================================================================
  * 1-field operator L(u) evaluation (single point)
  *
  * L(psi) = Lap(psi) + (1/8) * A^2 * psi_tot^{-7}

@@ -2444,6 +2444,12 @@ typedef struct {
      * cf_map[b * 26 + n] = coarser-level pack index of neighbor, -1 = none. */
     int *cf_map;                 /* [nb * 26]: coarser-level pack index per dir */
     int *is_parent;              /* [nb]: 1 if block is non-leaf parent */
+    /* Two-pass smoother delta buffer (GPU only).
+     * Stores Newton-GS deltas during pass 1 (compute); applied in pass 2.
+     * Avoids 8-color GS race condition with 6th-order stencil (radius 3).
+     * Size: n_sol * nb * npts (1 or 4 solution fields only). */
+    double *smooth_delta;
+    size_t smooth_delta_total;
 } hip_solver_ptrs_t;
 
 static hip_solver_ptrs_t d_solver[MAX_SOLVER_SLOTS];
@@ -2524,6 +2530,15 @@ void backend_map_solver_pack(meshblock_pack_t *pack, int slot)
                 pack->n_refined * NUM_NEIGHBORS * sizeof(int));
     }
 
+    /* Two-pass smoother delta buffer: 4 solution fields × nb × npts.
+     * Always allocate 4 fields (max for 4-field solver) to avoid
+     * needing the four_field flag at allocation time. */
+    sp->smooth_delta_total = (size_t)4 * nb * npts;
+    HIP_CHECK(hipMalloc(&sp->smooth_delta,
+                         sp->smooth_delta_total * sizeof(double)));
+    HIP_CHECK(hipMemset(sp->smooth_delta, 0,
+                         sp->smooth_delta_total * sizeof(double)));
+
     sp->valid = 1;
 }
 
@@ -2545,6 +2560,7 @@ static void hip_free_solver_ptrs(hip_solver_ptrs_t *sp)
     if (sp->coarse_neighbor_table) (void)hipFree(sp->coarse_neighbor_table);
     if (sp->cf_map) (void)hipFree(sp->cf_map);
     if (sp->is_parent) (void)hipFree(sp->is_parent);
+    if (sp->smooth_delta) (void)hipFree(sp->smooth_delta);
     sp->valid = 0;
 }
 
@@ -2594,56 +2610,22 @@ void backend_sync_solver_data_to_device(meshblock_pack_t *pack, int slot)
 }
 
 /* ========================================================================
- * MG Kernel: 1-field Newton-GS smoother (one color)
+ * MG Kernel: Two-pass smoother — Pass 1: compute Newton-GS deltas
+ *
+ * All same-color threads read solution fields (frozen, no writes)
+ * and compute Newton deltas into a separate buffer. No race condition
+ * even with 6th-order stencil (radius 3) because data is read-only.
+ *
+ * This is the "out-of-place GSRB" pattern used by HPGMG (Adams et al.
+ * 2014) and block-asynchronous smoothers (Anzt et al. 2012).
+ * Within each color: Jacobi (deterministic). Across colors: GS.
  *
  * Thread mapping: tid → (block, colored_point).
- * Each thread calls mg_smooth_1field_point from mg_smooth_point.h.
  * ======================================================================== */
 
-__global__ void hip_mg_smooth_1field(
-    double *data, const double *rhs, const double *dx_arr,
-    int nb, size_t npts, int N, int ghost, int Nt,
-    int c0, int c1, int c2, int total_threads)
-{
-    int tid = (int)((size_t)blockIdx.x * blockDim.x + threadIdx.x);
-    if (tid >= total_threads) return;
-
-    /* Points per color per block: (N/2)^3 */
-    int half_N = N / 2;
-    int pts_per_block = half_N * half_N * half_N;
-    int b = tid / pts_per_block;
-    int pt = tid % pts_per_block;
-    if (b >= nb) return;
-
-    int pi = pt % half_N;
-    int pj = (pt / half_N) % half_N;
-    int pk = pt / (half_N * half_N);
-    int i = ghost + c0 + 2 * pi;
-    int j = ghost + c1 + 2 * pj;
-    int k = ghost + c2 + 2 * pk;
-
-    int sx = 1, sy = Nt, sz = Nt * Nt;
-    int idx = k * sz + j * sy + i;
-
-    double dx = dx_arr[b];
-    double dx2 = dx * dx;
-    double inv_dx = 1.0 / dx;
-
-    double *psi     = data + (size_t)MGP_SOL_PSI * nb * npts + (size_t)b * npts;
-    const double *psi_BL = data + (size_t)MGP_BG_PSI_BL * nb * npts + (size_t)b * npts;
-    const double *A2     = data + (size_t)MGP_BG_A2 * nb * npts + (size_t)b * npts;
-    const double *f_psi  = rhs + (size_t)MGP_SOL_PSI * nb * npts + (size_t)b * npts;
-
-    mg_smooth_1field_point(psi, psi_BL, A2, f_psi,
-                           idx, sx, sy, sz, inv_dx, dx2);
-}
-
-/* ========================================================================
- * MG Kernel: 4-field Newton-GS smoother (one color)
- * ======================================================================== */
-
-__global__ void hip_mg_smooth_4field(
-    double *data, const double *rhs, const double *dx_arr,
+__global__ void hip_mg_compute_delta_1field(
+    const double *data, const double *rhs, double *delta,
+    const double *dx_arr,
     int nb, size_t npts, int N, int ghost, int Nt,
     int c0, int c1, int c2, int total_threads)
 {
@@ -2673,10 +2655,55 @@ __global__ void hip_mg_smooth_4field(
     size_t base = (size_t)b * npts;
     size_t stride = (size_t)nb * npts;
 
-    double *psi = data + (size_t)MGP_SOL_PSI * stride + base;
-    double *V0  = data + (size_t)MGP_SOL_V1  * stride + base;
-    double *V1  = data + (size_t)MGP_SOL_V2  * stride + base;
-    double *V2  = data + (size_t)MGP_SOL_V3  * stride + base;
+    const double *psi    = data + (size_t)MGP_SOL_PSI   * stride + base;
+    const double *psi_BL = data + (size_t)MGP_BG_PSI_BL * stride + base;
+    const double *A2     = data + (size_t)MGP_BG_A2     * stride + base;
+    const double *f_psi  = rhs  + (size_t)MGP_SOL_PSI   * stride + base;
+
+    /* delta buffer layout: field 0 = psi delta */
+    double *d_psi = delta + (size_t)0 * nb * npts + base;
+
+    mg_smooth_1field_delta(psi, psi_BL, A2, f_psi, d_psi,
+                           idx, sx, sy, sz, inv_dx, dx2);
+}
+
+__global__ void hip_mg_compute_delta_4field(
+    const double *data, const double *rhs, double *delta,
+    const double *dx_arr,
+    int nb, size_t npts, int N, int ghost, int Nt,
+    int c0, int c1, int c2, int total_threads)
+{
+    int tid = (int)((size_t)blockIdx.x * blockDim.x + threadIdx.x);
+    if (tid >= total_threads) return;
+
+    int half_N = N / 2;
+    int pts_per_block = half_N * half_N * half_N;
+    int b = tid / pts_per_block;
+    int pt = tid % pts_per_block;
+    if (b >= nb) return;
+
+    int pi = pt % half_N;
+    int pj = (pt / half_N) % half_N;
+    int pk = pt / (half_N * half_N);
+    int i = ghost + c0 + 2 * pi;
+    int j = ghost + c1 + 2 * pj;
+    int k = ghost + c2 + 2 * pk;
+
+    int sx = 1, sy = Nt, sz = Nt * Nt;
+    int idx = k * sz + j * sy + i;
+
+    double dx = dx_arr[b];
+    double dx2 = dx * dx;
+    double inv_dx = 1.0 / dx;
+
+    size_t base = (size_t)b * npts;
+    size_t stride = (size_t)nb * npts;
+    size_t d_stride = (size_t)nb * npts;  /* delta has 4 fields */
+
+    const double *psi = data + (size_t)MGP_SOL_PSI * stride + base;
+    const double *V0  = data + (size_t)MGP_SOL_V1  * stride + base;
+    const double *V1  = data + (size_t)MGP_SOL_V2  * stride + base;
+    const double *V2  = data + (size_t)MGP_SOL_V3  * stride + base;
 
     const double *psi_BL  = data + (size_t)MGP_BG_PSI_BL * stride + base;
     const double *A2      = data + (size_t)MGP_BG_A2      * stride + base;
@@ -2690,12 +2717,67 @@ __global__ void hip_mg_smooth_4field(
     const double *f_V1  = rhs + (size_t)MGP_SOL_V2  * stride + base;
     const double *f_V2  = rhs + (size_t)MGP_SOL_V3  * stride + base;
 
-    mg_smooth_4field_point(psi, V0, V1, V2, psi_BL, A2,
+    double *d_psi = delta + (size_t)0 * d_stride + base;
+    double *d_V0  = delta + (size_t)1 * d_stride + base;
+    double *d_V1  = delta + (size_t)2 * d_stride + base;
+    double *d_V2  = delta + (size_t)3 * d_stride + base;
+
+    mg_smooth_4field_delta(psi, V0, V1, V2, psi_BL, A2,
                            R_tilde, SM0, SM1, SM2,
                            f_psi, f_V0, f_V1, f_V2,
+                           d_psi, d_V0, d_V1, d_V2,
                            idx, sx, sy, sz, inv_dx, dx2);
 }
 
+/* ========================================================================
+ * MG Kernel: Two-pass smoother — Pass 2: apply deltas
+ *
+ * Each thread writes to its own unique point: data[idx] += delta[idx].
+ * No race condition (each point written by exactly one thread).
+ * ======================================================================== */
+
+__global__ void hip_mg_apply_delta(
+    double *data, const double *delta,
+    int nb, size_t npts, int N, int ghost, int Nt,
+    int c0, int c1, int c2, int n_sol, int total_threads)
+{
+    int tid = (int)((size_t)blockIdx.x * blockDim.x + threadIdx.x);
+    if (tid >= total_threads) return;
+
+    int half_N = N / 2;
+    int pts_per_block = half_N * half_N * half_N;
+    int b = tid / pts_per_block;
+    int pt = tid % pts_per_block;
+    if (b >= nb) return;
+
+    int pi = pt % half_N;
+    int pj = (pt / half_N) % half_N;
+    int pk = pt / (half_N * half_N);
+    int i = ghost + c0 + 2 * pi;
+    int j = ghost + c1 + 2 * pj;
+    int k = ghost + c2 + 2 * pk;
+
+    int idx = k * Nt * Nt + j * Nt + i;
+
+    size_t base = (size_t)b * npts;
+    size_t data_stride = (size_t)nb * npts;
+    size_t delta_stride = (size_t)nb * npts;
+
+    for (int f = 0; f < n_sol; f++) {
+        data[f * data_stride + base + idx] +=
+            delta[f * delta_stride + base + idx];
+    }
+}
+
+/* ========================================================================
+ * backend_mg_smooth_packed — GPU two-pass implementation
+ *
+ * Pass 1: compute Newton-GS deltas (read-only on solution → no race)
+ * Pass 2: apply deltas to solution  (each thread writes its own point)
+ *
+ * Replaces single-pass racy in-place update. Same 6th-order stencil,
+ * same convergence target, deterministic results.
+ * ======================================================================== */
 extern "C"
 void backend_mg_smooth_packed(meshblock_pack_t *pack, int slot, int color,
                                int four_field)
@@ -2708,6 +2790,7 @@ void backend_mg_smooth_packed(meshblock_pack_t *pack, int slot, int color,
     size_t npts = pack->npts;
     int N = pack->N, ghost = pack->ghost, Nt = pack->Ntotal;
     int c0 = color & 1, c1 = (color >> 1) & 1, c2 = (color >> 2) & 1;
+    int n_sol = four_field ? 4 : 1;
 
     int half_N = N / 2;
     int pts_per_block = half_N * half_N * half_N;
@@ -2716,17 +2799,26 @@ void backend_mg_smooth_packed(meshblock_pack_t *pack, int slot, int color,
     int block_size = 256;
     int grid_size = (total_threads + block_size - 1) / block_size;
 
+    /* Pass 1: compute deltas (read-only on sp->data) */
     if (four_field) {
-        hipLaunchKernelGGL(hip_mg_smooth_4field, grid_size, block_size,
+        hipLaunchKernelGGL(hip_mg_compute_delta_4field, grid_size, block_size,
                            0, gpu_stream,
-                           sp->data, sp->rhs, sp->dx_per_block,
+                           sp->data, sp->rhs, sp->smooth_delta,
+                           sp->dx_per_block,
                            nb, npts, N, ghost, Nt, c0, c1, c2, total_threads);
     } else {
-        hipLaunchKernelGGL(hip_mg_smooth_1field, grid_size, block_size,
+        hipLaunchKernelGGL(hip_mg_compute_delta_1field, grid_size, block_size,
                            0, gpu_stream,
-                           sp->data, sp->rhs, sp->dx_per_block,
+                           sp->data, sp->rhs, sp->smooth_delta,
+                           sp->dx_per_block,
                            nb, npts, N, ghost, Nt, c0, c1, c2, total_threads);
     }
+
+    /* Pass 2: apply deltas (each thread writes its own unique point) */
+    hipLaunchKernelGGL(hip_mg_apply_delta, grid_size, block_size,
+                       0, gpu_stream,
+                       sp->data, sp->smooth_delta,
+                       nb, npts, N, ghost, Nt, c0, c1, c2, n_sol, total_threads);
 }
 
 /* ========================================================================

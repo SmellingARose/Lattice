@@ -215,7 +215,7 @@ work on AMR meshes.
 - **Position-dependent eta:** `eta(x) = eta_0 / W(x)` where `W = sqrt(chi)` for
   stable unequal-mass binary evolution. Gated behind `position_dependent_eta` flag
   (default 1). Ref: arXiv:1003.0859 (Muller & Brugmann).
-- **N-body initial data:** FAS multigrid constraint solver (FMG + Newton-Gauss-Seidel, 8-color GPU-compatible), O(N³) solve to discretization accuracy, arbitrary puncture count. BY 1-field + HiSpID 4-field coupled solvers.
+- **N-body initial data:** FAS multigrid constraint solver (FMG + Newton-Gauss-Seidel, 8-color), O(N³) solve to discretization accuracy, arbitrary puncture count. BY 1-field + HiSpID 4-field coupled solvers. GPU smoother uses two-pass (compute-delta then apply-delta) to avoid 6th-order stencil race condition in 8-color GS — Jacobi within color, GS across colors (HPGMG pattern).
 - **Einstein-Maxwell:** 6 new evolved fields (E^i, B^i), conformal Maxwell evolution with constraint damping, EM stress-energy coupling to CCZ4 (gated by `--em` flag), charged puncture initial data via `--puncture M,x,y,z,Px,Py,Pz,Sx,Sy,Sz,Q`.
 - **Spin:** Bowen-York spinning punctures + HiSpID high-spin initial data (quasi-isotropic Kerr conformal metric, coupled 4-field relaxation).
 - **Apparent horizons:** Hyperbolic flow method (BHaHAHA-inspired) with 6th-order off-grid interpolation, mass/spin/area extraction, `--ah` CLI flag. Works on both single-grid and AMR meshes.

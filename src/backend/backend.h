@@ -385,8 +385,12 @@ void backend_sync_solver_data_to_host(meshblock_pack_t *pack, int slot);
 void backend_sync_solver_data_to_device(meshblock_pack_t *pack, int slot);
 
 /*
- * 8-color Newton-Gauss-Seidel smoother (one color per launch).
- * All points of the given color are independent → GPU parallel.
+ * 8-color Newton-Gauss-Seidel smoother (one color per call).
+ *
+ * GPU: two-pass per color (compute deltas read-only, then apply).
+ *      Eliminates 6th-order stencil race condition in 8-color GS.
+ *      Jacobi within color, GS across colors.
+ * CPU: single-pass in-place (serial within block, no race).
  *
  * four_field: 0 = 1-field (psi only), 1 = 4-field (psi + V^i)
  */
