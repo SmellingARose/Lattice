@@ -181,13 +181,10 @@ work on AMR meshes.
     pack with linear temporal interpolation. `gpu_ensure_level_packs()`
     builds packs + cross-level maps on first step or regrid. Single
     `gpu_sync_all_to_host()` at end of global step.
-  - *Solver round-trip elimination:* 7 host↔device round-trips in AMR
-    composite multigrid replaced with device-side kernels.
-    `hip_mg_ghost_cf_fill` kernel for cross-level fill from coarser solver
-    slot. `hip_mg_zero_leaf_rhs` for leaf RHS zeroing. Evolution ghost
-    kernels reused with solver pointers. `backend_mg_ghost_full_packed()`
-    orchestrates 6-phase device-side solver ghost exchange.
-    `gpu_build_cf_maps()` builds per-level cross-level neighbor maps.
+  - *Solver:* GPU solver removed (produced inf residuals at inspiral scale).
+    CPU composite FAS/FMG always used — single-pass convergence for puncture
+    data, direct memcpy ghost exchange. ~2800 lines of GPU solver backend
+    code deleted (kernels, device state, packed API).
 - **GPU diagnostics (all complete):** On-device constraint L2, momentum L2,
   min lapse with position, BH separation (two-pass lapse minimum), NaN/Inf
   check, and Psi4 extraction. Diagnostic-only pack mapping
@@ -215,7 +212,7 @@ work on AMR meshes.
 - **Position-dependent eta:** `eta(x) = eta_0 / W(x)` where `W = sqrt(chi)` for
   stable unequal-mass binary evolution. Gated behind `position_dependent_eta` flag
   (default 1). Ref: arXiv:1003.0859 (Muller & Brugmann).
-- **N-body initial data:** FAS multigrid constraint solver (FMG + Newton-Gauss-Seidel, 8-color), O(N³) solve to discretization accuracy, arbitrary puncture count. BY 1-field + HiSpID 4-field coupled solvers. GPU smoother uses two-pass (compute-delta then apply-delta) to avoid 6th-order stencil race condition in 8-color GS — Jacobi within color, GS across colors (HPGMG pattern).
+- **N-body initial data:** FAS multigrid constraint solver (FMG + Newton-Gauss-Seidel, 8-color), O(N³) solve to discretization accuracy, arbitrary puncture count. BY 1-field + HiSpID 4-field coupled solvers. Solver always runs on CPU (composite FAS/FMG with direct memcpy ghost exchange). GPU solver was removed — CPU single-pass FMG converges in ~1 pass for puncture data, beating GPU kernel launch overhead. Solver runs once at t=0; evolution uses GPU for time-stepping.
 - **Einstein-Maxwell:** 6 new evolved fields (E^i, B^i), conformal Maxwell evolution with constraint damping, EM stress-energy coupling to CCZ4 (gated by `--em` flag), charged puncture initial data via `--puncture M,x,y,z,Px,Py,Pz,Sx,Sy,Sz,Q`.
 - **Spin:** Bowen-York spinning punctures + HiSpID high-spin initial data (quasi-isotropic Kerr conformal metric, coupled 4-field relaxation).
 - **Apparent horizons:** Hyperbolic flow method (BHaHAHA-inspired) with 6th-order off-grid interpolation, mass/spin/area extraction, `--ah` CLI flag. Works on both single-grid and AMR meshes.
@@ -268,7 +265,8 @@ work on AMR meshes.
   HiSpID (26/26), AH finder (13/13), Maxwell (15/15), Psi4 (15/15), CCE (49/49),
   CP-BC (30/30), pack_evolve (8/8), amr_prolong (15/15), checkpoint (14/14),
   binary inspiral D10 benchmark (T=700M, BAM-matched params, Samurai consensus
-  validation, 8 hard + 4 advisory tests, 19-column CSV).
+  validation, 8 hard + 4 advisory tests, 19-column CSV),
+  inspiral solver smoke (8-level D10 binary + 7-level 4-BH square, 4/4).
   N-body smoke tests:
   3-BH line, 5-BH pentagon. Total: 31 evolved fields (25 CCZ4 + 6 EM).
 
@@ -310,7 +308,6 @@ lattice/
 │   │   ├── bowen_york.h/c      # BY A_ij (momentum+spin) + CCZ4 conversion (+mesh-level API)
 │   │   ├── relaxation.h/c      # FAS multigrid constraint solver (1-field + 4-field coupled)
 │   │   ├── relaxation_amr.h/c  # AMR composite multigrid (FAS + uniform MG hierarchy)
-│   │   ├── mg_smooth_point.h   # Multigrid smoothing point kernels (shared by relaxation solvers)
 │   │   └── kerr_quasi_isotropic.h/c  # QI Kerr metric for HiSpID (high-spin data)
 │   ├── diagnostics/
 │   │   ├── constraints.h/c     # Hamiltonian + momentum constraints
@@ -358,6 +355,7 @@ lattice/
 │   ├── test_cce_worldtube.c # CCE worldtube HDF5 output tests (49/49, requires HDF5)
 │   ├── test_cp_bc.c         # Constraint-preserving BC tests (30/30)
 │   ├── test_binary_inspiral.c  # D10 benchmark (Samurai consensus, BAM-matched, T=700M, 8+4 tests, 19-col CSV)
+│   ├── test_inspiral_solver.c  # Inspiral solver smoke test (8-level D10 binary + 7-level 4-BH, 4/4)
 │   ├── test_inspiral_convergence.c  # AMR binary inspiral convergence (3 resolutions)
 │   ├── test_checkpoint.c       # Checkpoint/restart validation (uniform + AMR, 14/14)
 │   └── test_gpu_debug.c       # GPU kernel isolation test (per-kernel sync barriers)
@@ -398,6 +396,7 @@ make test-psi4         # Psi4 extraction (GL quadrature, harmonics, modes, flat,
 make HDF5=on test-cce  # CCE worldtube HDF5 output (requires libhdf5-dev)
 make test-cp-bc        # Constraint-preserving BCs (speeds, formula, flat, single BH)
 make test-inspiral     # D10 benchmark: BAM-matched params, Samurai consensus validation (H100)
+make test-inspiral-solver  # Inspiral solver smoke test (8-level binary + 7-level 4-BH)
 make test-inspiral-convergence  # AMR binary inspiral convergence (long run, ~hours)
 make test-checkpoint   # Checkpoint/restart (uniform + AMR, bitwise-identical)
 make test-gpu-debug    # GPU kernel isolation test (requires BACKEND=gpu)
