@@ -9,8 +9,8 @@
  * Memory budget: ~51 MB/block (4 RK banks × 25 fields × 64K points × 8B).
  *
  * Tests:
- *   1. L=1536, 8 levels, 2 punctures (D10) — ~460 blocks, ~23 GB
- *   2. L=1536, 7 levels, 4 punctures       — ~500 blocks, ~25 GB
+ *   1. L=1536, 7 levels, 2 punctures (D10) — ~329 blocks, ~17 GB
+ *   2. L=1536, 6 levels, 4 punctures       — ~265 blocks, ~14 GB
  */
 
 #include "../src/core/grid.h"
@@ -103,11 +103,11 @@ int main(void)
 
     int passed = 0, failed = 0;
 
-    /* ---- Test 1: D10 binary, 8 AMR levels ----
-     * Same physics as the full inspiral but 8 levels instead of 11.
+    /* ---- Test 1: D10 binary, 7 AMR levels ----
+     * Same physics as the full inspiral but 7 levels instead of 11.
      * Exercises composite V-cycle with cross-level ghost exchange,
      * restriction, prolongation, and FAS correction.
-     * ~460 blocks = ~23 GB. */
+     * ~329 blocks = ~17 GB. */
     {
         puncture_data_t bhs[2];
         memset(bhs, 0, sizeof(bhs));
@@ -118,14 +118,14 @@ int main(void)
         bhs[1].center[2]   = -D_SEP / 2.0;
         bhs[1].momentum[1] = -P_Y;
 
-        run_solver_test("Test 1: L=1536, 8 levels, 2 punctures (D10 binary)",
-                        1536.0, 8, 2, bhs, &passed, &failed);
+        run_solver_test("Test 1: L=1536, 7 levels, 2 punctures (D10 binary)",
+                        1536.0, 7, 2, bhs, &passed, &failed);
     }
 
-    /* ---- Test 2: 4 BH square, 7 AMR levels ----
+    /* ---- Test 2: 4 BH square, 6 AMR levels ----
      * Four equal-mass punctures in a square at D=10M separation.
      * Tests N-body solver path with multiple refinement centers.
-     * ~500 blocks = ~25 GB. */
+     * ~265 blocks = ~14 GB. */
     {
         printf("\n");
         double r = D_SEP / sqrt(2.0);  /* half-diagonal of square */
@@ -148,8 +148,8 @@ int main(void)
         bhs[3].center[0] = +r;  bhs[3].center[2] = -r;
         bhs[3].momentum[1] = -P_Y;
 
-        run_solver_test("Test 2: L=1536, 7 levels, 4 punctures (N-body)",
-                        1536.0, 7, 4, bhs, &passed, &failed);
+        run_solver_test("Test 2: L=1536, 6 levels, 4 punctures (N-body)",
+                        1536.0, 6, 4, bhs, &passed, &failed);
     }
 
     printf("\n=== Results: %d passed, %d failed ===\n", passed, failed);

@@ -743,7 +743,7 @@ void set_bowen_york_mesh(mesh_t *m, int n_bh, const puncture_data_t *bhs,
         /* Standard BY: 1-field solver on evolution mesh */
         printf("  Bowen-York (mesh): 1-field path, %d AMR levels\n", n_amr_levels);
         double residual = relaxation_solve_amr_mesh(
-            m, n_bh, bhs, 1.0e-12, 50000, 1, n_amr_levels);
+            m, n_bh, bhs, 1.0e-10, 50000, 1, n_amr_levels);
         printf("  Bowen-York (mesh): residual = %.6e\n", residual);
 
         /* Convert solver data → CCZ4 on each leaf block */

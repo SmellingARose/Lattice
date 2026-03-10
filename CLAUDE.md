@@ -266,7 +266,7 @@ work on AMR meshes.
   CP-BC (30/30), pack_evolve (8/8), amr_prolong (15/15), checkpoint (14/14),
   binary inspiral D10 benchmark (T=700M, BAM-matched params, Samurai consensus
   validation, 8 hard + 4 advisory tests, 19-column CSV),
-  inspiral solver smoke (8-level D10 binary + 7-level 4-BH square, 4/4).
+  inspiral solver smoke (7-level D10 binary + 6-level 4-BH square, 4/4).
   N-body smoke tests:
   3-BH line, 5-BH pentagon. Total: 31 evolved fields (25 CCZ4 + 6 EM).
 
@@ -355,7 +355,7 @@ lattice/
 │   ├── test_cce_worldtube.c # CCE worldtube HDF5 output tests (49/49, requires HDF5)
 │   ├── test_cp_bc.c         # Constraint-preserving BC tests (30/30)
 │   ├── test_binary_inspiral.c  # D10 benchmark (Samurai consensus, BAM-matched, T=700M, 8+4 tests, 19-col CSV)
-│   ├── test_inspiral_solver.c  # Inspiral solver smoke test (8-level D10 binary + 7-level 4-BH, 4/4)
+│   ├── test_inspiral_solver.c  # Inspiral solver smoke test (7-level D10 binary + 6-level 4-BH, 4/4)
 │   ├── test_inspiral_convergence.c  # AMR binary inspiral convergence (3 resolutions)
 │   ├── test_checkpoint.c       # Checkpoint/restart validation (uniform + AMR, 14/14)
 │   └── test_gpu_debug.c       # GPU kernel isolation test (per-kernel sync barriers)
@@ -551,7 +551,9 @@ The discretization floor is O(dx^4):
 FMG achieves discretization accuracy in a single pass (~1.14 V-cycles of work).
 Post-FMG V-cycles polish below the FMG residual; typically 0-9 needed.
 Multigrid hierarchy: N, N/2, N/4, ... down to N_min=16.
-For production, `tol=1e-12, max_iter=50000` is the default in `set_bowen_york()`.
+For production, `tol=1e-10, max_iter=50000` is the default in `set_bowen_york()`.
+Both BY (1-field) and HiSpID (4-field) use 1e-10 — evolution truncation errors
+are orders of magnitude larger, so polishing below 1e-10 is wasted work.
 
 **AMR solver resolution:** With `--amr-levels L`, the solver adds L refinement
 levels near each puncture. Each level halves the grid spacing:
