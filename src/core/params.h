@@ -143,8 +143,8 @@ static inline sim_params_t default_params(void)
     p.gauge.shift_Gamma_coeff = 0.75;
     p.gauge.eta               = 1.0;
     p.gauge.position_dependent_eta = 1;
-    p.gauge.lapse_advec_coeff = 0.0;
-    p.gauge.shift_advec_coeff = 0.0;
+    p.gauge.lapse_advec_coeff = 1.0;  /* required for AMR gauge stability */
+    p.gauge.shift_advec_coeff = 1.0;  /* Ref: gr-qc/0610128 (Brugmann et al.) */
 
     p.time = 0.0;
 

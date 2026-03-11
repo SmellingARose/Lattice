@@ -19,6 +19,7 @@
 #include "diagnostics/constraints.h"
 #include "diagnostics/ah_finder.h"
 #include "diagnostics/psi4.h"
+#include "diagnostics/bh_tracker.h"
 #ifdef LATTICE_HDF5
 #include "diagnostics/cce_worldtube.h"
 #endif
@@ -108,6 +109,9 @@ static void print_usage(void)
     fprintf(stderr, "  --cce_radius <float>   Extraction radius (default 100)\n");
     fprintf(stderr, "  --cce_lmax <int>       Angular resolution (default 16)\n");
 #endif
+    fprintf(stderr, "\nN-body BH tracker:\n");
+    fprintf(stderr, "  --tracker              Enable multi-BH tracker\n");
+    fprintf(stderr, "  --tracker_every <int>  Tracker interval (default: ah_every or 10)\n");
     fprintf(stderr, "\nCheckpoint/restart:\n");
     fprintf(stderr, "  --checkpoint-every <int>  Save checkpoint every N steps (0=off)\n");
     fprintf(stderr, "  --restart <file>          Resume from checkpoint file\n");
@@ -147,6 +151,10 @@ int main(int argc, char **argv)
     double cce_radius = 100.0;
     int cce_lmax = 16;
 #endif
+
+    /* N-body BH tracker */
+    int tracker_enabled = 0;
+    int tracker_every = -1;  /* -1 = use ah_every or default 10 */
 
     /* Checkpoint/restart */
     int checkpoint_every = 0;
@@ -329,6 +337,12 @@ int main(int argc, char **argv)
         } else if (strcmp(argv[a], "--cce_lmax") == 0 && a + 1 < argc) {
             cce_lmax = atoi(argv[++a]);
 #endif
+        /* N-body BH tracker */
+        } else if (strcmp(argv[a], "--tracker") == 0) {
+            tracker_enabled = 1;
+        } else if (strcmp(argv[a], "--tracker_every") == 0 && a + 1 < argc) {
+            tracker_every = atoi(argv[++a]);
+            tracker_enabled = 1;
         /* Checkpoint/restart */
         } else if (strcmp(argv[a], "--checkpoint-every") == 0 && a + 1 < argc) {
             checkpoint_every = atoi(argv[++a]);
@@ -346,6 +360,14 @@ int main(int argc, char **argv)
             return 1;
         }
     }
+
+    /* Resolve tracker interval */
+    if (tracker_every < 0)
+        tracker_every = ah_enabled ? ah_every : 10;
+
+    /* Auto-enable tracker for multi-BH simulations (N>=2) */
+    if (n_bh >= 2 && !tracker_enabled)
+        tracker_enabled = 1;
 
     setbuf(stdout, NULL);
     backend_init();
@@ -462,6 +484,17 @@ int main(int argc, char **argv)
                    ah_every, r0);
         }
 
+        /* N-body BH tracker setup (AMR path) */
+        bh_tracker_t *tracker = NULL;
+        FILE *tracker_csv = NULL;
+        if (tracker_enabled && n_bh > 0) {
+            tracker = bh_tracker_alloc(n_bh, bhs, ah_n_theta, ah_n_phi);
+            tracker_csv = fopen("build/nbody_diagnostics.csv", "w");
+            if (tracker_csv) bh_tracker_write_csv_header(tracker, tracker_csv);
+            printf("  BH tracker: %d BHs, every %d steps\n",
+                   n_bh, tracker_every);
+        }
+
         /* Psi4 extraction setup (AMR path) */
         psi4_workspace_t *psi4_ws = NULL;
         if (psi4_enabled) {
@@ -506,6 +539,17 @@ int main(int argc, char **argv)
                        step, p.time, ham, mesh_num_leaves(m));
             }
 
+            /* N-body BH tracker (AMR path) */
+            if (tracker && tracker_every > 0 && step % tracker_every == 0) {
+                bh_tracker_update_positions(tracker, m);
+                bh_tracker_find_horizons(tracker, m, ah_tol, ah_max_iter);
+                bh_tracker_check_mergers(tracker, p.time);
+                double ham_tr = mesh_constraint_l2(m);
+                double mom_tr = mesh_momentum_l2(m);
+                bh_tracker_write_csv(tracker, tracker_csv, p.time,
+                                      ham_tr, mom_tr, mesh_num_leaves(m));
+            }
+
             /* AH finder (AMR path) */
             if (ah_ws && ah_every > 0 && step % ah_every == 0) {
                 int conv = ah_find_amr(ah_ws, m, ah_tol, ah_max_iter, 0);
@@ -542,6 +586,13 @@ int main(int argc, char **argv)
                 checkpoint_write(m, &p, step, ckpt_path);
             }
         }
+
+        /* Tracker cleanup + merger log */
+        if (tracker) {
+            bh_tracker_write_mergers(tracker, "build/merger_events.log");
+            bh_tracker_free(tracker);
+        }
+        if (tracker_csv) fclose(tracker_csv);
 
 #ifdef LATTICE_HDF5
         cce_free(cce_ws);
@@ -595,6 +646,17 @@ int main(int argc, char **argv)
                    ah_every, r0);
         }
 
+        /* N-body BH tracker setup (single-grid path) */
+        bh_tracker_t *tracker = NULL;
+        FILE *tracker_csv = NULL;
+        if (tracker_enabled && n_bh > 0) {
+            tracker = bh_tracker_alloc(n_bh, bhs, ah_n_theta, ah_n_phi);
+            tracker_csv = fopen("build/nbody_diagnostics.csv", "w");
+            if (tracker_csv) bh_tracker_write_csv_header(tracker, tracker_csv);
+            printf("  BH tracker: %d BHs, every %d steps\n",
+                   n_bh, tracker_every);
+        }
+
         /* Psi4 extraction setup (single-grid path) */
         psi4_workspace_t *psi4_ws = NULL;
         if (psi4_enabled) {
@@ -635,6 +697,17 @@ int main(int argc, char **argv)
                 output_mesh_1d_slice(m, step, p.time);
             }
 
+            /* N-body BH tracker (single-grid path) */
+            if (tracker && tracker_every > 0 && step % tracker_every == 0) {
+                bh_tracker_update_positions(tracker, m);
+                bh_tracker_find_horizons(tracker, m, ah_tol, ah_max_iter);
+                bh_tracker_check_mergers(tracker, p.time);
+                double ham_tr = mesh_constraint_l2(m);
+                double mom_tr = mesh_momentum_l2(m);
+                bh_tracker_write_csv(tracker, tracker_csv, p.time,
+                                      ham_tr, mom_tr, mesh_num_leaves(m));
+            }
+
             /* AH finder */
             if (ah_ws && ah_every > 0 && step % ah_every == 0) {
                 int conv = ah_find_amr(ah_ws, m, ah_tol, ah_max_iter, 0);
@@ -671,6 +744,13 @@ int main(int argc, char **argv)
                 checkpoint_write(m, &p, step, ckpt_path);
             }
         }
+
+        /* Tracker cleanup + merger log */
+        if (tracker) {
+            bh_tracker_write_mergers(tracker, "build/merger_events.log");
+            bh_tracker_free(tracker);
+        }
+        if (tracker_csv) fclose(tracker_csv);
 
 #ifdef LATTICE_HDF5
         cce_free(cce_ws);

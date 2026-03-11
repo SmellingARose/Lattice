@@ -29,7 +29,7 @@ CORE_SRC    = src/core/grid.c
 EVOLUTION_SRC = src/evolution/ccz4_rhs.c src/evolution/dissipation.c src/evolution/maxwell_rhs.c
 NUMERICS_SRC  = src/numerics/rk4.c
 INITIAL_SRC   = src/initial_data/puncture.c src/initial_data/bowen_york.c src/initial_data/relaxation.c src/initial_data/relaxation_amr.c src/initial_data/kerr_quasi_isotropic.c
-DIAG_SRC      = src/diagnostics/constraints.c src/diagnostics/ah_finder.c src/diagnostics/psi4.c
+DIAG_SRC      = src/diagnostics/constraints.c src/diagnostics/ah_finder.c src/diagnostics/psi4.c src/diagnostics/bh_tracker.c
 BOUNDARY_SRC  = src/boundary/sommerfeld.c
 IO_SRC        = src/io/output.c src/io/checkpoint.c
 AMR_SRC       = src/amr/block.c src/amr/mesh.c src/amr/meshblock_pack.c src/amr/ghost_exchange.c \
@@ -123,7 +123,7 @@ LDFLAGS = $(BACKEND_LIBS) $(HDF5_LIBS) -lm $(LTO_FLAGS)
 BUILD = build
 
 # Targets
-.PHONY: all debug test test-single-bh test-convergence test-constraints test-head-on test-amr-mesh test-amr-ghost test-amr-prolong test-amr-refine test-amr-evolve test-pack-evolve test-subcycle test-bowen-york test-hispid test-maxwell test-ah test-psi4 test-cce test-cp-bc test-inspiral test-inspiral-solver test-inspiral-convergence test-relaxation-amr test-checkpoint clean
+.PHONY: all debug test test-single-bh test-convergence test-constraints test-head-on test-amr-mesh test-amr-ghost test-amr-prolong test-amr-refine test-amr-evolve test-pack-evolve test-subcycle test-bowen-york test-hispid test-maxwell test-ah test-psi4 test-cce test-cp-bc test-inspiral test-inspiral-solver test-inspiral-convergence test-relaxation-amr test-checkpoint test-nbody-track clean
 
 all: $(BUILD)/lattice
 
@@ -378,6 +378,10 @@ test-checkpoint: $(BUILD)/test_checkpoint
 test-gpu-debug: $(BUILD)/test_gpu_debug
 	@echo "=== Running GPU kernel debug test ==="
 	$(BUILD)/test_gpu_debug
+
+test-nbody-track: $(BUILD)/test_nbody_track
+	@echo "=== Running N-body BH tracker test ==="
+	$(BUILD)/test_nbody_track
 
 clean:
 	rm -rf $(BUILD)
