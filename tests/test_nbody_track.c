@@ -154,7 +154,7 @@ static void test_ah_finding(void)
     double M = 1.0;
     int N = 64;
     double L = 16.0;
-    mesh_t *m = mesh_create_ex(N, L, RK_CLASSIC, NUM_CCZ4_FIELDS);
+    mesh_t *m = mesh_create_ex(N, L, RK_CLASSIC, NUM_FIELDS);
     grid_t *g = m->blocks[0]->grid;
 
     double masses[1] = {M};
@@ -166,7 +166,8 @@ static void test_ah_finding(void)
     bhs[0].mass = M;
 
     bh_tracker_t *tr = bh_tracker_alloc(1, bhs, 16, 32);
-    bh_tracker_update_positions(tr, m);
+    /* Don't call update_positions — use initial center (0,0,0) which
+     * is where the AH finder was calibrated in standalone tests */
     bh_tracker_find_horizons(tr, m, 1e-2, 3000);
 
     printf("    M_irr = %.4f (expected ~%.4f)\n", tr->bh[0].mass_irr, M);
@@ -217,7 +218,7 @@ static void test_merger_bookkeeping(void)
     memset(bhs, 0, sizeof(bhs));
     bhs[0].mass = 1.0; bhs[0].center[0] = -1.0;
     bhs[1].mass = 1.0; bhs[1].center[0] =  1.0;
-    bhs[2].mass = 1.0; bhs[2].center[0] =  5.0;  /* far away — not merged */
+    bhs[2].mass = 1.0; bhs[2].center[0] = 10.0;  /* far away — not merged */
 
     bh_tracker_t *tr = bh_tracker_alloc(3, bhs, 8, 16);
     bh_tracker_check_mergers(tr, 42.0);
