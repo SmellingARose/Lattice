@@ -198,11 +198,11 @@ work on AMR meshes.
   and packed variants (CPU + GPU) now weight each cell by dV=dx^3 and normalize by
   total volume. Eliminates diagnostic artifacts on AMR meshes where fine cells near
   punctures dominated the unweighted norm. Standard practice in all AMR codes.
-- **Lapse/shift advection:** Inspiral test uses `lapse_advec_coeff=1.0` and
-  `shift_advec_coeff=1.0` for gauge stability on coarse AMR base grids. Without
-  the transport term `β^i ∂_i α`, the gauge is purely local and unstable at
-  dx≥2M. Zero additional cost (derivatives already computed). Default in
-  `params.h` remains 0.0. Ref: gr-qc/0610128 (Brugmann et al.).
+- **Lapse/shift advection:** `lapse_advec_coeff=1.0` and
+  `shift_advec_coeff=1.0` are the default in `params.h` (required for AMR gauge
+  stability). Without the transport term `β^i ∂_i α`, the gauge is purely local
+  and unstable at dx≥2M. Zero additional cost (derivatives already computed).
+  Ref: gr-qc/0610128 (Brugmann et al.).
 - **Constraint-preserving BCs:** BAM-style CP BCs replace the RHS of constraint
   fields (Theta, K, A_ij, Gamma^i) at boundary points with outgoing-wave equations
   at correct characteristic speeds, while keeping Sommerfeld for metric/gauge fields.
@@ -240,6 +240,12 @@ work on AMR meshes.
   Each level halves dx near punctures. Measured 218,000x better near-field constraint
   quality vs the old copy approach on refined meshes.
   Ref: Athena++ MG (Tomida & Stone 2023), arXiv:0912.2920 (Alic et al.).
+- **N-body BH tracker:** Multi-BH position tracking via successive lapse-minimum
+  searches with exclusion zones (GRChombo PunctureTracker pattern), per-BH AH
+  finding for mass/spin extraction, and pairwise merger detection (sep < 3M).
+  CSV diagnostic output with per-BH columns (position, mass, spin, lapse).
+  Auto-enabled for N>=2 punctures. CLI: `--tracker`, `--tracker_every`.
+  Ref: arXiv:2505.01495 (GRChombo 25-BH cluster simulation).
 - **Single root block (N_ROOT=1):** Multi-root meshes removed. All multi-block topology
   comes from AMR refinement only. The composite multigrid solver requires whole-domain
   visibility at the coarsest level — multi-root meshes broke cross-block coupling,
@@ -267,6 +273,8 @@ work on AMR meshes.
   binary inspiral D10 benchmark (T=700M, BAM-matched params, Samurai consensus
   validation, 8 hard + 4 advisory tests, 19-column CSV),
   inspiral solver smoke (7-level D10 binary + 6-level 4-BH square, 4/4).
+  N-body tracker (40/40: init, position update, AH loop, merger detection,
+  bookkeeping, CSV output, 25-BH alloc, post-merger tracking).
   N-body smoke tests:
   3-BH line, 5-BH pentagon. Total: 31 evolved fields (25 CCZ4 + 6 EM).
 
@@ -313,6 +321,7 @@ lattice/
 │   │   ├── constraints.h/c     # Hamiltonian + momentum constraints
 │   │   ├── ah_finder.h/c       # Apparent horizon finder (hyperbolic flow)
 │   │   ├── psi4.h/c            # Psi4 gravitational wave extraction
+│   │   ├── bh_tracker.h/c     # Multi-BH tracker (N-body position/AH/merger)
 │   │   └── cce_worldtube.h/c   # CCE worldtube HDF5 output (optional, HDF5=on)
 │   ├── boundary/
 │   │   ├── sommerfeld.h/c      # radiative BCs (+block-aware variant)
@@ -356,6 +365,7 @@ lattice/
 │   ├── test_cp_bc.c         # Constraint-preserving BC tests (30/30)
 │   ├── test_binary_inspiral.c  # D10 benchmark (Samurai consensus, BAM-matched, T=700M, 8+4 tests, 19-col CSV)
 │   ├── test_inspiral_solver.c  # Inspiral solver smoke test (7-level D10 binary + 6-level 4-BH, 4/4)
+│   ├── test_nbody_track.c      # N-body BH tracker (init, position, AH, merger, CSV, 40/40)
 │   ├── test_inspiral_convergence.c  # AMR binary inspiral convergence (3 resolutions)
 │   ├── test_checkpoint.c       # Checkpoint/restart validation (uniform + AMR, 14/14)
 │   └── test_gpu_debug.c       # GPU kernel isolation test (per-kernel sync barriers)
@@ -397,6 +407,7 @@ make HDF5=on test-cce  # CCE worldtube HDF5 output (requires libhdf5-dev)
 make test-cp-bc        # Constraint-preserving BCs (speeds, formula, flat, single BH)
 make test-inspiral     # D10 benchmark: BAM-matched params, Samurai consensus validation (H100)
 make test-inspiral-solver  # Inspiral solver smoke test (8-level binary + 7-level 4-BH)
+make test-nbody-track  # N-body BH tracker (init, position, AH, merger, CSV, 40/40)
 make test-inspiral-convergence  # AMR binary inspiral convergence (long run, ~hours)
 make test-checkpoint   # Checkpoint/restart (uniform + AMR, bitwise-identical)
 make test-gpu-debug    # GPU kernel isolation test (requires BACKEND=gpu)

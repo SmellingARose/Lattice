@@ -3,6 +3,34 @@
 > **Note:** When adding/removing/renaming files or functions, also update
 > `docs/architecture.html` — the living map of the codebase structure.
 
+## 2026-03-11: N-body BH tracker + advection default fix
+
+**N-body BH tracker** (`bh_tracker.h/c`, ~480 lines):
+- Successive lapse-minimum search with exclusion zones (R=2M per BH)
+- Per-BH AH finder for mass/spin extraction
+- Pairwise merger detection: sep < 3*max(M_i, M_j) → merge pair, create remnant
+- CSV diagnostic output: per-BH columns (x,y,z, mass, spin, lapse)
+- Auto-enabled for N≥2 punctures in `main.c` (all 3 paths: restart, AMR, single-grid)
+- CLI: `--tracker`, `--tracker_every N`
+
+**Advection default fix:** Changed `lapse_advec_coeff` and `shift_advec_coeff`
+from 0.0 to 1.0 in `default_params()`. Required for AMR gauge stability —
+without β^i ∂_i α, the gauge is purely local and unstable at dx≥2M. All
+existing tests pass with new defaults (flat spacetime: advection=0 since β=0;
+BH tests: gauge term is small on uniform grids).
+
+**Tests:** `test_nbody_track.c` — 8 tests, 40/40:
+1. Initialization (5 BHs, centers match input)
+2. Position update (3-BH BL, lapse minima near initial positions)
+3. AH finding (single Schwarzschild, M_irr within 15%)
+4. Merger detection (sep=2M < 3M threshold)
+5. Merger bookkeeping (n_active, merged_into, remnant)
+6. CSV output (header + data lines, correct column count)
+7. 25-BH allocation (alloc/free cycle)
+8. Post-merger tracking (remnant active, AH workspace allocated)
+
+Ref: arXiv:2505.01495 (GRChombo 25-BH cluster simulation)
+
 ## 2026-03-07: Fix GPU multigrid V-cycle divergence — two-pass smoother
 
 **Problem:** GPU multigrid solver V-cycle diverged (18x/cycle on H100 with 11

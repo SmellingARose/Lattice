@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Lattice N-Body BH Tracker — Test Results</title>
+<style>
+  body { font-family: 'Segoe UI', system-ui, sans-serif; max-width: 960px; margin: 40px auto; padding: 0 20px; background: #f8f9fa; color: #1a1a2e; }
+  h1 { color: #16213e; border-bottom: 3px solid #0f3460; padding-bottom: 10px; }
+  h2 { color: #0f3460; margin-top: 2em; }
+  h3 { color: #533483; }
+  .pass { color: #28a745; font-weight: bold; }
+  .fail { color: #dc3545; font-weight: bold; }
+  .summary-box { background: #d4edda; border: 2px solid #28a745; border-radius: 8px; padding: 16px 24px; margin: 20px 0; font-size: 1.2em; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; }
+  th, td { border: 1px solid #dee2e6; padding: 8px 12px; text-align: left; }
+  th { background: #0f3460; color: white; }
+  tr:nth-child(even) { background: #e9ecef; }
+  tr:hover { background: #d6e9f8; }
+  code { background: #e9ecef; padding: 2px 6px; border-radius: 3px; font-size: 0.95em; }
+  pre { background: #1a1a2e; color: #e0e0e0; padding: 16px; border-radius: 6px; overflow-x: auto; font-size: 0.9em; }
+  .test-section { background: white; border-radius: 8px; padding: 20px; margin: 16px 0; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+  .detail { color: #495057; font-size: 0.95em; margin: 4px 0 4px 24px; }
+  .ref { color: #6c757d; font-style: italic; font-size: 0.9em; }
+</style>
+</head>
+<body>
+
+<h1>Lattice N-Body BH Tracker &mdash; Test Results</h1>
+<p>Date: 2026-03-11 &nbsp;|&nbsp; Module: <code>src/diagnostics/bh_tracker.h/c</code> &nbsp;|&nbsp; Test: <code>tests/test_nbody_track.c</code></p>
+<p class="ref">Ref: arXiv:2505.01495 (GRChombo 25-BH cluster simulation)</p>
+
+<div class="summary-box">
+  <span class="pass">40 / 40 PASSED</span> &mdash; All tests pass. Zero failures.
+</div>
+
+<h2>Architecture Overview</h2>
+<p>The N-body BH tracker provides multi-BH diagnostics for N&ge;2 puncture simulations:</p>
+<ul>
+  <li><strong>Position tracking:</strong> Successive lapse-minimum search with exclusion zones (R = 2M per BH). O(N &times; blocks) per step.</li>
+  <li><strong>AH finding:</strong> Per-BH apparent horizon finder (hyperbolic flow) for mass/spin/area extraction.</li>
+  <li><strong>Merger detection:</strong> Pairwise distance check: sep &lt; 3 &times; max(M<sub>i</sub>, M<sub>j</sub>) triggers merger. O(N&sup2;) but N &le; 32.</li>
+  <li><strong>CSV output:</strong> Dynamic columns: 5 global + 6&times;N per-BH + 1 merger count.</li>
+</ul>
+
+<h2>Test Results Detail</h2>
+
+<!-- Test 1 -->
+<div class="test-section">
+<h3>Test 1: Initialization</h3>
+<p>Create tracker with 5 BHs in a pentagon arrangement (radius 3M, mass 0.5 each).</p>
+<table>
+  <tr><th>Check</th><th>Result</th><th>Detail</th></tr>
+  <tr><td>Tracker allocated</td><td class="pass">PASS</td><td>Non-NULL pointer returned</td></tr>
+  <tr><td>n_bh = 5</td><td class="pass">PASS</td><td>5 BHs registered</td></tr>
+  <tr><td>n_active = 5</td><td class="pass">PASS</td><td>All active initially</td></tr>
+  <tr><td>n_mergers = 0</td><td class="pass">PASS</td><td>No mergers at t=0</td></tr>
+  <tr><td>Centers match input</td><td class="pass">PASS</td><td>|&Delta;x|, |&Delta;y| &lt; 1e-14 for all 5 BHs</td></tr>
+  <tr><td>AH workspaces allocated</td><td class="pass">PASS</td><td>5 non-NULL ah_workspace_t pointers</td></tr>
+</table>
+</div>
+
+<!-- Test 2 -->
+<div class="test-section">
+<h3>Test 2: Position Update (Lapse-Minimum Tracking)</h3>
+<p>3-BH Brill-Lindquist on N=32, L=20 mesh (dx=0.625). Verify lapse minima found near initial puncture positions.</p>
+<table>
+  <tr><th>BH</th><th>Tracked Position</th><th>Expected</th><th>Distance</th></tr>
+  <tr><td>BH 0</td><td>(-2.81, 0.31, -0.31)</td><td>(-3.00, 0.00, 0.00)</td><td>0.48 M</td></tr>
+  <tr><td>BH 1</td><td>(2.81, 0.31, -0.31)</td><td>(3.00, 0.00, 0.00)</td><td>0.48 M</td></tr>
+  <tr><td>BH 2</td><td>(-0.31, 2.81, -0.31)</td><td>(0.00, 3.00, 0.00)</td><td>0.48 M</td></tr>
+</table>
+<p class="detail">Position error ~0.48M &asymp; 0.77 &times; dx. Expected: grid-cell-center offset on coarse mesh.</p>
+<table>
+  <tr><th>Check</th><th>Result</th></tr>
+  <tr><td>Tracked positions within 1.5M of initial</td><td class="pass">PASS</td></tr>
+  <tr><td>Lapse minima &lt; 1 at all tracked positions</td><td class="pass">PASS</td></tr>
+</table>
+</div>
+
+<!-- Test 3 -->
+<div class="test-section">
+<h3>Test 3: AH Finding via Tracker</h3>
+<p>Single Schwarzschild BH (M=1) on N=64, L=16 mesh (dx=0.25). Run tracker's AH finder, compare with known M<sub>irr</sub> = M.</p>
+<table>
+  <tr><th>Quantity</th><th>Measured</th><th>Expected</th><th>Error</th></tr>
+  <tr><td>M<sub>irr</sub></td><td>0.9990</td><td>1.0000</td><td>0.10%</td></tr>
+  <tr><td>M<sub>chr</sub></td><td>0.9990</td><td>1.0000</td><td>0.10%</td></tr>
+  <tr><td>&chi;<sub>spin</sub></td><td>0.0000</td><td>0.0000</td><td>&mdash;</td></tr>
+</table>
+<table>
+  <tr><th>Check</th><th>Result</th></tr>
+  <tr><td>M_irr within 15% of M</td><td class="pass">PASS</td></tr>
+  <tr><td>Spin near zero for Schwarzschild</td><td class="pass">PASS</td></tr>
+</table>
+</div>
+
+<!-- Test 4 -->
+<div class="test-section">
+<h3>Test 4: Merger Detection</h3>
+<p>2 BHs (M=1 each) at x=&plusmn;1 &rarr; separation = 2M. Threshold = 3 &times; max(1,1) = 3M. Since 2M &lt; 3M, merger should trigger.</p>
+<table>
+  <tr><th>Check</th><th>Result</th></tr>
+  <tr><td>Merger detected (separation &lt; 3M)</td><td class="pass">PASS</td></tr>
+  <tr><td>BH 0 marked merged</td><td class="pass">PASS</td></tr>
+  <tr><td>BH 1 marked merged</td><td class="pass">PASS</td></tr>
+</table>
+</div>
+
+<!-- Test 5 -->
+<div class="test-section">
+<h3>Test 5: Merger Bookkeeping</h3>
+<p>3 BHs: BH 0 at x=-1, BH 1 at x=1 (close pair), BH 2 at x=10 (far away). Only BH 0+1 should merge.</p>
+<table>
+  <tr><th>Check</th><th>Result</th><th>Detail</th></tr>
+  <tr><td>n_active = 2</td><td class="pass">PASS</td><td>3 &minus; 2 merged + 1 remnant = 2</td></tr>
+  <tr><td>n_bh = 4</td><td class="pass">PASS</td><td>3 original + 1 remnant</td></tr>
+  <tr><td>BH 0 merged_into = 3</td><td class="pass">PASS</td><td>Remnant is BH id 3</td></tr>
+  <tr><td>BH 1 merged_into = 3</td><td class="pass">PASS</td><td>Same remnant</td></tr>
+  <tr><td>BH 2 still active</td><td class="pass">PASS</td><td>Far away (10M &gt; 6M threshold)</td></tr>
+  <tr><td>Remnant (BH 3) active</td><td class="pass">PASS</td><td>New BH created</td></tr>
+  <tr><td>Remnant at midpoint</td><td class="pass">PASS</td><td>x = 0.0 = avg(-1, 1)</td></tr>
+  <tr><td>Remnant mass = M1+M2</td><td class="pass">PASS</td><td>2.0 = 1.0 + 1.0</td></tr>
+  <tr><td>Merger event: id1 = 0</td><td class="pass">PASS</td><td></td></tr>
+  <tr><td>Merger event: id2 = 1</td><td class="pass">PASS</td><td></td></tr>
+  <tr><td>Merger event: remnant_id = 3</td><td class="pass">PASS</td><td></td></tr>
+  <tr><td>Merger event: time = 42.0</td><td class="pass">PASS</td><td></td></tr>
+</table>
+</div>
+
+<!-- Test 6 -->
+<div class="test-section">
+<h3>Test 6: CSV Output</h3>
+<p>2-BH tracker, write 3 timesteps. Verify header format and data line count.</p>
+<table>
+  <tr><th>Check</th><th>Result</th><th>Detail</th></tr>
+  <tr><td>Temp file created</td><td class="pass">PASS</td><td>mkstemp succeeded</td></tr>
+  <tr><td>Header has 18 columns</td><td class="pass">PASS</td><td>5 global + 6&times;2 per-BH + 1 n_mergers</td></tr>
+  <tr><td>4 lines total</td><td class="pass">PASS</td><td>1 header + 3 data lines</td></tr>
+</table>
+<p><strong>CSV column layout:</strong></p>
+<pre>time, ham_l2, mom_l2, n_active, n_leaves,
+  bh0_x, bh0_y, bh0_z, bh0_mass, bh0_spin, bh0_lapse,
+  bh1_x, bh1_y, bh1_z, bh1_mass, bh1_spin, bh1_lapse,
+  n_mergers</pre>
+</div>
+
+<!-- Test 7 -->
+<div class="test-section">
+<h3>Test 7: 25-BH Allocation</h3>
+<p>Allocate tracker with 25 BHs (5&times;5 grid, M=0.4 each, 12&times;24 AH grid). Verify memory and free without leaks.</p>
+<table>
+  <tr><th>Check</th><th>Result</th></tr>
+  <tr><td>25-BH tracker allocated</td><td class="pass">PASS</td></tr>
+  <tr><td>n_bh = 25</td><td class="pass">PASS</td></tr>
+  <tr><td>n_active = 25</td><td class="pass">PASS</td></tr>
+  <tr><td>All 25 AH workspaces allocated</td><td class="pass">PASS</td></tr>
+  <tr><td>Alloc/free cycle complete</td><td class="pass">PASS</td></tr>
+</table>
+<p class="detail">25 BHs &times; (12&times;24) AH grid &times; 10 arrays = ~7.2 MB AH workspace memory. Ready for arXiv:2505.01495 benchmark.</p>
+</div>
+
+<!-- Test 8 -->
+<div class="test-section">
+<h3>Test 8: Post-Merger Tracking</h3>
+<p>After merging BH 0 + BH 1, verify remnant BH 3 is properly set up for continued tracking.</p>
+<table>
+  <tr><th>Check</th><th>Result</th><th>Detail</th></tr>
+  <tr><td>One merger triggered</td><td class="pass">PASS</td><td>BH 0 (x=-0.5) + BH 1 (x=0.5), sep=1M &lt; 3M</td></tr>
+  <tr><td>Remnant active</td><td class="pass">PASS</td><td>BH_STATUS_ACTIVE</td></tr>
+  <tr><td>Remnant id = 3</td><td class="pass">PASS</td><td>Next available slot</td></tr>
+  <tr><td>BH 2 still active</td><td class="pass">PASS</td><td>At x=8, far from merger</td></tr>
+  <tr><td>BH 0 merge_time = 5.0</td><td class="pass">PASS</td><td></td></tr>
+  <tr><td>BH 1 merge_time = 5.0</td><td class="pass">PASS</td><td></td></tr>
+  <tr><td>Remnant AH workspace allocated</td><td class="pass">PASS</td><td>Ready for horizon finding</td></tr>
+</table>
+</div>
+
+<h2>Advection Default Change</h2>
+<p>Changed <code>lapse_advec_coeff</code> and <code>shift_advec_coeff</code> from <strong>0.0 &rarr; 1.0</strong> in <code>default_params()</code>.</p>
+<table>
+  <tr><th>Test Suite</th><th>Result</th><th>Note</th></tr>
+  <tr><td>Flat spacetime (500 steps)</td><td class="pass">PASS</td><td>Ham L2 = 3.0e-14 (advection=0 since &beta;=0)</td></tr>
+  <tr><td>Convergence (order 6.5)</td><td class="pass">PASS</td><td>Order unchanged: 6.56, 6.24</td></tr>
+  <tr><td>AMR evolve (8/8)</td><td class="pass">PASS</td><td>All sub-tests pass</td></tr>
+  <tr><td>Maxwell (15/15)</td><td class="pass">PASS</td><td>EM fields unaffected</td></tr>
+</table>
+
+<h2>Files Modified</h2>
+<table>
+  <tr><th>File</th><th>Action</th><th>Lines</th></tr>
+  <tr><td><code>src/core/params.h</code></td><td>Edit (advec defaults 0&rarr;1)</td><td>2</td></tr>
+  <tr><td><code>src/diagnostics/bh_tracker.h</code></td><td>New</td><td>~95</td></tr>
+  <tr><td><code>src/diagnostics/bh_tracker.c</code></td><td>New</td><td>~310</td></tr>
+  <tr><td><code>src/main.c</code></td><td>Edit (tracker integration)</td><td>+80</td></tr>
+  <tr><td><code>tests/test_nbody_track.c</code></td><td>New</td><td>~320</td></tr>
+  <tr><td><code>Makefile</code></td><td>Edit (target + source)</td><td>+6</td></tr>
+</table>
+
+<hr>
+<p class="ref">Generated 2026-03-11 by Lattice test infrastructure. Ref: arXiv:2505.01495, arXiv:2505.15912.</p>
+
+</body>
+</html>
