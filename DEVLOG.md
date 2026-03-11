@@ -3,7 +3,22 @@
 > **Note:** When adding/removing/renaming files or functions, also update
 > `docs/architecture.html` — the living map of the codebase structure.
 
-## 2026-03-11: N-body BH tracker + advection default fix
+## 2026-03-11: N-body BH tracker + inspiral integration + advection default fix
+
+**Inspiral test integration:** Replaced hand-rolled N=2 tracking in
+`test_binary_inspiral.c` with `bh_tracker` module. Removes ~60 lines of
+duplicated `mesh_bh_separation()` code. CSV now includes dynamic per-BH
+position columns (`bh0_x,y,z,mass,spin,lapse, bh1_x,...`) that scale with N.
+Remnant AH finder (16x32, higher resolution) kept separate from per-BH tracker.
+
+**CSV column fix:** Added `n_bh_initial` field to `bh_tracker_t` to keep CSV
+column count constant across mergers. Without this, each merger added 6 new
+columns (remnant BH) making the CSV unparseable. Now merged BHs output `nan`
+in their fixed columns.
+
+---
+
+## 2026-03-11 (earlier): N-body BH tracker + advection default fix
 
 **N-body BH tracker** (`bh_tracker.h/c`, ~480 lines):
 - Successive lapse-minimum search with exclusion zones (R=2M per BH)

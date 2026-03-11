@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Lattice N-Body BH Tracker — Trajectory Visualization</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Menlo', 'Consolas', monospace; background: #0a0a1a; color: #d0d0d0; }
+  h1 { text-align: center; padding: 18px 0 6px; font-size: 1.3em; color: #8af; }
+  .subtitle { text-align: center; font-size: 0.8em; color: #666; margin-bottom: 12px; }
+  .container { display: flex; flex-wrap: wrap; justify-content: center; gap: 16px; padding: 0 20px 20px; }
+  canvas { background: #111122; border: 1px solid #333; border-radius: 6px; }
+  .panel { background: #111122; border: 1px solid #333; border-radius: 6px; padding: 16px; min-width: 280px; }
+  .panel h3 { color: #8af; margin-bottom: 10px; font-size: 0.95em; }
+  .slider-row { text-align: center; padding: 10px 20px; }
+  .slider-row input[type=range] { width: 60%; accent-color: #8af; }
+  .slider-row label { color: #aaa; font-size: 0.85em; margin-right: 10px; }
+  .slider-row .time-val { color: #ff8; font-weight: bold; font-size: 1.1em; }
+  .bh-info { font-size: 0.8em; line-height: 1.7; }
+  .bh-info .bh-label { font-weight: bold; }
+  .bh0 { color: #ff6060; } .bh1 { color: #60ff60; } .bh2 { color: #6080ff; }
+  .bh3 { color: #ffff60; } .bh4 { color: #ff60ff; }
+  .stat-row { display: flex; justify-content: space-between; padding: 2px 0; font-size: 0.8em; }
+  .stat-label { color: #888; } .stat-val { color: #ccc; }
+  .play-btn { background: #224; border: 1px solid #446; color: #8af; padding: 4px 16px;
+    border-radius: 4px; cursor: pointer; font-family: inherit; font-size: 0.85em; margin-left: 10px; }
+  .play-btn:hover { background: #335; }
+  .legend { text-align: center; padding: 4px; font-size: 0.75em; color: #888; }
+</style>
+</head>
+<body>
+<h1>Lattice N-Body BH Tracker</h1>
+<div class="subtitle">3-BH trajectory data — uniform grid N=64, L=40, dx=0.625</div>
+
+<div class="slider-row">
+  <label>Time step:</label>
+  <input type="range" id="slider" min="0" max="49" value="0">
+  <span class="time-val" id="time-display">t = 0.000 M</span>
+  <button class="play-btn" id="play-btn">Play</button>
+  <button class="play-btn" id="speed-btn">1x</button>
+</div>
+
+<div class="container">
+  <div>
+    <canvas id="xy-canvas" width="420" height="420"></canvas>
+    <div class="legend">X-Y plane (top-down)</div>
+  </div>
+  <div>
+    <canvas id="xz-canvas" width="420" height="420"></canvas>
+    <div class="legend">X-Z plane (side view)</div>
+  </div>
+  <div>
+    <canvas id="lapse-canvas" width="420" height="260"></canvas>
+    <div class="legend">Lapse minimum vs time</div>
+  </div>
+  <div class="panel" id="info-panel">
+    <h3>BH State at current time</h3>
+    <div id="bh-info" class="bh-info"></div>
+    <hr style="border-color:#333; margin:10px 0">
+    <h3>Global Diagnostics</h3>
+    <div id="global-info"></div>
+  </div>
+</div>
+
+<script>
+// CSV data embedded directly
+const csvText = `time,ham_l2,mom_l2,n_active,n_leaves,bh0_x,bh0_y,bh0_z,bh0_mass,bh0_spin,bh0_lapse,bh1_x,bh1_y,bh1_z,bh1_mass,bh1_spin,bh1_lapse,bh2_x,bh2_y,bh2_z,bh2_mass,bh2_spin,bh2_lapse,n_mergers
+0.312500,4.457670e-03,2.870157e-04,3,1,-4.687500,0.312500,0.312500,0.000000,0.000000,0.238564,4.687500,0.312500,0.312500,0.000000,0.000000,0.238648,-0.312500,4.687500,0.312500,0.000000,0.000000,0.234167,0
+0.625000,4.575769e-03,4.950342e-04,3,1,-4.687500,0.312500,0.312500,0.000000,0.000000,0.242855,4.687500,0.312500,0.312500,0.000000,0.000000,0.243329,-0.312500,4.687500,0.312500,0.000000,0.000000,0.238181,0
+0.937500,4.670655e-03,6.965848e-04,3,1,-4.687500,0.312500,0.312500,0.000000,0.000000,0.248982,4.687500,0.312500,0.312500,0.000000,0.000000,0.250141,-0.312500,4.687500,0.312500,0.000000,0.000000,0.243880,0
+1.250000,4.792564e-03,8.778043e-04,3,1,-4.687500,0.312500,0.312500,0.000000,0.000000,0.256913,4.687500,-0.312500,0.312500,0.000000,0.000000,0.258494,-0.312500,4.687500,0.312500,0.000000,0.000000,0.251225,0
+1.562500,4.944807e-03,1.042060e-03,3,1,-4.687500,0.312500,0.312500,0.000000,0.000000,0.266601,4.687500,-0.312500,0.312500,0.000000,0.000000,0.268392,-0.312500,4.687500,0.312500,0.000000,0.000000,0.260170,0
+1.875000,5.114083e-03,1.197909e-03,3,1,-4.687500,0.312500,0.312500,0.000000,0.000000,0.277981,4.687500,-0.312500,0.312500,0.000000,0.000000,0.280018,-0.312500,4.687500,0.312500,0.000000,0.000000,0.270650,0
+2.187500,5.304323e-03,1.350259e-03,3,1,-4.687500,0.312500,0.312500,0.000000,0.000000,0.290954,4.687500,-0.312500,0.312500,0.000000,0.000000,0.293268,-0.312500,4.687500,0.312500,0.000000,0.000000,0.282572,0
+2.500000,5.520122e-03,1.500586e-03,3,1,-4.687500,0.312500,0.312500,0.000000,0.000000,0.305368,4.687500,-0.312500,0.312500,0.000000,0.000000,0.307982,-0.312500,4.687500,0.312500,0.000000,0.000000,0.295804,0
+2.812500,5.764298e-03,1.650635e-03,3,1,-4.687500,0.312500,0.312500,0.000000,0.000000,0.320994,4.687500,-0.312500,0.312500,0.000000,0.000000,0.323919,-0.312500,4.687500,0.312500,0.000000,0.000000,0.310151,0
+3.125000,6.039983e-03,1.802931e-03,3,1,-4.687500,0.312500,0.312500,0.000000,0.000000,0.337506,4.687500,-0.312500,0.312500,0.000000,0.000000,0.340740,-0.312500,4.687500,0.312500,0.000000,0.000000,0.325343,0
+3.437500,6.349388e-03,1.959268e-03,3,1,-4.687500,0.312500,0.312500,0.000000,0.000000,0.354452,4.687500,-0.312500,0.312500,0.000000,0.000000,0.357977,-0.312500,4.687500,0.312500,0.000000,0.000000,0.341015,0
+3.750000,6.695230e-03,2.120265e-03,3,1,-4.687500,0.312500,0.312500,0.000000,0.000000,0.371242,4.687500,-0.312500,0.312500,0.000000,0.000000,0.375026,-0.312500,4.687500,0.312500,0.000000,0.000000,0.356694,0
+4.062500,7.079285e-03,2.285774e-03,3,1,-4.687500,0.312500,0.312500,0.000000,0.000000,0.387137,4.687500,0.312500,0.312500,0.000000,0.000000,0.390658,-0.312500,4.687500,0.312500,0.000000,0.000000,0.371794,0
+4.375000,7.500981e-03,2.454975e-03,3,1,-4.687500,0.312500,0.312500,0.000000,0.000000,0.401276,4.687500,0.312500,0.312500,0.000000,0.000000,0.404680,-0.312500,4.687500,0.312500,0.000000,0.000000,0.385623,0
+4.687500,7.957779e-03,2.626165e-03,3,1,-4.687500,0.312500,0.312500,0.000000,0.000000,0.412722,4.687500,0.312500,0.312500,0.000000,0.000000,0.416942,-0.312500,4.687500,0.312500,0.000000,0.000000,0.397419,0
+5.000000,8.444524e-03,2.796626e-03,3,1,-4.687500,0.312500,0.312500,0.000000,0.000000,0.420560,4.687500,-0.312500,0.312500,0.000000,0.000000,0.424925,-0.312500,4.687500,0.312500,0.000000,0.000000,0.406407,0
+5.312500,8.952768e-03,2.962663e-03,3,1,-4.687500,0.312500,0.312500,0.000000,0.000000,0.424025,4.687500,-0.312500,0.312500,0.000000,0.000000,0.428441,-0.312500,4.687500,0.312500,0.000000,0.000000,0.411884,0
+5.625000,9.471113e-03,3.119856e-03,3,1,-4.687500,0.312500,0.312500,0.000000,0.000000,0.422656,4.687500,-0.312500,0.312500,0.000000,0.000000,0.427109,-0.312500,4.687500,0.312500,0.000000,0.000000,0.413329,0
+5.937500,9.985956e-03,3.263522e-03,3,1,-4.687500,0.312500,0.312500,0.000000,0.000000,0.416413,4.687500,-0.312500,0.312500,0.000000,0.000000,0.420902,-0.312500,4.687500,0.312500,0.000000,0.000000,0.410500,0
+6.250000,1.048271e-02,3.389334e-03,3,1,-4.687500,0.312500,0.312500,0.000000,0.000000,0.405739,4.687500,-0.312500,0.312500,0.000000,0.000000,0.410260,-0.312500,4.687500,0.312500,0.000000,0.000000,0.403511,0
+6.562500,1.094744e-02,3.493955e-03,3,1,-4.687500,0.312500,0.312500,0.000000,0.000000,0.391504,4.687500,-0.312500,0.312500,0.000000,0.000000,0.396037,-0.312500,4.687500,0.312500,0.000000,0.000000,0.392839,0
+6.875000,1.136841e-02,3.575565e-03,3,1,-4.687500,0.312500,0.312500,0.000000,0.000000,0.374868,4.687500,-0.312500,0.312500,0.000000,0.000000,0.379362,-0.312500,4.687500,0.312500,0.000000,0.000000,0.379265,0
+7.187500,1.173735e-02,3.634205e-03,3,1,-4.687500,0.312500,0.312500,0.000000,0.000000,0.357081,4.687500,-0.312500,0.312500,0.000000,0.000000,0.361445,-0.312500,4.687500,0.312500,0.000000,0.000000,0.363754,0
+7.500000,1.204999e-02,3.671756e-03,3,1,-4.687500,0.312500,0.312500,0.000000,0.000000,0.339297,4.687500,-0.312500,0.312500,0.000000,0.000000,0.343400,-0.312500,4.687500,0.312500,0.000000,0.000000,0.347310,0
+7.812500,1.230603e-02,3.691593e-03,3,1,-4.687500,0.312500,0.312500,0.000000,0.000000,0.322449,4.687500,-0.312500,0.312500,0.000000,0.000000,0.326124,-0.312500,4.687500,0.312500,0.000000,0.000000,0.330846,0
+8.125000,1.250842e-02,3.698042e-03,3,1,-4.687500,0.312500,0.312500,0.000000,0.000000,0.307198,4.687500,-0.312500,0.312500,0.000000,0.000000,0.310253,-0.312500,4.687500,0.312500,0.000000,0.000000,0.315105,0
+8.437500,1.266253e-02,3.695776e-03,3,1,-4.687500,0.312500,0.312500,0.000000,0.000000,0.293941,4.687500,-0.312500,0.312500,0.000000,0.000000,0.296171,-0.312500,4.687500,0.312500,0.000000,0.000000,0.300621,0
+8.750000,1.277514e-02,3.689384e-03,3,1,-4.687500,0.312500,0.312500,0.000000,0.000000,0.282863,4.687500,-0.312500,0.312500,0.000000,0.000000,0.284057,-0.312500,4.687500,0.312500,0.000000,0.000000,0.287732,0
+9.062500,1.285363e-02,3.682933e-03,3,1,-4.687500,0.312500,0.312500,0.000000,0.000000,0.273994,4.687500,-0.312500,0.312500,0.000000,0.000000,0.273944,-0.312500,4.687500,0.312500,0.000000,0.000000,0.276609,0
+9.375000,1.290535e-02,3.679669e-03,3,1,-4.687500,0.312500,0.312500,0.000000,0.000000,0.267261,4.687500,-0.312500,0.312500,0.000000,0.000000,0.265771,-0.312500,4.687500,0.312500,0.000000,0.000000,0.267299,0
+9.687500,1.293722e-02,3.682034e-03,3,1,-4.687500,0.312500,0.312500,0.000000,0.000000,0.262537,4.687500,-0.312500,0.312500,0.000000,0.000000,0.259421,-0.312500,4.687500,0.312500,0.000000,0.000000,0.259768,0
+10.000000,1.295497e-02,3.691333e-03,3,1,-4.687500,0.312500,0.312500,0.000000,0.000000,0.259667,4.687500,-0.312500,0.312500,0.000000,0.000000,0.254782,-0.312500,4.687500,0.312500,0.000000,0.000000,0.253947,0
+10.312500,1.296333e-02,3.708184e-03,3,1,-4.687500,0.312500,0.312500,0.000000,0.000000,0.258494,4.687500,-0.312500,0.312500,0.000000,0.000000,0.251739,-0.312500,4.687500,0.312500,0.000000,0.000000,0.249752,0
+10.625000,1.296678e-02,3.733256e-03,3,1,-4.687500,0.312500,0.312500,0.000000,0.000000,0.258889,4.687500,-0.312500,0.312500,0.000000,0.000000,0.250142,-0.312500,4.687500,0.312500,0.000000,0.000000,0.247055,0
+10.937500,1.296943e-02,3.767191e-03,3,1,-4.687500,0.312500,0.312500,0.000000,0.000000,0.260700,4.687500,-0.312500,0.312500,0.000000,0.000000,0.249851,-0.312500,4.687500,0.312500,0.000000,0.000000,0.245724,0
+11.250000,1.297474e-02,3.810401e-03,3,1,-4.687500,0.312500,0.312500,0.000000,0.000000,0.263781,4.687500,-0.312500,0.312500,0.000000,0.000000,0.250738,-0.312500,4.687500,0.312500,0.000000,0.000000,0.245632,0
+11.562500,1.298547e-02,3.863147e-03,3,1,-4.687500,0.312500,0.312500,0.000000,0.000000,0.267995,4.687500,-0.312500,0.312500,0.000000,0.000000,0.252683,-0.312500,4.687500,0.312500,0.000000,0.000000,0.246660,0
+11.875000,1.300379e-02,3.925600e-03,3,1,-4.687500,0.312500,0.312500,0.000000,0.000000,0.273217,4.687500,-0.312500,0.312500,0.000000,0.000000,0.255578,-0.312500,4.687500,0.312500,0.000000,0.000000,0.248699,0
+12.187500,1.303124e-02,3.997859e-03,3,1,-4.687500,0.312500,0.312500,0.000000,0.000000,0.279327,4.687500,-0.312500,0.312500,0.000000,0.000000,0.259324,-0.312500,4.687500,0.312500,0.000000,0.000000,0.251652,0
+12.500000,1.306872e-02,4.079814e-03,3,1,-4.687500,0.312500,0.312500,0.000000,0.000000,0.286214,4.687500,-0.312500,0.312500,0.000000,0.000000,0.263830,-0.312500,4.687500,0.312500,0.000000,0.000000,0.255431,0
+12.812500,1.311644e-02,4.171227e-03,3,1,-4.687500,0.937500,0.312500,0.000000,0.000000,0.285193,4.687500,-0.312500,0.312500,0.000000,0.000000,0.269009,-0.312500,4.687500,0.312500,0.000000,0.000000,0.259959,0
+13.125000,1.317390e-02,4.271747e-03,3,1,-4.687500,0.937500,0.312500,0.000000,0.000000,0.284320,4.687500,-0.312500,0.312500,0.000000,0.000000,0.274783,-0.312500,4.687500,0.312500,0.000000,0.000000,0.265170,0
+13.437500,1.323987e-02,4.380880e-03,3,1,-4.687500,0.937500,0.312500,0.000000,0.000000,0.284221,4.687500,-0.312500,0.312500,0.000000,0.000000,0.281077,-0.312500,4.687500,0.312500,0.000000,0.000000,0.271006,0
+13.750000,1.331235e-02,4.497976e-03,3,1,-4.687500,0.937500,0.312500,0.000000,0.000000,0.284821,4.687500,-0.312500,0.312500,0.000000,0.000000,0.287824,-0.312500,4.687500,0.312500,0.000000,0.000000,0.277415,0
+14.062500,1.338856e-02,4.622215e-03,3,1,-4.687500,0.937500,0.312500,0.000000,0.000000,0.286061,4.687500,-0.312500,0.312500,0.000000,0.000000,0.294961,-0.312500,4.687500,0.312500,0.000000,0.000000,0.284357,0
+14.375000,1.346495e-02,4.752595e-03,3,1,-4.687500,0.937500,0.312500,0.000000,0.000000,0.287900,4.687500,-0.312500,0.312500,0.000000,0.000000,0.302433,-0.312500,4.687500,0.312500,0.000000,0.000000,0.291791,0
+14.687500,1.353726e-02,4.887925e-03,3,1,-4.687500,0.937500,0.312500,0.000000,0.000000,0.290311,4.687500,-0.312500,0.312500,0.000000,0.000000,0.310190,-0.312500,4.687500,0.312500,0.000000,0.000000,0.299680,0
+15.000000,1.360058e-02,5.026836e-03,3,1,-4.687500,0.937500,0.312500,0.000000,0.000000,0.293289,4.687500,-0.312500,0.312500,0.000000,0.000000,0.318195,-0.312500,4.687500,0.312500,0.000000,0.000000,0.307987,0
+15.312500,1.364959e-02,5.167752e-03,3,1,-4.687500,0.937500,0.312500,0.000000,0.000000,0.296844,4.687500,-0.312500,0.312500,0.000000,0.000000,0.326418,-0.937500,4.687500,0.312500,0.000000,0.000000,0.314643,0
+15.625000,1.367869e-02,5.308926e-03,3,1,-4.687500,0.937500,0.312500,0.000000,0.000000,0.300999,4.687500,-0.312500,0.312500,0.000000,0.000000,0.334844,-0.937500,4.687500,0.312500,0.000000,0.000000,0.317074,0`;
+
+// Parse CSV
+const lines = csvText.trim().split('\n');
+const headers = lines[0].split(',');
+const data = lines.slice(1).map(l => {
+  const vals = l.split(',');
+  const row = {};
+  headers.forEach((h, i) => row[h] = vals[i] === 'nan' ? NaN : parseFloat(vals[i]));
+  return row;
+});
+
+const N_BH = 3;
+const colors = ['#ff6060', '#60ff60', '#6080ff', '#ffff60', '#ff60ff'];
+const names = ['BH 0', 'BH 1', 'BH 2', 'BH 3', 'BH 4'];
+
+// Animation state
+let playing = false;
+let animId = null;
+let speed = 1;
+const speeds = [1, 2, 4, 8];
+let speedIdx = 0;
+
+const slider = document.getElementById('slider');
+slider.max = data.length - 1;
+const timeDisp = document.getElementById('time-display');
+const playBtn = document.getElementById('play-btn');
+const speedBtn = document.getElementById('speed-btn');
+
+playBtn.onclick = () => {
+  playing = !playing;
+  playBtn.textContent = playing ? 'Pause' : 'Play';
+  if (playing) animate();
+  else cancelAnimationFrame(animId);
+};
+speedBtn.onclick = () => {
+  speedIdx = (speedIdx + 1) % speeds.length;
+  speed = speeds[speedIdx];
+  speedBtn.textContent = speed + 'x';
+};
+
+let frameCount = 0;
+function animate() {
+  if (!playing) return;
+  frameCount++;
+  if (frameCount % Math.max(1, Math.round(4 / speed)) === 0) {
+    let v = parseInt(slider.value) + 1;
+    if (v >= data.length) { v = 0; }
+    slider.value = v;
+    render(v);
+  }
+  animId = requestAnimationFrame(animate);
+}
+
+slider.oninput = () => render(parseInt(slider.value));
+
+function worldToCanvas(x, y, cx, cy, scale, w, h) {
+  return [w/2 + (x - cx) * scale, h/2 - (y - cy) * scale];
+}
+
+function drawTrajectoryPlane(canvasId, xKey, yKey, xLabel, yLabel, step) {
+  const canvas = document.getElementById(canvasId);
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+
+  // Auto-scale to data range
+  let xmin = Infinity, xmax = -Infinity, ymin = Infinity, ymax = -Infinity;
+  for (const row of data) {
+    for (let b = 0; b < N_BH; b++) {
+      const x = row['bh' + b + '_' + xKey];
+      const y = row['bh' + b + '_' + yKey];
+      if (!isNaN(x) && !isNaN(y)) {
+        xmin = Math.min(xmin, x); xmax = Math.max(xmax, x);
+        ymin = Math.min(ymin, y); ymax = Math.max(ymax, y);
+      }
+    }
+  }
+  // Add padding
+  const pad = 3;
+  xmin -= pad; xmax += pad; ymin -= pad; ymax += pad;
+  const range = Math.max(xmax - xmin, ymax - ymin);
+  const cx = (xmin + xmax) / 2, cy = (ymin + ymax) / 2;
+  const scale = (W - 60) / range;
+
+  // Grid lines
+  ctx.strokeStyle = '#1a1a2e';
+  ctx.lineWidth = 0.5;
+  for (let gx = Math.ceil(xmin); gx <= Math.floor(xmax); gx += 2) {
+    const [sx] = worldToCanvas(gx, 0, cx, cy, scale, W, H);
+    ctx.beginPath(); ctx.moveTo(sx, 0); ctx.lineTo(sx, H); ctx.stroke();
+  }
+  for (let gy = Math.ceil(ymin); gy <= Math.floor(ymax); gy += 2) {
+    const [, sy] = worldToCanvas(0, gy, cx, cy, scale, W, H);
+    ctx.beginPath(); ctx.moveTo(0, sy); ctx.lineTo(W, sy); ctx.stroke();
+  }
+
+  // Axes
+  ctx.strokeStyle = '#333';
+  ctx.lineWidth = 1;
+  const [ox, oy] = worldToCanvas(0, 0, cx, cy, scale, W, H);
+  ctx.beginPath(); ctx.moveTo(ox, 0); ctx.lineTo(ox, H); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0, oy); ctx.lineTo(W, oy); ctx.stroke();
+
+  // Labels
+  ctx.fillStyle = '#555';
+  ctx.font = '11px Menlo, monospace';
+  ctx.fillText(xLabel, W - 20, oy - 5);
+  ctx.fillText(yLabel, ox + 5, 15);
+
+  // Draw trails + current positions for each BH
+  for (let b = 0; b < N_BH; b++) {
+    const col = colors[b];
+    // Trail (all points up to step)
+    ctx.strokeStyle = col;
+    ctx.globalAlpha = 0.4;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    let started = false;
+    for (let s = 0; s <= step; s++) {
+      const x = data[s]['bh' + b + '_' + xKey];
+      const y = data[s]['bh' + b + '_' + yKey];
+      if (isNaN(x) || isNaN(y)) continue;
+      const [sx, sy] = worldToCanvas(x, y, cx, cy, scale, W, H);
+      if (!started) { ctx.moveTo(sx, sy); started = true; }
+      else ctx.lineTo(sx, sy);
+    }
+    ctx.stroke();
+    ctx.globalAlpha = 1.0;
+
+    // Current position
+    const row = data[step];
+    const x = row['bh' + b + '_' + xKey];
+    const y = row['bh' + b + '_' + yKey];
+    if (isNaN(x) || isNaN(y)) continue;
+    const [sx, sy] = worldToCanvas(x, y, cx, cy, scale, W, H);
+
+    // Glow
+    const grad = ctx.createRadialGradient(sx, sy, 0, sx, sy, 14);
+    grad.addColorStop(0, col + '80');
+    grad.addColorStop(1, col + '00');
+    ctx.fillStyle = grad;
+    ctx.beginPath(); ctx.arc(sx, sy, 14, 0, Math.PI * 2); ctx.fill();
+
+    // Dot
+    ctx.fillStyle = col;
+    ctx.beginPath(); ctx.arc(sx, sy, 5, 0, Math.PI * 2); ctx.fill();
+
+    // Label
+    ctx.fillStyle = col;
+    ctx.font = 'bold 10px Menlo, monospace';
+    ctx.fillText(names[b], sx + 8, sy - 8);
+  }
+}
+
+function drawLapsePlot(step) {
+  const canvas = document.getElementById('lapse-canvas');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  const margin = {l: 50, r: 10, t: 10, b: 30};
+  const pw = W - margin.l - margin.r;
+  const ph = H - margin.t - margin.b;
+
+  ctx.clearRect(0, 0, W, H);
+
+  const tmax = data[data.length - 1].time;
+  const tmin = data[0].time;
+
+  // Find lapse range
+  let lmin = 1, lmax = 0;
+  for (const row of data) {
+    for (let b = 0; b < N_BH; b++) {
+      const v = row['bh' + b + '_lapse'];
+      if (!isNaN(v)) { lmin = Math.min(lmin, v); lmax = Math.max(lmax, v); }
+    }
+  }
+  lmin = Math.max(0, lmin - 0.02);
+  lmax = Math.min(1, lmax + 0.02);
+
+  function tx(t) { return margin.l + (t - tmin) / (tmax - tmin) * pw; }
+  function ty(l) { return margin.t + (1 - (l - lmin) / (lmax - lmin)) * ph; }
+
+  // Grid
+  ctx.strokeStyle = '#1a1a2e'; ctx.lineWidth = 0.5;
+  for (let g = Math.ceil(lmin * 10) / 10; g <= lmax; g += 0.05) {
+    const y = ty(g);
+    ctx.beginPath(); ctx.moveTo(margin.l, y); ctx.lineTo(W - margin.r, y); ctx.stroke();
+  }
+
+  // Axes
+  ctx.strokeStyle = '#444'; ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(margin.l, margin.t); ctx.lineTo(margin.l, H - margin.b);
+  ctx.lineTo(W - margin.r, H - margin.b); ctx.stroke();
+
+  // Labels
+  ctx.fillStyle = '#666'; ctx.font = '10px Menlo, monospace';
+  ctx.fillText('t / M', W/2 - 15, H - 5);
+  ctx.save();
+  ctx.translate(12, H/2 + 15);
+  ctx.rotate(-Math.PI/2);
+  ctx.fillText('lapse min', 0, 0);
+  ctx.restore();
+
+  // Tick labels
+  ctx.fillStyle = '#555'; ctx.font = '9px Menlo, monospace';
+  for (let t = 0; t <= tmax; t += 2) {
+    ctx.fillText(t.toFixed(0), tx(t) - 5, H - margin.b + 14);
+  }
+  for (let l = Math.ceil(lmin * 10) / 10; l <= lmax; l += 0.1) {
+    ctx.fillText(l.toFixed(1), margin.l - 30, ty(l) + 3);
+  }
+
+  // Curves
+  for (let b = 0; b < N_BH; b++) {
+    ctx.strokeStyle = colors[b];
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    let started = false;
+    for (let s = 0; s < data.length; s++) {
+      const v = data[s]['bh' + b + '_lapse'];
+      if (isNaN(v)) continue;
+      const x = tx(data[s].time), y = ty(v);
+      if (!started) { ctx.moveTo(x, y); started = true; }
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+
+  // Current time marker
+  ctx.strokeStyle = '#ff8'; ctx.lineWidth = 1; ctx.setLineDash([3,3]);
+  const cx = tx(data[step].time);
+  ctx.beginPath(); ctx.moveTo(cx, margin.t); ctx.lineTo(cx, H - margin.b); ctx.stroke();
+  ctx.setLineDash([]);
+}
+
+function updateInfo(step) {
+  const row = data[step];
+  let html = '';
+  for (let b = 0; b < N_BH; b++) {
+    const x = row['bh' + b + '_x'], y = row['bh' + b + '_y'], z = row['bh' + b + '_z'];
+    const mass = row['bh' + b + '_mass'], spin = row['bh' + b + '_spin'];
+    const lapse = row['bh' + b + '_lapse'];
+    const cls = 'bh' + b;
+    if (isNaN(x)) {
+      html += `<div class="${cls}"><span class="bh-label">${names[b]}:</span> MERGED</div>`;
+    } else {
+      html += `<div class="${cls}"><span class="bh-label">${names[b]}:</span> ` +
+        `pos=(${x.toFixed(2)}, ${y.toFixed(2)}, ${z.toFixed(2)}) ` +
+        `lapse=${lapse.toFixed(4)}</div>`;
+    }
+  }
+  document.getElementById('bh-info').innerHTML = html;
+
+  let ghtml = '';
+  ghtml += `<div class="stat-row"><span class="stat-label">Ham L2:</span><span class="stat-val">${row.ham_l2.toExponential(3)}</span></div>`;
+  ghtml += `<div class="stat-row"><span class="stat-label">Mom L2:</span><span class="stat-val">${row.mom_l2.toExponential(3)}</span></div>`;
+  ghtml += `<div class="stat-row"><span class="stat-label">Active BHs:</span><span class="stat-val">${row.n_active}</span></div>`;
+  ghtml += `<div class="stat-row"><span class="stat-label">Leaf blocks:</span><span class="stat-val">${row.n_leaves}</span></div>`;
+  ghtml += `<div class="stat-row"><span class="stat-label">Mergers:</span><span class="stat-val">${row.n_mergers}</span></div>`;
+  document.getElementById('global-info').innerHTML = ghtml;
+}
+
+function render(step) {
+  timeDisp.textContent = `t = ${data[step].time.toFixed(3)} M`;
+  drawTrajectoryPlane('xy-canvas', 'x', 'y', 'x', 'y', step);
+  drawTrajectoryPlane('xz-canvas', 'x', 'z', 'x', 'z', step);
+  drawLapsePlot(step);
+  updateInfo(step);
+}
+
+render(0);
+</script>
+</body>
+</html>

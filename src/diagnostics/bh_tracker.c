@@ -34,6 +34,7 @@ bh_tracker_t *bh_tracker_alloc(int n_bh, const puncture_data_t bhs[],
     if (!tr) return NULL;
 
     tr->n_bh = n_bh;
+    tr->n_bh_initial = n_bh;
     tr->n_active = n_bh;
     tr->ah_n_theta = ah_n_theta;
     tr->ah_n_phi = ah_n_phi;
@@ -309,7 +310,7 @@ void bh_tracker_write_csv_header(const bh_tracker_t *tr, FILE *fp)
 {
     if (!fp) return;
     fprintf(fp, "time,ham_l2,mom_l2,n_active,n_leaves");
-    for (int i = 0; i < tr->n_bh; i++) {
+    for (int i = 0; i < tr->n_bh_initial; i++) {
         fprintf(fp, ",bh%d_x,bh%d_y,bh%d_z,bh%d_mass,bh%d_spin,bh%d_lapse",
                 i, i, i, i, i, i);
     }
@@ -322,7 +323,8 @@ void bh_tracker_write_csv(const bh_tracker_t *tr, FILE *fp, double time,
     if (!fp) return;
     fprintf(fp, "%.6f,%.6e,%.6e,%d,%d", time, ham_l2, mom_l2,
             tr->n_active, n_leaves);
-    for (int i = 0; i < tr->n_bh; i++) {
+    /* Write only the initial BH columns for consistent CSV width */
+    for (int i = 0; i < tr->n_bh_initial; i++) {
         const bh_state_t *b = &tr->bh[i];
         if (b->status == BH_STATUS_MERGED) {
             fprintf(fp, ",nan,nan,nan,nan,nan,nan");

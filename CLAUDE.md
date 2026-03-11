@@ -271,7 +271,7 @@ work on AMR meshes.
   HiSpID (26/26), AH finder (13/13), Maxwell (15/15), Psi4 (15/15), CCE (49/49),
   CP-BC (30/30), pack_evolve (8/8), amr_prolong (15/15), checkpoint (14/14),
   binary inspiral D10 benchmark (T=700M, BAM-matched params, Samurai consensus
-  validation, 8 hard + 4 advisory tests, 19-column CSV),
+  validation, 8 hard + 4 advisory tests, per-BH position/mass/spin CSV via bh_tracker),
   inspiral solver smoke (7-level D10 binary + 6-level 4-BH square, 4/4).
   N-body tracker (40/40: init, position update, AH loop, merger detection,
   bookkeeping, CSV output, 25-BH alloc, post-merger tracking).
@@ -363,7 +363,7 @@ lattice/
 │   ├── test_psi4.c          # Psi4 gravitational wave extraction tests (15/15)
 │   ├── test_cce_worldtube.c # CCE worldtube HDF5 output tests (49/49, requires HDF5)
 │   ├── test_cp_bc.c         # Constraint-preserving BC tests (30/30)
-│   ├── test_binary_inspiral.c  # D10 benchmark (Samurai consensus, BAM-matched, T=700M, 8+4 tests, 19-col CSV)
+│   ├── test_binary_inspiral.c  # D10 benchmark (Samurai consensus, BAM-matched, T=700M, 8+4 tests, per-BH CSV via bh_tracker)
 │   ├── test_inspiral_solver.c  # Inspiral solver smoke test (7-level D10 binary + 6-level 4-BH, 4/4)
 │   ├── test_nbody_track.c      # N-body BH tracker (init, position, AH, merger, CSV, 40/40)
 │   ├── test_inspiral_convergence.c  # AMR binary inspiral convergence (3 resolutions)

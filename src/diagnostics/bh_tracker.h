@@ -37,6 +37,7 @@ typedef struct {
 
 typedef struct {
     int    n_bh;                /* total BHs tracked (including merged)     */
+    int    n_bh_initial;        /* original BH count (for fixed CSV cols)   */
     int    n_active;            /* currently active BHs                     */
     bh_state_t bh[MAX_PUNCTURES];
     ah_workspace_t *ah[MAX_PUNCTURES];  /* one AH workspace per BH         */

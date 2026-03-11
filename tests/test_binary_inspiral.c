@@ -97,6 +97,7 @@
 #include "../src/diagnostics/constraints.h"
 #include "../src/diagnostics/psi4.h"
 #include "../src/diagnostics/ah_finder.h"
+#include "../src/diagnostics/bh_tracker.h"
 #include "../src/backend/backend.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -213,73 +214,22 @@ static double mesh_min_lapse(const mesh_t *m,
 }
 
 /*
- * Estimate BH coordinate separation from the two deepest lapse minima.
- *
- * Algorithm: scan all leaf blocks for the global lapse minimum (BH #1),
- * then find the deepest minimum at least 2M away (BH #2).  This is
- * more robust than axis-only scans for inspiraling binaries where the
- * orbital plane rotates.
- *
- * Returns 0.0 if only one minimum found (merged or pre-formation).
+ * Compute BH separation from tracker positions.
+ * Returns 0.0 if fewer than 2 active BHs remain (merged).
  */
-static double mesh_bh_separation(const mesh_t *m,
-                                  double pos1[3], double pos2[3])
+static double tracker_separation(const bh_tracker_t *tr)
 {
-    /* Pass 1: find global lapse minimum (BH #1) */
-    double best1 = 1.0e30;
-    pos1[0] = pos1[1] = pos1[2] = 0.0;
-
-    for (int bid = 0; bid < m->num_blocks; bid++) {
-        block_t *b = m->blocks[bid];
-        if (!b || !b->is_leaf) continue;
-        grid_t *g = b->grid;
-        int lo = g->ghost, hi = g->ghost + g->N;
-        for (int k = lo; k < hi; k++)
-            for (int j = lo; j < hi; j++)
-                for (int i = lo; i < hi; i++) {
-                    double a = g->fields[FIELD_LAPSE][IDX(g, i, j, k)];
-                    if (a < best1) {
-                        best1 = a;
-                        pos1[0] = b->origin[0] + (i - g->ghost + 0.5) * g->dx;
-                        pos1[1] = b->origin[1] + (j - g->ghost + 0.5) * g->dx;
-                        pos1[2] = b->origin[2] + (k - g->ghost + 0.5) * g->dx;
-                    }
-                }
+    int a = -1, b = -1;
+    for (int i = 0; i < tr->n_bh; i++) {
+        if (tr->bh[i].status != BH_STATUS_ACTIVE) continue;
+        if (a < 0) a = i;
+        else if (b < 0) { b = i; break; }
     }
-
-    /* Pass 2: find deepest minimum at least 2M from BH #1 (BH #2) */
-    double best2 = 1.0e30;
-    pos2[0] = pos2[1] = pos2[2] = 0.0;
-
-    for (int bid = 0; bid < m->num_blocks; bid++) {
-        block_t *b = m->blocks[bid];
-        if (!b || !b->is_leaf) continue;
-        grid_t *g = b->grid;
-        int lo = g->ghost, hi = g->ghost + g->N;
-        for (int k = lo; k < hi; k++)
-            for (int j = lo; j < hi; j++)
-                for (int i = lo; i < hi; i++) {
-                    double a = g->fields[FIELD_LAPSE][IDX(g, i, j, k)];
-                    if (a < best2) {
-                        double x = b->origin[0] + (i - g->ghost + 0.5) * g->dx;
-                        double y = b->origin[1] + (j - g->ghost + 0.5) * g->dx;
-                        double z = b->origin[2] + (k - g->ghost + 0.5) * g->dx;
-                        double dr = sqrt((x - pos1[0]) * (x - pos1[0]) +
-                                         (y - pos1[1]) * (y - pos1[1]) +
-                                         (z - pos1[2]) * (z - pos1[2]));
-                        if (dr > 2.0) {
-                            best2 = a;
-                            pos2[0] = x; pos2[1] = y; pos2[2] = z;
-                        }
-                    }
-                }
-    }
-
-    if (best2 > 0.99) return 0.0;
-
-    return sqrt((pos1[0] - pos2[0]) * (pos1[0] - pos2[0]) +
-                (pos1[1] - pos2[1]) * (pos1[1] - pos2[1]) +
-                (pos1[2] - pos2[2]) * (pos1[2] - pos2[2]));
+    if (a < 0 || b < 0) return 0.0;
+    double dx = tr->bh[a].center[0] - tr->bh[b].center[0];
+    double dy = tr->bh[a].center[1] - tr->bh[b].center[1];
+    double dz = tr->bh[a].center[2] - tr->bh[b].center[2];
+    return sqrt(dx*dx + dy*dy + dz*dz);
 }
 
 /*
@@ -460,14 +410,12 @@ int main(void)
     printf("        Psi4: %d modes, r = %.0f M\n",
            psi4_ws->n_modes, PSI4_RADIUS);
 
-    /* Apparent horizon finders -- one per BH, centered on lapse minima */
-    double bh1_pos[3], bh2_pos[3];
-    mesh_bh_separation(m, bh1_pos, bh2_pos);
-
-    ah_workspace_t *ah1 = ah_alloc(AH_NTHETA, AH_NPHI, bh1_pos, AH_RGUESS);
-    ah_workspace_t *ah2 = ah_alloc(AH_NTHETA, AH_NPHI, bh2_pos, AH_RGUESS);
-    printf("        AH finder: 2 individual (%dx%d)\n",
-           AH_NTHETA, AH_NPHI);
+    /* N-body BH tracker: position tracking + per-BH AH finding */
+    int n_bh = 2;
+    bh_tracker_t *tracker = bh_tracker_alloc(n_bh, bhs, AH_NTHETA, AH_NPHI);
+    bh_tracker_update_positions(tracker, m);
+    printf("        BH tracker: %d BHs (%dx%d AH per BH)\n",
+           n_bh, AH_NTHETA, AH_NPHI);
 
     /* Remnant AH finder -- post-merger, centered at origin */
     ah_workspace_t *ah_remnant = ah_alloc(AH_REMNANT_NTHETA, AH_REMNANT_NPHI,
@@ -478,7 +426,7 @@ int main(void)
     /* -- Initial diagnostics ------------------------------------------- */
     double lx, ly, lz;
     double ml      = mesh_min_lapse(m, &lx, &ly, &lz);
-    double sep0    = mesh_bh_separation(m, bh1_pos, bh2_pos);
+    double sep0    = tracker_separation(tracker);
     double ham     = mesh_constraint_l2(m);
     double mom     = mesh_momentum_l2(m);
 
@@ -524,14 +472,21 @@ int main(void)
     /* -- Diagnostics CSV file ------------------------------------------ */
     FILE *diag_fp = fopen("build/inspiral_diagnostics.csv", "w");
     if (diag_fp) {
-        fprintf(diag_fp, "time,ham_l2,mom_l2,alpha_min,separation,"
-                "leaves,psi4_22_re,psi4_22_im,psi4_22_amp,"
-                "ah1_mass,ah1_spin,ah2_mass,ah2_spin,"
+        fprintf(diag_fp, "time,ham_l2,mom_l2,alpha_min,separation,leaves");
+        for (int i = 0; i < n_bh; i++)
+            fprintf(diag_fp, ",bh%d_x,bh%d_y,bh%d_z,bh%d_mass,bh%d_spin,bh%d_lapse",
+                    i, i, i, i, i, i);
+        fprintf(diag_fp, ",psi4_22_re,psi4_22_im,psi4_22_amp,"
                 "psi4_22_phase,gw_cycles,merger_flag,"
                 "remnant_m_irr,remnant_m_chr,remnant_chi\n");
-        fprintf(diag_fp, "%.6f,%.6e,%.6e,%.6f,%.6f,%d,"
-                "0,0,0,-1,-1,-1,-1,0,0,0,-1,-1,-1\n",
+        /* Initial row */
+        fprintf(diag_fp, "%.6f,%.6e,%.6e,%.6f,%.6f,%d",
                 0.0, ham, mom, ml, sep0, mesh_num_leaves(m));
+        for (int i = 0; i < n_bh; i++)
+            fprintf(diag_fp, ",%.6f,%.6f,%.6f,%.6f,%.6f,%.6f",
+                    tracker->bh[i].center[0], tracker->bh[i].center[1],
+                    tracker->bh[i].center[2], 0.0, 0.0, tracker->bh[i].lapse_min);
+        fprintf(diag_fp, ",0,0,0,0,0,0,-1,-1,-1\n");
         fflush(diag_fp);
     }
 
@@ -554,7 +509,9 @@ int main(void)
 
         /* -- Diagnostics ----------------------------------------------- */
         if (step % DIAG_EVERY == 0 || step == num_steps) {
-            double sep;
+            /* BH tracker: positions + AH + mergers (works on host mesh) */
+            bh_tracker_update_positions(tracker, m);
+            double sep = tracker_separation(tracker);
 
             if (backend_is_gpu()) {
                 meshblock_pack_t *dp = build_diag_pack(m);
@@ -573,9 +530,6 @@ int main(void)
                 ham = backend_constraint_l2_packed(dp);
                 mom = backend_momentum_l2_packed(dp);
                 ml  = backend_min_lapse_packed(dp, &lx, &ly, &lz);
-                sep = backend_bh_separation_packed(dp, 2.0,
-                          &bh1_pos[0], &bh1_pos[1], &bh1_pos[2],
-                          &bh2_pos[0], &bh2_pos[1], &bh2_pos[2]);
 
                 if (step % PSI4_EVERY == 0)
                     backend_psi4_extract_packed(dp, psi4_ws, m);
@@ -593,7 +547,6 @@ int main(void)
                 ham = mesh_constraint_l2(m);
                 mom = mesh_momentum_l2(m);
                 ml  = mesh_min_lapse(m, &lx, &ly, &lz);
-                sep = mesh_bh_separation(m, bh1_pos, bh2_pos);
 
                 if (step % PSI4_EVERY == 0)
                     psi4_extract(psi4_ws, m);
@@ -642,8 +595,14 @@ int main(void)
                 }
             }
 
-            /* Merger detection */
+            /* Merger detection via tracker */
             if (sep > 0.0 && sep < min_sep) min_sep = sep;
+            bh_tracker_check_mergers(tracker, p.time);
+            if (!merger_detected && tracker->n_mergers > 0) {
+                merger_detected = 1;
+                merger_time = tracker->mergers[0].time;
+            }
+            /* Also detect via separation threshold (backup) */
             if (!merger_detected) {
                 if ((sep > 0.0 && sep < 3.0) ||
                     (sep == 0.0 && prev_sep > 0.0 && step > 10)) {
@@ -653,35 +612,23 @@ int main(void)
             }
             prev_sep = sep;
 
-            /* Apparent horizons (individual BHs) */
+            /* Apparent horizons via tracker (per active BH) */
             double ah1_m = -1.0, ah2_m = -1.0;
             double ah1_spin = -1.0, ah2_spin = -1.0;
             if (step % AH_EVERY == 0) {
-                /* Update AH centers to track moving punctures */
-                ah1->center[0] = bh1_pos[0];
-                ah1->center[1] = bh1_pos[1];
-                ah1->center[2] = bh1_pos[2];
-                ah2->center[0] = bh2_pos[0];
-                ah2->center[1] = bh2_pos[1];
-                ah2->center[2] = bh2_pos[2];
+                bh_tracker_find_horizons(tracker, m, AH_TOL, AH_MAXITER);
 
-                if (ah_find_amr(ah1, m, AH_TOL, AH_MAXITER, 0)) {
-                    ah_result_t r1 = ah_compute_diagnostics_amr(ah1, m);
-                    if (r1.converged) {
-                        ah1_m = r1.mass_irr;
-                        ah1_spin = r1.chi_spin;
-                        ah1_mass_last = ah1_m;
-                        ah1_found = 1;
-                    }
+                if (tracker->bh[0].mass_irr > 0) {
+                    ah1_m = tracker->bh[0].mass_irr;
+                    ah1_spin = tracker->bh[0].chi_spin;
+                    ah1_mass_last = ah1_m;
+                    ah1_found = 1;
                 }
-                if (ah_find_amr(ah2, m, AH_TOL, AH_MAXITER, 0)) {
-                    ah_result_t r2 = ah_compute_diagnostics_amr(ah2, m);
-                    if (r2.converged) {
-                        ah2_m = r2.mass_irr;
-                        ah2_spin = r2.chi_spin;
-                        ah2_mass_last = ah2_m;
-                        ah2_found = 1;
-                    }
+                if (n_bh > 1 && tracker->bh[1].mass_irr > 0) {
+                    ah2_m = tracker->bh[1].mass_irr;
+                    ah2_spin = tracker->bh[1].chi_spin;
+                    ah2_mass_last = ah2_m;
+                    ah2_found = 1;
                 }
 
                 /* Remnant AH search (after merger + 50M settling) */
@@ -721,12 +668,22 @@ int main(void)
                     p22_im = psi4_ws->mode_im[mi22_csv];
                 }
                 fprintf(diag_fp,
-                    "%.6f,%.6e,%.6e,%.6f,%.6f,%d,"
-                    "%.6e,%.6e,%.6e,%.6f,%.6f,%.6f,%.6f,"
+                    "%.6f,%.6e,%.6e,%.6f,%.6f,%d",
+                    p.time, ham, mom, ml, sep, mesh_num_leaves(m));
+                /* Per-BH columns (scales with N) */
+                for (int i = 0; i < n_bh; i++) {
+                    const bh_state_t *bh = &tracker->bh[i];
+                    if (bh->status == BH_STATUS_MERGED)
+                        fprintf(diag_fp, ",nan,nan,nan,nan,nan,nan");
+                    else
+                        fprintf(diag_fp, ",%.6f,%.6f,%.6f,%.6f,%.6f,%.6f",
+                                bh->center[0], bh->center[1], bh->center[2],
+                                bh->mass_chr, bh->chi_spin, bh->lapse_min);
+                }
+                fprintf(diag_fp,
+                    ",%.6e,%.6e,%.6e,"
                     "%.6f,%.6f,%d,%.6f,%.6f,%.6f\n",
-                    p.time, ham, mom, ml, sep, mesh_num_leaves(m),
                     p22_re, p22_im, psi4_22_amp,
-                    ah1_m, ah1_spin, ah2_m, ah2_spin,
                     current_phase, current_gw_cycles, merger_detected,
                     remnant_m_irr, remnant_m_chr, remnant_chi);
                 fflush(diag_fp);
@@ -739,22 +696,19 @@ int main(void)
     }
 
     /* -- Final state --------------------------------------------------- */
-    double final_sep;
-    if (backend_is_gpu()) {
-        meshblock_pack_t *dp = build_diag_pack(m);
-        backend_map_pack_diag(dp);
-        backend_ghost_exchange_packed(dp);
-        final_sep = backend_bh_separation_packed(dp, 2.0,
-                        &bh1_pos[0], &bh1_pos[1], &bh1_pos[2],
-                        &bh2_pos[0], &bh2_pos[1], &bh2_pos[2]);
-        if (!crashed)
+    bh_tracker_update_positions(tracker, m);
+    double final_sep = tracker_separation(tracker);
+    if (!crashed) {
+        if (backend_is_gpu()) {
+            meshblock_pack_t *dp = build_diag_pack(m);
+            backend_map_pack_diag(dp);
+            backend_ghost_exchange_packed(dp);
             backend_psi4_extract_packed(dp, psi4_ws, m);
-        backend_unmap_pack_diag(dp);
-        meshblock_pack_free(dp);
-    } else {
-        final_sep = mesh_bh_separation(m, bh1_pos, bh2_pos);
-        if (!crashed)
+            backend_unmap_pack_diag(dp);
+            meshblock_pack_free(dp);
+        } else {
             psi4_extract(psi4_ws, m);
+        }
     }
     double wall_sec  = difftime(time(NULL), wall_start);
 
@@ -911,9 +865,9 @@ int main(void)
 
     /* -- Cleanup ------------------------------------------------------- */
     if (diag_fp) fclose(diag_fp);
+    bh_tracker_write_mergers(tracker, "build/inspiral_mergers.log");
+    bh_tracker_free(tracker);
     psi4_free(psi4_ws);
-    ah_free(ah1);
-    ah_free(ah2);
     ah_free(ah_remnant);
     mesh_free(m);
     backend_cleanup();
