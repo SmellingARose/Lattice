@@ -3,6 +3,26 @@
 > **Note:** When adding/removing/renaming files or functions, also update
 > `docs/architecture.html` — the living map of the codebase structure.
 
+## 2026-03-13: Inspiral test — production dissipation + 2-radius Psi4
+
+**Per-field sigma + CAKO + SSL enabled in inspiral test.** Previously the test
+matched BAM's flat sigma=0.1 with CAKO/SSL/per-field sigma disabled. Now uses
+Lattice's full noise reduction stack:
+- `sigma_gauge=0.99`, `sigma_phys=0.3` (arXiv:2404.01137, Etienne et al. 2024)
+- CAKO: sigma multiplied by W=sqrt(chi), auto-suppresses near punctures
+- SSL: Gaussian slow-start lapse ramp
+- Position-dependent eta: `eta(x) = eta_0/W(x)` for N-body stability
+
+**Two-radius Psi4 extraction.** r=70M and r=100M (was single r=90M). Enables
+Richardson extrapolation to r→∞ for publication-quality waveforms. Separate
+CSV files: `inspiral_psi4_r70.csv`, `inspiral_psi4_r100.csv`. Matches GRChombo
+practice (2 radii, arXiv:2505.01495).
+
+**chi_refine = 0.05** (was 0.5). Matches GRChombo's threshold for aggressive
+refinement near punctures. chi_coarsen = 0.005 (10x hysteresis).
+
+---
+
 ## 2026-03-11: N-body BH tracker + inspiral integration + advection default fix
 
 **Inspiral test integration:** Replaced hand-rolled N=2 tracking in

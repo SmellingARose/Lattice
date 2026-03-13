@@ -14,9 +14,9 @@
  *   2. AMR mesh with chi-gradient refinement and periodic regridding
  *   3. CCZ4 evolution with constraint-preserving boundary conditions
  *   4. Classic RK4 time integration
- *   5. Kreiss-Oliger dissipation (6th order)
+ *   5. Kreiss-Oliger dissipation (6th order, CAKO + per-field sigma)
  *   6. Hamiltonian and momentum constraint monitoring
- *   7. Psi4 gravitational wave extraction (spin-weighted harmonics)
+ *   7. Psi4 gravitational wave extraction (2-radius Richardson)
  *   8. Apparent horizon finder (hyperbolic flow method)
  *   9. Lapse profile and BH separation tracking
  *  10. 1D slice CSV output for visualization
@@ -40,7 +40,8 @@
  *
  * Gravitational wave extraction:
  *
- *   Psi4 on sphere at r = 90 M, decomposed into _{-2}Y_{lm} up to l = 4.
+ *   Psi4 on spheres at r = 70 M and r = 100 M, decomposed into _{-2}Y_{lm}
+ *   up to l = 4.  Two radii enable Richardson extrapolation to r -> infinity.
  *   The dominant (2,2) mode encodes the orbital frequency and amplitude.
  *   GW phase tracked via atan2(Im, Re) with 2pi unwrapping.
  *
@@ -154,11 +155,16 @@ extern void output_mesh_1d_slice(const mesh_t *m, int step, double time);
 
 /* ====================================================================
  * Wave extraction parameters
+ *
+ * Two radii for Richardson extrapolation (GRChombo uses 50+100 M).
+ * r = 70 M is well inside the outer boundary but far from the binary;
+ * r = 100 M provides a second sample for finite-radius correction.
  * ==================================================================== */
-#define PSI4_RADIUS   90.0
-#define PSI4_LMAX     4
-#define PSI4_NTHETA   16
-#define PSI4_NPHI     32
+#define PSI4_RADIUS_1  70.0
+#define PSI4_RADIUS_2  100.0
+#define PSI4_LMAX      4
+#define PSI4_NTHETA    16
+#define PSI4_NPHI      32
 
 /* ====================================================================
  * Apparent horizon parameters (individual BHs)
@@ -317,8 +323,8 @@ int main(void)
     printf("    BCs:        constraint-preserving (arXiv:1212.2901)\n");
     printf("\n");
     printf("  Diagnostics:\n");
-    printf("    Psi4:       r = %.0f M, l_max = %d, every %d steps\n",
-           PSI4_RADIUS, PSI4_LMAX, PSI4_EVERY);
+    printf("    Psi4:       r = %.0f + %.0f M, l_max = %d, every %d steps\n",
+           PSI4_RADIUS_1, PSI4_RADIUS_2, PSI4_LMAX, PSI4_EVERY);
     printf("    AH finder:  %dx%d (individual), %dx%d (remnant)\n",
            AH_NTHETA, AH_NPHI, AH_REMNANT_NTHETA, AH_REMNANT_NPHI);
     printf("    Constraints: every %d steps\n", DIAG_EVERY);
@@ -339,33 +345,38 @@ int main(void)
     p.dt        = p.CFL * p.dx;
     p.bc_type   = BC_CONSTRAINT_PRESERVING;
 
-    /* ---- Match BAM parameters (arXiv:1212.2901, gr-qc/0610128) ---- */
+    /* ---- Physics parameters ---- */
 
-    /* CCZ4 constraint damping: BAM Z4c uses kappa1=0.02, kappa2=0.
+    /* CCZ4 constraint damping.
      * Ref: arXiv:1212.2901 (Hilditch et al. 2013) */
     p.ccz4.kappa1 = 0.02;
 
-    /* Kreiss-Oliger dissipation: BAM uses sigma=0.1 on inner (near-BH) levels.
-     * Ref: gr-qc/0610128 Table I */
-    p.sigma = 0.1;
+    /* Kreiss-Oliger dissipation: per-field sigma + CAKO.
+     *   sigma_gauge = 0.99 (near CFL limit, gauge modes are unphysical)
+     *   sigma_phys  = 0.3  (sweet spot for 6th-order FD)
+     *   CAKO multiplies by W=sqrt(chi), auto-suppressing near punctures.
+     * Ref: arXiv:2404.01137 (Etienne et al. 2024, CAKO + per-field sigma) */
+    p.noise.use_cako = 1;
+    p.noise.use_per_field_sigma = 1;
+    p.noise.sigma_gauge = 0.99;
+    p.noise.sigma_phys  = 0.3;
 
-    /* Gauge: BAM "000" variant — full advection on lapse, shift, and B^i.
+    /* SSL: slow-start lapse — Gaussian ramp suppresses initial gauge junk.
+     * Ref: arXiv:2404.01137 Sec. III.C */
+    p.noise.use_ssl = 1;
+
+    /* Gauge: full advection on lapse, shift, and B^i.
      * 1+log lapse (c=2) + Gamma-driver shift (F=3/4) are already default.
      * Ref: gr-qc/0610128 Sec. II.B, gr-qc/0605030 (van Meter et al.) */
     p.gauge.lapse_advec_coeff = 1.0;
     p.gauge.shift_advec_coeff = 1.0;
-    p.gauge.eta = 2.0;                  /* BAM: eta = 2/M_ADM, M_ADM ~ 1 */
-    p.gauge.position_dependent_eta = 0; /* BAM uses constant eta */
-
-    /* Disable Lattice-specific noise reduction features (not in BAM) */
-    p.noise.use_ssl  = 0;   /* no slow-start lapse */
-    p.noise.use_cako = 0;   /* no chi-adjusted KO */
-    p.noise.use_per_field_sigma = 0;  /* BAM uses zone-dep, not per-field */
+    p.gauge.eta = 2.0;                  /* eta = 2/M_ADM, M_ADM ~ 1 */
+    p.gauge.position_dependent_eta = 1; /* eta(x) = eta_0/W(x), stable for N-body */
 
     amr_params_t ap;
     ap.max_level   = MAX_LEVEL;
-    ap.chi_refine  = 0.5;
-    ap.chi_coarsen = 0.01;
+    ap.chi_refine  = 0.05;   /* GRChombo uses 0.05 — aggressive refinement */
+    ap.chi_coarsen = 0.005;  /* hysteresis: coarsen at 10x below refine */
 
     int num_steps = (int)(T_FINAL / p.dt + 0.5);
 
@@ -402,13 +413,16 @@ int main(void)
     /* -- Allocate diagnostic workspaces -------------------------------- */
     printf("  [3/4] Allocating diagnostics...\n");
 
-    /* Psi4 extraction sphere */
+    /* Psi4 extraction spheres (two radii for Richardson extrapolation) */
     double psi4_center[3] = {0, 0, 0};
-    psi4_workspace_t *psi4_ws = psi4_alloc(PSI4_NTHETA, PSI4_NPHI,
-                                            PSI4_LMAX, PSI4_RADIUS,
-                                            psi4_center);
-    printf("        Psi4: %d modes, r = %.0f M\n",
-           psi4_ws->n_modes, PSI4_RADIUS);
+    psi4_workspace_t *psi4_ws1 = psi4_alloc(PSI4_NTHETA, PSI4_NPHI,
+                                             PSI4_LMAX, PSI4_RADIUS_1,
+                                             psi4_center);
+    psi4_workspace_t *psi4_ws2 = psi4_alloc(PSI4_NTHETA, PSI4_NPHI,
+                                             PSI4_LMAX, PSI4_RADIUS_2,
+                                             psi4_center);
+    printf("        Psi4: %d modes, r = %.0f M + %.0f M\n",
+           psi4_ws1->n_modes, PSI4_RADIUS_1, PSI4_RADIUS_2);
 
     /* N-body BH tracker: position tracking + per-BH AH finding */
     int n_bh = 2;
@@ -531,8 +545,10 @@ int main(void)
                 mom = backend_momentum_l2_packed(dp);
                 ml  = backend_min_lapse_packed(dp, &lx, &ly, &lz);
 
-                if (step % PSI4_EVERY == 0)
-                    backend_psi4_extract_packed(dp, psi4_ws, m);
+                if (step % PSI4_EVERY == 0) {
+                    backend_psi4_extract_packed(dp, psi4_ws1, m);
+                    backend_psi4_extract_packed(dp, psi4_ws2, m);
+                }
 
                 backend_unmap_pack_diag(dp);
                 meshblock_pack_free(dp);
@@ -548,8 +564,10 @@ int main(void)
                 mom = mesh_momentum_l2(m);
                 ml  = mesh_min_lapse(m, &lx, &ly, &lz);
 
-                if (step % PSI4_EVERY == 0)
-                    psi4_extract(psi4_ws, m);
+                if (step % PSI4_EVERY == 0) {
+                    psi4_extract(psi4_ws1, m);
+                    psi4_extract(psi4_ws2, m);
+                }
             }
 
             if (ham > ham_peak) ham_peak = ham;
@@ -562,14 +580,16 @@ int main(void)
             double current_gw_cycles = fabs(cumul_phase22) / (2.0 * M_PI);
 
             if (step % PSI4_EVERY == 0) {
-                psi4_write_modes(psi4_ws, p.time,
-                                 "build/inspiral_psi4.csv");
+                psi4_write_modes(psi4_ws1, p.time,
+                                 "build/inspiral_psi4_r70.csv");
+                psi4_write_modes(psi4_ws2, p.time,
+                                 "build/inspiral_psi4_r100.csv");
 
                 /* (l=2, m=2) mode index = l*l + l + m - 4 = 4 */
                 int mi22 = 4;
-                if (mi22 < psi4_ws->n_modes) {
-                    double re = psi4_ws->mode_re[mi22];
-                    double im = psi4_ws->mode_im[mi22];
+                if (mi22 < psi4_ws1->n_modes) {
+                    double re = psi4_ws1->mode_re[mi22];
+                    double im = psi4_ws1->mode_im[mi22];
                     psi4_22_amp = sqrt(re * re + im * im);
 
                     /* Phase tracking with 2pi unwrapping */
@@ -663,9 +683,9 @@ int main(void)
             if (diag_fp) {
                 double p22_re = 0.0, p22_im = 0.0;
                 int mi22_csv = 4;
-                if (mi22_csv < psi4_ws->n_modes) {
-                    p22_re = psi4_ws->mode_re[mi22_csv];
-                    p22_im = psi4_ws->mode_im[mi22_csv];
+                if (mi22_csv < psi4_ws1->n_modes) {
+                    p22_re = psi4_ws1->mode_re[mi22_csv];
+                    p22_im = psi4_ws1->mode_im[mi22_csv];
                 }
                 fprintf(diag_fp,
                     "%.6f,%.6e,%.6e,%.6f,%.6f,%d",
@@ -703,11 +723,13 @@ int main(void)
             meshblock_pack_t *dp = build_diag_pack(m);
             backend_map_pack_diag(dp);
             backend_ghost_exchange_packed(dp);
-            backend_psi4_extract_packed(dp, psi4_ws, m);
+            backend_psi4_extract_packed(dp, psi4_ws1, m);
+            backend_psi4_extract_packed(dp, psi4_ws2, m);
             backend_unmap_pack_diag(dp);
             meshblock_pack_free(dp);
         } else {
-            psi4_extract(psi4_ws, m);
+            psi4_extract(psi4_ws1, m);
+            psi4_extract(psi4_ws2, m);
         }
     }
     double wall_sec  = difftime(time(NULL), wall_start);
@@ -720,9 +742,9 @@ int main(void)
     /* Final Psi4 mode check */
     if (!crashed) {
         int mi22 = 4;
-        if (mi22 < psi4_ws->n_modes) {
-            double re = psi4_ws->mode_re[mi22];
-            double im = psi4_ws->mode_im[mi22];
+        if (mi22 < psi4_ws1->n_modes) {
+            double re = psi4_ws1->mode_re[mi22];
+            double im = psi4_ws1->mode_im[mi22];
             double amp = sqrt(re * re + im * im);
             if (amp > psi4_22_max) {
                 psi4_22_max = amp;
@@ -852,9 +874,10 @@ int main(void)
         printf("    Avg sec/step: %.2f\n", wall_sec / num_steps);
 
     printf("\n  Output files:\n");
-    printf("    build/inspiral_diagnostics.csv -- time series\n");
-    printf("    build/inspiral_psi4.csv        -- Psi4 mode coefficients\n");
-    printf("    build/slice_*.csv              -- 1D profiles\n");
+    printf("    build/inspiral_diagnostics.csv  -- time series\n");
+    printf("    build/inspiral_psi4_r70.csv     -- Psi4 modes at r=70M\n");
+    printf("    build/inspiral_psi4_r100.csv    -- Psi4 modes at r=100M\n");
+    printf("    build/slice_*.csv               -- 1D profiles\n");
 
     printf("\n  ==================================================\n");
     printf("  Tier 1: %d/8 hard tests %s\n",
@@ -867,7 +890,8 @@ int main(void)
     if (diag_fp) fclose(diag_fp);
     bh_tracker_write_mergers(tracker, "build/inspiral_mergers.log");
     bh_tracker_free(tracker);
-    psi4_free(psi4_ws);
+    psi4_free(psi4_ws1);
+    psi4_free(psi4_ws2);
     ah_free(ah_remnant);
     mesh_free(m);
     backend_cleanup();
