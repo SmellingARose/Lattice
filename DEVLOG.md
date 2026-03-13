@@ -19,7 +19,16 @@ CSV files: `inspiral_psi4_r70.csv`, `inspiral_psi4_r100.csv`. Matches GRChombo
 practice (2 radii, arXiv:2505.01495).
 
 **chi_refine = 0.05** (was 0.5). Matches GRChombo's threshold for aggressive
-refinement near punctures. chi_coarsen = 0.005 (10x hysteresis).
+refinement near punctures.
+
+**chi_coarsen = 0.0125** (4x hysteresis ratio). The criterion formula includes
+dx, so coarsening a block (dx → 2dx) roughly doubles the measured criterion.
+Additionally, the coarser grid resamples the gradient — sharp features get
+smoothed, so the measured gradient is ~0.3-0.7x of the fine-grid value. Net
+criterion change on coarsening: ~0.6-1.4x. A 2x ratio is the minimum to
+prevent oscillation from the dx factor alone; 4x provides margin for the
+gradient resampling effect. GRChombo uses a single threshold (no hysteresis)
+but regrids every 64 steps; we regrid every step and need the dead band.
 
 ---
 
