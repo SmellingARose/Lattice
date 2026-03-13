@@ -375,8 +375,12 @@ int main(void)
 
     amr_params_t ap;
     ap.max_level   = MAX_LEVEL;
-    ap.chi_refine  = 0.05;   /* GRChombo uses 0.05 — aggressive refinement */
-    ap.chi_coarsen = 0.005;  /* hysteresis: coarsen at 10x below refine */
+    ap.chi_refine  = 0.05;    /* GRChombo uses 0.05 — aggressive refinement */
+    ap.chi_coarsen = 0.0125;  /* 4x hysteresis: criterion includes dx, so
+                               * coarsening doubles it (dx → 2*dx). Need
+                               * at least 2x gap to prevent refine/coarsen
+                               * oscillation with regrid_every=1. 4x gives
+                               * margin for gradient resampling effects. */
 
     int num_steps = (int)(T_FINAL / p.dt + 0.5);
 
