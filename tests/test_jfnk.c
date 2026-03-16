@@ -1,14 +1,15 @@
 /*
  * Lattice — 3D Numerical Relativity
- * AMR FAS Multigrid constraint solver test suite.
+ * JFNK constraint solver test suite.
  *
  * Tests:
  *   1. AMR vs uniform agreement: single puncture, compare psi in overlap
  *   2. Convergence: N=16,32 base with 2 AMR levels, order > 1
  *   3. N=3 punctures with momentum: solver converges
  *   4. Fallback: n_amr_levels=0 matches uniform solver
- *   5. High AMR levels (11): stress-test MAX_SOLVER_SLOTS
+ *   5. High AMR levels (11): stress test
  *
+ * Ref: Knoll & Keyes, J. Comp. Phys. 193 (2004) — JFNK review
  * Ref: arXiv:0705.1486 (Natchu & Matzner, 4th-order MG for BH data)
  */
 
@@ -16,8 +17,7 @@
 #include "../src/core/params.h"
 #include "../src/core/fields.h"
 #include "../src/initial_data/bowen_york.h"
-#include "../src/initial_data/relaxation.h"
-#include "../src/initial_data/relaxation_amr.h"
+#include "../src/initial_data/jfnk_solver.h"
 #include "../src/diagnostics/constraints.h"
 #include "../src/backend/backend.h"
 #include <stdio.h>
@@ -55,12 +55,12 @@ static void test_amr_vs_uniform(void)
 
     /* Uniform solve */
     grid_t *g_uni = grid_alloc(N, L, RK_CLASSIC);
-    double res_uni = relaxation_solve(g_uni, 1, &bh, 1e-10, 30000, 1);
+    double res_uni = jfnk_solve(g_uni, 1, &bh, 1e-10, 50, 1);
     printf("  Uniform residual = %.6e\n", res_uni);
 
     /* AMR solve (2 levels) */
     grid_t *g_amr = grid_alloc(N, L, RK_CLASSIC);
-    double res_amr = relaxation_solve_amr(g_amr, 1, &bh, 1e-10, 30000, 1, 2);
+    double res_amr = jfnk_solve_amr(g_amr, 1, &bh, 1e-10, 50, 1, 2);
     printf("  AMR residual = %.6e\n", res_amr);
 
     CHECK(res_uni < 1e-4, "Uniform solver converged");
@@ -126,12 +126,12 @@ static void test_convergence(void)
 
     /* Coarse: N=16 with 2 AMR levels */
     grid_t *g1 = grid_alloc(16, L, RK_CLASSIC);
-    relaxation_solve_amr(g1, 1, &bh, 1e-10, 30000, 0, 2);
+    jfnk_solve_amr(g1, 1, &bh, 1e-10, 50, 0, 2);
     double ham1 = compute_constraint_l2(g1);
 
     /* Fine: N=32 with 2 AMR levels */
     grid_t *g2 = grid_alloc(32, L, RK_CLASSIC);
-    relaxation_solve_amr(g2, 1, &bh, 1e-10, 30000, 0, 2);
+    jfnk_solve_amr(g2, 1, &bh, 1e-10, 50, 0, 2);
     double ham2 = compute_constraint_l2(g2);
 
     double ratio = ham1 / ham2;
@@ -174,7 +174,7 @@ static void test_three_punctures(void)
     double L = 24.0;
     grid_t *g = grid_alloc(N, L, RK_CLASSIC);
 
-    double residual = relaxation_solve_amr(g, 3, bhs, 1e-8, 30000, 1, 2);
+    double residual = jfnk_solve_amr(g, 3, bhs, 1e-8, 50, 1, 2);
     printf("  Solver residual = %.6e\n", residual);
     CHECK(residual < 1e-3, "3-puncture AMR solver converged");
 
@@ -215,11 +215,11 @@ static void test_fallback(void)
 
     /* Uniform */
     grid_t *g1 = grid_alloc(N, L, RK_CLASSIC);
-    double res1 = relaxation_solve(g1, 1, &bh, 1e-10, 30000, 0);
+    double res1 = jfnk_solve(g1, 1, &bh, 1e-10, 50, 0);
 
     /* AMR with 0 levels (should fall back) */
     grid_t *g2 = grid_alloc(N, L, RK_CLASSIC);
-    double res2 = relaxation_solve_amr(g2, 1, &bh, 1e-10, 30000, 0, 0);
+    double res2 = jfnk_solve_amr(g2, 1, &bh, 1e-10, 50, 0, 0);
 
     printf("  Uniform residual = %.6e\n", res1);
     printf("  AMR(0) residual  = %.6e\n", res2);
@@ -261,7 +261,7 @@ static void test_high_amr_levels(void)
     int n_amr = 11;
 
     grid_t *g = grid_alloc(N, L, RK_CLASSIC);
-    double residual = relaxation_solve_amr(g, 1, &bh, 1e-6, 30000, 1, n_amr);
+    double residual = jfnk_solve_amr(g, 1, &bh, 1e-6, 50, 1, n_amr);
     printf("  Solver residual (11 AMR levels) = %.6e\n", residual);
     CHECK(residual < 1e-1, "11-level AMR solver converged");
 
@@ -285,7 +285,7 @@ static void test_high_amr_levels(void)
 int main(void)
 {
     setbuf(stdout, NULL);
-    printf("=== AMR FAS Multigrid Constraint Solver Test Suite ===\n");
+    printf("=== JFNK Constraint Solver Test Suite ===\n");
     backend_init();
 
     test_amr_vs_uniform();

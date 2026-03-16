@@ -28,7 +28,7 @@ endif
 CORE_SRC    = src/core/grid.c
 EVOLUTION_SRC = src/evolution/ccz4_rhs.c src/evolution/dissipation.c src/evolution/maxwell_rhs.c
 NUMERICS_SRC  = src/numerics/rk4.c
-INITIAL_SRC   = src/initial_data/puncture.c src/initial_data/bowen_york.c src/initial_data/relaxation.c src/initial_data/relaxation_amr.c src/initial_data/kerr_quasi_isotropic.c
+INITIAL_SRC   = src/initial_data/puncture.c src/initial_data/bowen_york.c src/initial_data/jfnk_solver.c src/initial_data/kerr_quasi_isotropic.c
 DIAG_SRC      = src/diagnostics/constraints.c src/diagnostics/ah_finder.c src/diagnostics/psi4.c src/diagnostics/bh_tracker.c
 BOUNDARY_SRC  = src/boundary/sommerfeld.c
 IO_SRC        = src/io/output.c src/io/checkpoint.c
@@ -123,7 +123,7 @@ LDFLAGS = $(BACKEND_LIBS) $(HDF5_LIBS) -lm $(LTO_FLAGS)
 BUILD = build
 
 # Targets
-.PHONY: all debug test test-single-bh test-convergence test-constraints test-head-on test-amr-mesh test-amr-ghost test-amr-prolong test-amr-refine test-amr-evolve test-pack-evolve test-subcycle test-bowen-york test-hispid test-maxwell test-ah test-psi4 test-cce test-cp-bc test-inspiral test-inspiral-solver test-inspiral-convergence test-relaxation-amr test-checkpoint test-nbody-track clean
+.PHONY: all debug test test-single-bh test-convergence test-constraints test-head-on test-amr-mesh test-amr-ghost test-amr-prolong test-amr-refine test-amr-evolve test-pack-evolve test-subcycle test-bowen-york test-hispid test-maxwell test-ah test-psi4 test-cce test-cp-bc test-inspiral test-inspiral-solver test-inspiral-convergence test-jfnk test-checkpoint test-nbody-track clean
 
 all: $(BUILD)/lattice
 
@@ -363,9 +363,9 @@ test-inspiral-convergence: $(BUILD)/test_inspiral_convergence
 	@echo "=== Running inspiral convergence test ==="
 	$(BUILD)/test_inspiral_convergence
 
-test-relaxation-amr: $(BUILD)/test_relaxation_amr
-	@echo "=== Running AMR relaxation solver test ==="
-	$(BUILD)/test_relaxation_amr
+test-jfnk: $(BUILD)/test_jfnk
+	@echo "=== Running JFNK solver test ==="
+	$(BUILD)/test_jfnk
 
 test-amr-accuracy: $(BUILD)/test_amr_accuracy
 	@echo "=== Running AMR accuracy comparison ==="

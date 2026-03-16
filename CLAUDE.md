@@ -182,8 +182,8 @@ work on AMR meshes.
     builds packs + cross-level maps on first step or regrid. Single
     `gpu_sync_all_to_host()` at end of global step.
   - *Solver:* GPU solver removed (produced inf residuals at inspiral scale).
-    CPU composite FAS/FMG always used — single-pass convergence for puncture
-    data, direct memcpy ghost exchange. ~2800 lines of GPU solver backend
+    CPU covering grid FAS always used — FMG converges in 1 pass per level,
+    no inter-block ghost exchange during MG. ~2800 lines of GPU solver backend
     code deleted (kernels, device state, packed API).
 - **GPU diagnostics (all complete):** On-device constraint L2, momentum L2,
   min lapse with position, BH separation (two-pass lapse minimum), NaN/Inf
@@ -212,7 +212,7 @@ work on AMR meshes.
 - **Position-dependent eta:** `eta(x) = eta_0 / W(x)` where `W = sqrt(chi)` for
   stable unequal-mass binary evolution. Gated behind `position_dependent_eta` flag
   (default 1). Ref: arXiv:1003.0859 (Muller & Brugmann).
-- **N-body initial data:** FAS multigrid constraint solver (FMG + Newton-Gauss-Seidel, 8-color), O(N³) solve to discretization accuracy, arbitrary puncture count. BY 1-field + HiSpID 4-field coupled solvers. Solver always runs on CPU (composite FAS/FMG with direct memcpy ghost exchange). GPU solver was removed — CPU single-pass FMG converges in ~1 pass for puncture data, beating GPU kernel launch overhead. Solver runs once at t=0; evolution uses GPU for time-stepping.
+- **N-body initial data:** Covering grid FAS multigrid constraint solver. Level-by-level from coarse to fine, each AMR level solved by creating a single temporary uniform grid spanning all blocks, running proven single-grid FAS (FMG + V-cycles + 8-color Newton-GS smoother). BY 1-field + HiSpID 4-field coupled solvers. No inter-block ghost exchange during MG — zero risk of cross-level corruption. FMG converges in 1 pass per level. Replaces old composite FAS multigrid and JFNK+BiCGSTAB. Inspiral solver benchmarks: D10 binary Ham L2 = 9.76e-5 in 172s, 4-BH Ham L2 = 1.01e-4 in 145s. Solver runs once at t=0 on CPU; evolution uses GPU for time-stepping. File is `jfnk_solver.c/h` for API compatibility.
 - **Einstein-Maxwell:** 6 new evolved fields (E^i, B^i), conformal Maxwell evolution with constraint damping, EM stress-energy coupling to CCZ4 (gated by `--em` flag), charged puncture initial data via `--puncture M,x,y,z,Px,Py,Pz,Sx,Sy,Sz,Q`.
 - **Spin:** Bowen-York spinning punctures + HiSpID high-spin initial data (quasi-isotropic Kerr conformal metric, coupled 4-field relaxation).
 - **Apparent horizons:** Hyperbolic flow method (BHaHAHA-inspired) with 6th-order off-grid interpolation, mass/spin/area extraction, `--ah` CLI flag. Works on both single-grid and AMR meshes.
@@ -237,8 +237,8 @@ work on AMR meshes.
   and ensuring exact discrete operator consistency. Solver reuses idle evolution
   arrays at t=0 (22 of 100 slots). Refinement depth defaults to `--max_level` so
   initial data and evolution use the same AMR depth (override with `--amr-levels`).
-  Each level halves dx near punctures. Measured 218,000x better near-field constraint
-  quality vs the old copy approach on refined meshes.
+  Each level halves dx near punctures. Each AMR level is solved on a covering grid
+  (single temporary uniform grid), then scattered back to blocks.
   Ref: Athena++ MG (Tomida & Stone 2023), arXiv:0912.2920 (Alic et al.).
 - **N-body BH tracker:** Multi-BH position tracking via successive lapse-minimum
   searches with exclusion zones (GRChombo PunctureTracker pattern), per-BH AH
@@ -247,24 +247,20 @@ work on AMR meshes.
   Auto-enabled for N>=2 punctures. CLI: `--tracker`, `--tracker_every`.
   Ref: arXiv:2505.01495 (GRChombo 25-BH cluster simulation).
 - **Single root block (N_ROOT=1):** Multi-root meshes removed. All multi-block topology
-  comes from AMR refinement only. The composite multigrid solver requires whole-domain
-  visibility at the coarsest level — multi-root meshes broke cross-block coupling,
-  causing V-cycle divergence. With single root, the solver achieves convergence factor
-  ~0.13/cycle (textbook multigrid). Higher MAX_LEVEL compensates for the coarser base
-  grid. `mesh_create(N_block, L, method)` creates one root block; no N_root parameter.
+  comes from AMR refinement only. The covering grid solver requires whole-domain
+  visibility at the coarsest level — multi-root meshes broke cross-block coupling.
+  With single root, the solver achieves convergence factor ~0.13/cycle (textbook
+  multigrid). Higher MAX_LEVEL compensates for the coarser base grid.
+  `mesh_create(N_block, L, method)` creates one root block; no N_root parameter.
 - **Tier 0 bug fixes:** `enforce_algebraic_block()` in refine.c fixed (was using slow
   `1.0/cbrt(det)` with divergent `if (det > 0.0)` guard; now uses `fast_inv_cbrt(det)`
   unconditionally, matching `rk4.c`). Packed RHS kernel `g_local.n_fields` was 0
   (memset default), disabling KO dissipation in all AMR runs; fixed in both backends.
   Subcycling frac drift: replaced floating-point `floor(t/dt)` computation with
-  integer `sub_step` parameter (latent bug in long-duration runs). AMR composite
-  multigrid solver: `solver_ghost_exchange()` used `ghost_exchange_all_blocks()`,
-  which does direct `memcpy` between blocks regardless of AMR level — cross-level
-  copies corrupt FD stencils at refinement boundaries. Caused V-cycle divergence
-  (2x/cycle) with 3 AMR levels, or very slow convergence (0.85/cycle, 159 V-cycles)
-  with 5 levels. Fixed by adding `ghost_exchange_multilevel_all()` (coarse-buffer
-  protocol for all blocks) + re-applying solver BCs. Also zeroed `rhs` and `fields`
-  in all 4 solver entry points (defense-in-depth for non-Linux platforms).
+  integer `sub_step` parameter (latent bug in long-duration runs). Old AMR composite
+  multigrid cross-level ghost corruption bug eliminated by design — the covering grid
+  solver has no inter-block ghost exchange during MG (each level solved on a single
+  contiguous grid).
 - **Default integrator:** Changed from CK45 to classic RK4 (`RK_CLASSIC`). Classic is
   faster (4 stages vs 5) but uses 25% more memory. All test allocations updated.
 - **Tests:** Flat spacetime, convergence (order 6.5), Bowen-York (33/33 + N-body),
@@ -315,8 +311,7 @@ lattice/
 │   ├── initial_data/
 │   │   ├── puncture.h/c        # Brill-Lindquist puncture data
 │   │   ├── bowen_york.h/c      # BY A_ij (momentum+spin) + CCZ4 conversion (+mesh-level API)
-│   │   ├── relaxation.h/c      # FAS multigrid constraint solver (1-field + 4-field coupled)
-│   │   ├── relaxation_amr.h/c  # AMR composite multigrid (FAS + uniform MG hierarchy)
+│   │   ├── jfnk_solver.h/c     # Covering grid FAS multigrid solver (replaces relaxation.c/h + relaxation_amr.c/h)
 │   │   └── kerr_quasi_isotropic.h/c  # QI Kerr metric for HiSpID (high-spin data)
 │   ├── diagnostics/
 │   │   ├── constraints.h/c     # Hamiltonian + momentum constraints
@@ -357,7 +352,7 @@ lattice/
 │   ├── test_pack_evolve.c    # packed batch kernel validation
 │   ├── test_subcycle.c       # Berger-Oliger subcycling validation
 │   ├── test_bowen_york.c    # Bowen-York initial data (A_ij + solver + evolution)
-│   ├── test_relaxation_amr.c # AMR composite multigrid solver tests
+│   ├── test_jfnk.c          # Covering grid FAS solver tests
 │   ├── test_hispid.c        # HiSpID high-spin initial data (QI Kerr + coupled solver)
 │   ├── test_ah_finder.c     # Apparent horizon finder tests (13/13)
 │   ├── test_maxwell.c       # Einstein-Maxwell tests (15/15)
@@ -399,7 +394,7 @@ make test-amr-accuracy  # AMR accuracy validation
 make test-pack-evolve   # packed batch kernel validation (8/8)
 make test-subcycle      # Berger-Oliger subcycling validation
 make test-bowen-york   # Bowen-York initial data (A_ij, solver, evolution)
-make test-relaxation-amr  # AMR composite multigrid solver (14/14)
+make test-jfnk         # Covering grid FAS solver tests
 make test-hispid       # HiSpID high-spin initial data (QI Kerr + coupled solver)
 make test-ah           # Apparent horizon finder (interpolation, Schwarzschild, diagnostics)
 make test-maxwell      # Einstein-Maxwell (flat EM, plane wave, charged BH, constraints)
@@ -547,9 +542,10 @@ constant `GR_SPACEDIM = 3`.
 
 ### FAS Multigrid Solver Tuning
 
-Both `relaxation_solve` (1-field BY) and `relaxation_solve_coupled` (4-field HiSpID)
-use FMG (Full Multigrid) with FAS V-cycles and Newton-Gauss-Seidel smoothing.
-`tol` is the target residual; `max_iter` is the max post-FMG V-cycles (usually 0-9).
+The covering grid FAS solver (`jfnk_solver.c`) uses FMG (Full Multigrid) with
+FAS V-cycles and 8-color Newton-Gauss-Seidel smoothing. `tol` is the target
+residual; `max_iter` is the max post-FMG V-cycles (usually 0-9). Both 1-field
+(BY Hamiltonian) and 4-field (HiSpID coupled) modes are supported.
 
 The discretization floor is O(dx^4):
 
@@ -562,7 +558,7 @@ The discretization floor is O(dx^4):
 
 FMG achieves discretization accuracy in a single pass (~1.14 V-cycles of work).
 Post-FMG V-cycles polish below the FMG residual; typically 0-9 needed.
-Multigrid hierarchy: N, N/2, N/4, ... down to N_min=16.
+Multigrid hierarchy: N, N/2, N/4, ... down to N_min=4.
 For production, `tol=1e-10, max_iter=50000` is the default in `set_bowen_york()`.
 Both BY (1-field) and HiSpID (4-field) use 1e-10 — evolution truncation errors
 are orders of magnitude larger, so polishing below 1e-10 is wasted work.
@@ -570,8 +566,10 @@ are orders of magnitude larger, so polishing below 1e-10 is wasted work.
 **AMR solver resolution:** With `--amr-levels L`, the solver adds L refinement
 levels near each puncture. Each level halves the grid spacing:
 `dx_fine = dx_base / 2^L`. For example, a base grid at N=32, L=64 (dx=2M) with
-`--amr-levels 3` achieves dx=0.25M near the BH. The solver does real work at the
-fine resolution, so constraint quality scales with the finest dx, not the base dx.
+`--amr-levels 3` achieves dx=0.25M near the BH. Each AMR level is solved on a
+covering grid (single temporary uniform grid spanning all blocks at that level).
+No inter-block ghost exchange during MG — the covering grid approach eliminates
+the cross-level corruption bug that plagued the old composite FAS solver.
 Higher `--amr-levels` is more accurate but costs more compute (each level adds
 up to 8x fine blocks that must be solved).
 

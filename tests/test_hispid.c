@@ -21,7 +21,7 @@
 #include "../src/core/fields.h"
 #include "../src/initial_data/puncture.h"
 #include "../src/initial_data/bowen_york.h"
-#include "../src/initial_data/relaxation.h"
+#include "../src/initial_data/jfnk_solver.h"
 #include "../src/initial_data/kerr_quasi_isotropic.h"
 #include "../src/evolution/ccz4_rhs.h"
 #include "../src/numerics/rk4.h"
@@ -217,11 +217,11 @@ static void test_zero_spin_reduces_to_by(void)
 
     /* Standard BY solve */
     grid_t *g_by = grid_alloc(N, L, RK_CLASSIC);
-    double res_by = relaxation_solve(g_by, 1, &bh, 1e-6, 2000, 0);
+    double res_by = jfnk_solve(g_by, 1, &bh, 1e-6, 50, 0);
 
     /* HiSpID coupled solve (zero spin -> flat conformal metric) */
     grid_t *g_hi = grid_alloc(N, L, RK_CLASSIC);
-    double res_hi = relaxation_solve_coupled(g_hi, 1, &bh, 1e-4, 2000, 0);
+    double res_hi = jfnk_solve_coupled(g_hi, 1, &bh, 1e-4, 50, 0);
 
     printf("  BY residual:    %.6e\n", res_by);
     printf("  HiSpID residual: %.6e\n", res_hi);
@@ -262,7 +262,7 @@ static void test_moderate_spin(void)
     double L = 20.0;
     grid_t *g = grid_alloc(N, L, RK_CLASSIC);
 
-    double residual = relaxation_solve_coupled(g, 1, &bh, 1e-4, 2000, 1);
+    double residual = jfnk_solve_coupled(g, 1, &bh, 1e-4, 50, 1);
 
     printf("  Solver residual = %.6e\n", residual);
     CHECK(residual < 1e-2, "Coupled solver converged for chi=0.5");
@@ -301,7 +301,7 @@ static void test_constraints_after_solve(void)
     double L = 20.0;
     grid_t *g = grid_alloc(N, L, RK_CLASSIC);
 
-    relaxation_solve_coupled(g, 1, &bh, 1e-4, 2000, 0);
+    jfnk_solve_coupled(g, 1, &bh, 1e-4, 50, 0);
 
     double ham = compute_constraint_l2(g);
     double mom = compute_momentum_l2(g);
@@ -337,7 +337,7 @@ static void test_high_spin_evolve(void)
     grid_t *g = m->blocks[0]->grid;
 
     printf("  Setting up HiSpID initial data (chi=0.9)...\n");
-    double residual = relaxation_solve_coupled(g, 1, &bh, 1e-4, 2000, 1);
+    double residual = jfnk_solve_coupled(g, 1, &bh, 1e-4, 50, 1);
     printf("  Solver residual = %.6e\n", residual);
 
     /* Evolve 10 steps */
@@ -391,7 +391,7 @@ static void test_det_h_unity(void)
     double L = 20.0;
     grid_t *g = grid_alloc(N, L, RK_CLASSIC);
 
-    relaxation_solve_coupled(g, 1, &bh, 1e-4, 2000, 0);
+    jfnk_solve_coupled(g, 1, &bh, 1e-4, 50, 0);
 
     /* Check det(h_ij) at several interior points */
     int gw = g->ghost;

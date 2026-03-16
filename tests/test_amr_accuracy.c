@@ -25,8 +25,7 @@
 
 #include "../src/core/grid.h"
 #include "../src/core/params.h"
-#include "../src/initial_data/relaxation.h"
-#include "../src/initial_data/relaxation_amr.h"
+#include "../src/initial_data/jfnk_solver.h"
 #include "../src/diagnostics/constraints.h"
 #include "../src/backend/backend.h"
 #include <stdio.h>
@@ -110,10 +109,10 @@ int main(void)
                L / (N * 4.0));
 
         grid_t *g_uni = grid_alloc(N, L, RK_CLASSIC);
-        relaxation_solve(g_uni, 1, &bh, 1e-10, 30000, 0);
+        jfnk_solve(g_uni, 1, &bh, 1e-10, 50, 0);
 
         grid_t *g_amr = grid_alloc(N, L, RK_CLASSIC);
-        relaxation_solve_amr(g_amr, 1, &bh, 1e-10, 30000, 0, 2);
+        jfnk_solve_amr(g_amr, 1, &bh, 1e-10, 50, 0, 2);
 
         double uni_near = ham_l2_shell(g_uni, 1.0, 4.0);
         double amr_near = ham_l2_shell(g_amr, 1.0, 4.0);
@@ -153,15 +152,15 @@ int main(void)
 
         /* Coarse uniform: N=32, dx=4M */
         grid_t *g_coarse = grid_alloc(N_coarse, L, RK_CLASSIC);
-        double res_coarse = relaxation_solve(g_coarse, 1, &bh, 1e-10, 30000, 1);
+        double res_coarse = jfnk_solve(g_coarse, 1, &bh, 1e-10, 50, 1);
 
         /* AMR: N=32 base + 2 levels -> dx=1M near puncture */
         grid_t *g_amr = grid_alloc(N_coarse, L, RK_CLASSIC);
-        double res_amr = relaxation_solve_amr(g_amr, 1, &bh, 1e-10, 30000, 1, 2);
+        double res_amr = jfnk_solve_amr(g_amr, 1, &bh, 1e-10, 50, 1, 2);
 
         /* Reference: N=128 uniform, dx=1M */
         grid_t *g_ref = grid_alloc(N_fine, L, RK_CLASSIC);
-        double res_ref = relaxation_solve(g_ref, 1, &bh, 1e-10, 30000, 1);
+        double res_ref = jfnk_solve(g_ref, 1, &bh, 1e-10, 50, 1);
 
         printf("\n  Solver residuals:\n");
         printf("    Coarse (N=%d):  %.4e\n", N_coarse, res_coarse);
@@ -233,12 +232,12 @@ int main(void)
 
         for (int r = 0; r < 2; r++) {
             grid_t *gu = grid_alloc(Ns[r], L, RK_CLASSIC);
-            relaxation_solve(gu, 1, &bh, 1e-10, 30000, 0);
+            jfnk_solve(gu, 1, &bh, 1e-10, 50, 0);
             uni_hams[r] = ham_l2_shell(gu, 1.0, 4.0);
             grid_free(gu);
 
             grid_t *ga = grid_alloc(Ns[r], L, RK_CLASSIC);
-            relaxation_solve_amr(ga, 1, &bh, 1e-10, 30000, 0, 2);
+            jfnk_solve_amr(ga, 1, &bh, 1e-10, 50, 0, 2);
             amr_hams[r] = ham_l2_shell(ga, 1.0, 4.0);
             grid_free(ga);
         }
