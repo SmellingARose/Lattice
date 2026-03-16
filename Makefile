@@ -123,7 +123,7 @@ LDFLAGS = $(BACKEND_LIBS) $(HDF5_LIBS) -lm $(LTO_FLAGS)
 BUILD = build
 
 # Targets
-.PHONY: all debug test test-single-bh test-convergence test-constraints test-head-on test-amr-mesh test-amr-ghost test-amr-prolong test-amr-refine test-amr-evolve test-pack-evolve test-subcycle test-bowen-york test-hispid test-maxwell test-ah test-psi4 test-cce test-cp-bc test-inspiral test-inspiral-solver test-inspiral-convergence test-jfnk test-checkpoint test-nbody-track clean
+.PHONY: all debug test test-single-bh test-convergence test-constraints test-head-on test-amr-mesh test-amr-ghost test-amr-prolong test-amr-refine test-amr-evolve test-pack-evolve test-subcycle test-bowen-york test-hispid test-maxwell test-ah test-psi4 test-cce test-cp-bc test-inspiral test-inspiral-smoke test-inspiral-solver test-inspiral-convergence test-jfnk test-checkpoint test-nbody-track clean
 
 all: $(BUILD)/lattice
 
@@ -354,6 +354,10 @@ test-solver-multiroot: $(BUILD)/test_solver_multiroot
 test-inspiral: $(BUILD)/test_binary_inspiral
 	@echo "=== Running binary inspiral test ==="
 	$(BUILD)/test_binary_inspiral
+
+test-inspiral-smoke: $(BUILD)/test_inspiral_smoke
+	@echo "=== Running inspiral smoke test ==="
+	$(BUILD)/test_inspiral_smoke
 
 test-inspiral-solver: $(BUILD)/test_inspiral_solver
 	@echo "=== Running inspiral solver smoke test ==="
