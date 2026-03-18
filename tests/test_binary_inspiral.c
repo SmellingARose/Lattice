@@ -545,8 +545,6 @@ int main(void)
                     break;
                 }
 
-                ham = backend_constraint_l2_packed(dp);
-                mom = backend_momentum_l2_packed(dp);
                 ml  = backend_min_lapse_packed(dp, &lx, &ly, &lz);
 
                 if (step % PSI4_EVERY == 0) {
@@ -556,6 +554,12 @@ int main(void)
 
                 backend_unmap_pack_diag(dp);
                 meshblock_pack_free(dp);
+
+                /* Constraint norms on CPU with AH-radius excision.
+                 * Data is on host after unmap. Uses same code path
+                 * as CPU backend — identical results guaranteed. */
+                ham = mesh_constraint_l2_ex(m, tracker);
+                mom = mesh_momentum_l2_ex(m, tracker);
             } else {
                 if (!mesh_check_finite(m)) {
                     printf("\n  *** CRASH: NaN/Inf detected at step %d "

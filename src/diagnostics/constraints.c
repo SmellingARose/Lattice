@@ -349,14 +349,6 @@ double mesh_constraint_l2(const struct mesh_s *m)
         for (int k = lo; k < hi; k++) {
             for (int j = lo; j < hi; j++) {
                 for (int i = lo; i < hi; i++) {
-                    /* Skip points inside the apparent horizon (lapse < 0.3).
-                     * Near the puncture, 1/chi divisions in the Ricci tensor
-                     * produce huge values. The BH interior is causally
-                     * disconnected — constraint norms there are meaningless.
-                     * Ref: GRChombo arXiv:1503.03436 Section 4.2 */
-                    double alpha = g->fields[FIELD_LAPSE][IDX(g, i, j, k)];
-                    if (alpha < 0.3) continue;
-
                     double H = compute_hamiltonian_at(
                         (const double *const *)g->fields, g, i, j, k);
                     sum += H * H * dV;
@@ -372,7 +364,6 @@ double mesh_constraint_l2(const struct mesh_s *m)
 /*
  * Mesh-level momentum constraint L2 norm.
  * Accumulates sum of |M_i|^2 over all leaf block interiors.
- * Excludes points inside the apparent horizon (lapse < 0.3).
  */
 double mesh_momentum_l2(const struct mesh_s *m)
 {
@@ -391,9 +382,6 @@ double mesh_momentum_l2(const struct mesh_s *m)
         for (int k = lo; k < hi; k++) {
             for (int j = lo; j < hi; j++) {
                 for (int i = lo; i < hi; i++) {
-                    double alpha = g->fields[FIELD_LAPSE][IDX(g, i, j, k)];
-                    if (alpha < 0.3) continue;
-
                     double mom[3];
                     compute_momentum_at(
                         (const double *const *)g->fields, g, i, j, k, mom);

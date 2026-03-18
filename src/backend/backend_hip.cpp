@@ -1812,23 +1812,16 @@ __global__ void hip_constraint_l2_partial(
 
         double dV = g_local.dx * g_local.dx * g_local.dx;
 
-        /* Skip points inside the AH (lapse < 0.3).
-         * Matches CPU mesh_constraint_l2() excision.
-         * Ref: GRChombo arXiv:1503.03436 Section 4.2 */
-        int idx_local = k * Nt * Nt + j * Nt + i;
-        double alpha = src_ptrs[FIELD_LAPSE][idx_local];
-        if (alpha >= 0.3) {
-            double H = compute_hamiltonian_at(
-                (const double *const *)src_ptrs, &g_local, i, j, k);
-            my_ham = H * H * dV;
+        double H = compute_hamiltonian_at(
+            (const double *const *)src_ptrs, &g_local, i, j, k);
+        my_ham = H * H * dV;
 
-            double mom[3];
-            compute_momentum_at(
-                (const double *const *)src_ptrs, &g_local, i, j, k, mom);
-            my_mom = (mom[0]*mom[0] + mom[1]*mom[1] + mom[2]*mom[2]) * dV;
+        double mom[3];
+        compute_momentum_at(
+            (const double *const *)src_ptrs, &g_local, i, j, k, mom);
+        my_mom = (mom[0]*mom[0] + mom[1]*mom[1] + mom[2]*mom[2]) * dV;
 
-            my_vol = dV;
-        }
+        my_vol = dV;
     }
 
     s_ham[ltid] = my_ham;

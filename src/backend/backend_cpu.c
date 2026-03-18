@@ -1224,14 +1224,6 @@ double backend_constraint_l2_packed(meshblock_pack_t *pack)
         g_local.inv_dx = 1.0 / pack->dx_per_block[b];
 
         double dV = g_local.dx * g_local.dx * g_local.dx;
-
-        /* Skip points inside the AH (lapse < 0.3).
-         * Matches mesh_constraint_l2() excision.
-         * Ref: GRChombo arXiv:1503.03436 Section 4.2 */
-        int idx_lapse = k * Nt * Nt + j * Nt + i;
-        double alpha = src_ptrs[FIELD_LAPSE][idx_lapse];
-        if (alpha < 0.3) continue;
-
         double H = compute_hamiltonian_at(
             (const double *const *)src_ptrs, &g_local, i, j, k);
         sum += H * H * dV;
@@ -1276,12 +1268,6 @@ double backend_momentum_l2_packed(meshblock_pack_t *pack)
         g_local.inv_dx = 1.0 / pack->dx_per_block[b];
 
         double dV = g_local.dx * g_local.dx * g_local.dx;
-
-        /* Skip points inside the AH (lapse < 0.3) */
-        int idx_lapse = k * Nt * Nt + j * Nt + i;
-        double alpha = src_ptrs[FIELD_LAPSE][idx_lapse];
-        if (alpha < 0.3) continue;
-
         double mom[3];
         compute_momentum_at(
             (const double *const *)src_ptrs, &g_local, i, j, k, mom);
