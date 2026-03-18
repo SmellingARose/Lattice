@@ -235,11 +235,11 @@ static void subcycle_diag_callback(const void *mesh_ptr, double time,
 /* ====================================================================
  * Apparent horizon parameters (individual BHs)
  * ==================================================================== */
-#define AH_NTHETA     24
-#define AH_NPHI       48
+#define AH_NTHETA     12
+#define AH_NPHI       24
 #define AH_RGUESS     0.5
-#define AH_TOL        1.0e-4
-#define AH_MAXITER    500
+#define AH_TOL        1.0e-2
+#define AH_MAXITER    200
 
 /* ====================================================================
  * Remnant apparent horizon parameters (post-merger)
@@ -524,7 +524,7 @@ int main(void)
         fprintf(sc_ctx.fp, "\n");
     }
     p.subcycle_diag = subcycle_diag_callback;
-    p.diag_level    = 5;   /* dt = 12M / 2^5 = 0.375M */
+    p.diag_level    = 2;   /* dt = 12M / 2^2 = 3M (4 GPU→host syncs/step) */
     p.diag_ctx      = &sc_ctx;
     printf("        Fine Psi4: level %d, dt = %.3f M (BAM uses ~0.3M)\n\n",
            p.diag_level, p.dt / (1 << p.diag_level));
