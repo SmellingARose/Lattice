@@ -804,11 +804,19 @@ void set_bowen_york_mesh(mesh_t *m, int n_bh, const puncture_data_t *bhs,
         }
     }
 
-    /* Enforce chi >= 1e-4, lapse >= 1e-4 on initial data.
-     * The covering grid solver produces raw chi → 0 at the puncture.
-     * Without clamping, the first RHS evaluation and diagnostic will
-     * divide by chi and produce NaN.  Applied to ALL blocks (leaf +
-     * non-leaf) so ghost exchange propagates clamped values.
+    /* Ghost exchange for CCZ4 fields across blocks.
+     * Use ghost_exchange_all_blocks so non-leaf parents also get valid
+     * ghost zones (needed by ghost_fill_from_coarser during subcycling). */
+    ghost_exchange_all_blocks(m);
+
+    /* Prolongation phase: fill fine ghost zones from coarser data.
+     * ghost_exchange_multilevel handles restrict→coarse_buf→prolongate. */
+    ghost_exchange_multilevel(m);
+
+    /* Enforce chi >= 1e-4, lapse >= 1e-4 on initial data AFTER ghost
+     * exchange.  Must be after because 6th-order Lagrange prolongation
+     * has negative weights that can create ghost zone values below the
+     * floor.  Applied to ALL blocks (leaf + non-leaf, interior + ghost).
      * Ref: GRChombo PositiveChiAndAlpha applied after initial data. */
     for (int bid = 0; bid < m->num_blocks; bid++) {
         block_t *blk = m->blocks[bid];
@@ -821,13 +829,4 @@ void set_bowen_york_mesh(mesh_t *m, int n_bh, const puncture_data_t *bhs,
                 g->fields[FIELD_LAPSE][idx] = 1.0e-4;
         }
     }
-
-    /* Ghost exchange for CCZ4 fields across blocks.
-     * Use ghost_exchange_all_blocks so non-leaf parents also get valid
-     * ghost zones (needed by ghost_fill_from_coarser during subcycling). */
-    ghost_exchange_all_blocks(m);
-
-    /* Prolongation phase: fill fine ghost zones from coarser data.
-     * ghost_exchange_multilevel handles restrict→coarse_buf→prolongate. */
-    ghost_exchange_multilevel(m);
 }
