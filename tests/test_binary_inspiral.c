@@ -445,8 +445,8 @@ int main(void)
     double lx, ly, lz;
     double ml      = mesh_min_lapse(m, &lx, &ly, &lz);
     double sep0    = tracker_separation(tracker);
-    double ham     = mesh_constraint_l2(m);
-    double mom     = mesh_momentum_l2(m);
+    double ham     = mesh_constraint_l2_ex(m, tracker);
+    double mom     = mesh_momentum_l2_ex(m, tracker);
 
     printf("  [4/4] Evolution: %d steps, T = %.0f M\n\n", num_steps, T_FINAL);
 
@@ -564,8 +564,8 @@ int main(void)
                     break;
                 }
 
-                ham = mesh_constraint_l2(m);
-                mom = mesh_momentum_l2(m);
+                ham = mesh_constraint_l2_ex(m, tracker);
+                mom = mesh_momentum_l2_ex(m, tracker);
                 ml  = mesh_min_lapse(m, &lx, &ly, &lz);
 
                 if (step % PSI4_EVERY == 0) {

@@ -34,10 +34,18 @@ double compute_constraint_l2(const grid_t *g);
 double compute_momentum_l2(const grid_t *g);
 
 /* Mesh-level L2 norms: accumulate over all leaf blocks.
- * Same computation as single-grid variants but across the full AMR mesh. */
+ * Excludes points inside the apparent horizon (lapse < 0.3 fallback). */
 struct mesh_s;  /* forward declaration */
 double mesh_constraint_l2(const struct mesh_s *m);
 double mesh_momentum_l2(const struct mesh_s *m);
+
+/* Extended versions with BH tracker for AH-radius excision.
+ * Excludes spheres of radius 1.5 * r_AH around each tracked BH.
+ * Falls back to lapse < 0.3 if tracker is NULL or mass_irr unavailable.
+ * Pass the bh_tracker_t* as void* to avoid header dependency.
+ * Ref: Einstein Toolkit CarpetMask (sphere exclusion around punctures) */
+double mesh_constraint_l2_ex(const struct mesh_s *m, const void *tracker);
+double mesh_momentum_l2_ex(const struct mesh_s *m, const void *tracker);
 
 EXTERN_C_END
 

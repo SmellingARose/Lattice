@@ -14,6 +14,7 @@
  */
 
 #include "constraints.h"
+#include "bh_tracker.h"
 #include "../core/fields.h"
 #include "../numerics/finite_diff.h"
 #include "../geometry/tensor_utils.h"
@@ -401,6 +402,113 @@ double mesh_momentum_l2(const struct mesh_s *m)
                 }
             }
         }
+    }
+
+    return (vol > 0.0) ? sqrt(sum / (3.0 * vol)) : 0.0;
+}
+
+/* ================================================================
+ * AH-radius excision: check if point is inside any tracked BH.
+ *
+ * Excludes spheres of radius 1.5 * r_AH around each active BH.
+ * When mass_irr is unavailable (AH not found), falls back to
+ * 0.5 * initial_mass (isotropic Schwarzschild coordinate radius).
+ *
+ * Ref: Einstein Toolkit CarpetMask (sphere exclusion around punctures)
+ * ================================================================ */
+static int point_inside_bh(double x, double y, double z,
+                            const bh_tracker_t *tr)
+{
+    for (int b = 0; b < tr->n_bh; b++) {
+        if (tr->bh[b].status != BH_STATUS_ACTIVE) continue;
+        double rx = x - tr->bh[b].center[0];
+        double ry = y - tr->bh[b].center[1];
+        double rz = z - tr->bh[b].center[2];
+        double r2 = rx*rx + ry*ry + rz*rz;
+
+        double r_ah = 2.0 * tr->bh[b].mass_irr;  /* r_AH = 2 * M_irr */
+        if (r_ah <= 0.0)
+            r_ah = 0.5 * tr->bh[b].initial_mass;  /* fallback */
+        double r_excl = 1.5 * r_ah;
+
+        if (r2 < r_excl * r_excl) return 1;
+    }
+    return 0;
+}
+
+/*
+ * Mesh Hamiltonian L2 with AH-radius excision.
+ * If tracker is NULL, falls back to lapse < 0.3 excision.
+ */
+double mesh_constraint_l2_ex(const struct mesh_s *m, const void *tracker)
+{
+    if (!tracker) return mesh_constraint_l2(m);
+    const bh_tracker_t *tr = (const bh_tracker_t *)tracker;
+
+    double sum = 0.0;
+    double vol = 0.0;
+
+    #pragma omp parallel for schedule(dynamic) reduction(+:sum,vol)
+    for (int bid = 0; bid < m->num_blocks; bid++) {
+        block_t *b = m->blocks[bid];
+        if (!b || !b->is_leaf) continue;
+        grid_t *g = b->grid;
+        int lo = g->ghost;
+        int hi = lo + g->N;
+        double dV = g->dx * g->dx * g->dx;
+
+        for (int k = lo; k < hi; k++)
+            for (int j = lo; j < hi; j++)
+                for (int i = lo; i < hi; i++) {
+                    double x = BLOCK_COORD(b, 0, i);
+                    double y = BLOCK_COORD(b, 1, j);
+                    double z = BLOCK_COORD(b, 2, k);
+                    if (point_inside_bh(x, y, z, tr)) continue;
+
+                    double H = compute_hamiltonian_at(
+                        (const double *const *)g->fields, g, i, j, k);
+                    sum += H * H * dV;
+                    vol += dV;
+                }
+    }
+
+    return (vol > 0.0) ? sqrt(sum / vol) : 0.0;
+}
+
+/*
+ * Mesh momentum L2 with AH-radius excision.
+ */
+double mesh_momentum_l2_ex(const struct mesh_s *m, const void *tracker)
+{
+    if (!tracker) return mesh_momentum_l2(m);
+    const bh_tracker_t *tr = (const bh_tracker_t *)tracker;
+
+    double sum = 0.0;
+    double vol = 0.0;
+
+    #pragma omp parallel for schedule(dynamic) reduction(+:sum,vol)
+    for (int bid = 0; bid < m->num_blocks; bid++) {
+        block_t *b = m->blocks[bid];
+        if (!b || !b->is_leaf) continue;
+        grid_t *g = b->grid;
+        int lo = g->ghost;
+        int hi = lo + g->N;
+        double dV = g->dx * g->dx * g->dx;
+
+        for (int k = lo; k < hi; k++)
+            for (int j = lo; j < hi; j++)
+                for (int i = lo; i < hi; i++) {
+                    double x = BLOCK_COORD(b, 0, i);
+                    double y = BLOCK_COORD(b, 1, j);
+                    double z = BLOCK_COORD(b, 2, k);
+                    if (point_inside_bh(x, y, z, tr)) continue;
+
+                    double mom[3];
+                    compute_momentum_at(
+                        (const double *const *)g->fields, g, i, j, k, mom);
+                    sum += (mom[0]*mom[0] + mom[1]*mom[1] + mom[2]*mom[2]) * dV;
+                    vol += dV;
+                }
     }
 
     return (vol > 0.0) ? sqrt(sum / (3.0 * vol)) : 0.0;
