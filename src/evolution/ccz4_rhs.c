@@ -116,7 +116,17 @@ static inline void ccz4_load_and_differentiate(
     const int strides[3] = { sx, sy, sz };
 
     /* ---- Load fields ---- */
-    f->chi = src[FIELD_CHI][idx];
+    f->chi   = src[FIELD_CHI][idx];
+    f->lapse = src[FIELD_LAPSE][idx];
+
+    /* Floor chi and lapse BEFORE any computation (GRChombo pattern).
+     * Divisions by chi in the Ricci tensor and gauge equations would
+     * produce NaN/Inf near the puncture where chi → 0.  The floor only
+     * activates deep inside the AH (causally disconnected).
+     * Ref: GRChombo PositiveChiAndAlpha.hpp, BinaryBHLevel::specificEvalRHS */
+    if (f->chi   < 1.0e-4) f->chi   = 1.0e-4;
+    if (f->lapse < 1.0e-4) f->lapse = 1.0e-4;
+
     f->h[0][0] = src[FIELD_H11][idx]; f->h[0][1] = src[FIELD_H12][idx]; f->h[0][2] = src[FIELD_H13][idx];
     f->h[1][0] = f->h[0][1];          f->h[1][1] = src[FIELD_H22][idx]; f->h[1][2] = src[FIELD_H23][idx];
     f->h[2][0] = f->h[0][2];          f->h[2][1] = f->h[1][2];          f->h[2][2] = src[FIELD_H33][idx];
@@ -128,7 +138,6 @@ static inline void ccz4_load_and_differentiate(
 
     f->Theta = src[FIELD_THETA][idx];
     f->Gamma[0] = src[FIELD_GAMMA1][idx]; f->Gamma[1] = src[FIELD_GAMMA2][idx]; f->Gamma[2] = src[FIELD_GAMMA3][idx];
-    f->lapse = src[FIELD_LAPSE][idx];
     f->shift[0] = src[FIELD_SHIFT1][idx]; f->shift[1] = src[FIELD_SHIFT2][idx]; f->shift[2] = src[FIELD_SHIFT3][idx];
     f->B[0] = src[FIELD_B1][idx]; f->B[1] = src[FIELD_B2][idx]; f->B[2] = src[FIELD_B3][idx];
 
@@ -498,7 +507,7 @@ static inline void ccz4_compute_gauge(
     /* SSL: Slow-Start Lapse — Gaussian damping toward trumpet solution.
      * Ref: arXiv:2404.01137, Eq. (27) */
     if (p->noise.use_ssl) {
-        double W = sqrt(fmax(f->chi, 1.0e-10));
+        double W = sqrt(fmax(f->chi, 1.0e-4));
         double M = p->noise.ssl_total_mass;
         double h_ssl = p->noise.ssl_h * M;
         double sigma_t = p->noise.ssl_sigma_t * M;
@@ -516,8 +525,8 @@ static inline void ccz4_compute_gauge(
          * Ref: arXiv:1003.0859 (Muller & Brugmann) */
         double eta_eff = p->gauge.eta;
         if (p->gauge.position_dependent_eta) {
-            double W = sqrt(fmax(f->chi, 1.0e-6));
-            eta_eff /= fmax(W, 1.0e-6);
+            double W = sqrt(fmax(f->chi, 1.0e-4));
+            eta_eff /= fmax(W, 1.0e-2);
         }
         out->B[ii] = p->gauge.shift_advec_coeff * d->advec_B[ii]
                     - p->gauge.shift_advec_coeff * d->advec_Gamma[ii]

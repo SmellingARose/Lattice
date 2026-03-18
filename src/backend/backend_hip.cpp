@@ -1628,11 +1628,12 @@ __global__ void hip_enforce_algebraic(double *data, int Nt, int nb,
     FP(FIELD_A23)[idx] = A_loc[1][2];
     FP(FIELD_A33)[idx] = A_loc[2][2];
 
-    /* Ensure chi > 0, lapse > 0 */
-    if (FP(FIELD_CHI)[idx] < 1.0e-12)
-        FP(FIELD_CHI)[idx] = 1.0e-12;
-    if (FP(FIELD_LAPSE)[idx] < 1.0e-12)
-        FP(FIELD_LAPSE)[idx] = 1.0e-12;
+    /* Ensure chi >= 1e-4, lapse >= 1e-4 (GRChombo convention).
+     * Ref: GRChombo PositiveChiAndAlpha.hpp */
+    if (FP(FIELD_CHI)[idx] < 1.0e-4)
+        FP(FIELD_CHI)[idx] = 1.0e-4;
+    if (FP(FIELD_LAPSE)[idx] < 1.0e-4)
+        FP(FIELD_LAPSE)[idx] = 1.0e-4;
 
     #undef FP
 }

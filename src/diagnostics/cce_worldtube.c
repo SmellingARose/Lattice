@@ -271,7 +271,7 @@ static void conformal_to_physical(
     double K_phys[3][3],
     double d_gamma[3][3][3])   /* d_gamma[k][i][j] = d_k gamma_ij */
 {
-    if (chi < 1e-12) chi = 1e-12;
+    if (chi < 1e-4) chi = 1e-4;
     double inv_chi = 1.0 / chi;
     double inv_chi2 = inv_chi * inv_chi;
     double K3 = K_val / 3.0;

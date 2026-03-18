@@ -228,13 +228,14 @@ static void ck45_step_mesh_packed(mesh_t *m, const sim_params_t *p, double dt)
     backend_zero_packed(pack, PACK_BUF_SCRATCH);
 
     for (int s = 0; s < 5; s++) {
+        backend_enforce_algebraic_packed(pack);  /* chi/lapse >= 1e-4 before RHS */
         backend_ghost_exchange_packed(pack);
         backend_compute_rhs_packed(pack, p);
         backend_sommerfeld_packed(pack, p);
         backend_update_ck45_packed(pack, CK_A[s], CK_B[s], dt);
     }
 
-    backend_enforce_algebraic_packed(pack);
+    backend_enforce_algebraic_packed(pack);  /* final enforcement */
     backend_unmap_pack_sync(pack);
 
     meshblock_pack_sync_to_blocks(pack, m->blocks);
@@ -274,30 +275,34 @@ static void classic_rk4_step_mesh_packed(mesh_t *m, const sim_params_t *p,
     backend_zero_packed(pack, PACK_BUF_ACCUM);
 
     /* Stage 1: accum += dt/6 * rhs; data = scratch + dt/2 * rhs */
+    backend_enforce_algebraic_packed(pack);  /* chi/lapse >= 1e-4 before RHS */
     backend_ghost_exchange_packed(pack);
     backend_compute_rhs_packed(pack, p);
     backend_sommerfeld_packed(pack, p);
     backend_rk4_stage_packed(pack, 1.0/6.0, 0.5, dt);
 
     /* Stage 2: accum += dt/3 * rhs; data = scratch + dt/2 * rhs */
+    backend_enforce_algebraic_packed(pack);
     backend_ghost_exchange_packed(pack);
     backend_compute_rhs_packed(pack, p);
     backend_sommerfeld_packed(pack, p);
     backend_rk4_stage_packed(pack, 1.0/3.0, 0.5, dt);
 
     /* Stage 3: accum += dt/3 * rhs; data = scratch + dt * rhs */
+    backend_enforce_algebraic_packed(pack);
     backend_ghost_exchange_packed(pack);
     backend_compute_rhs_packed(pack, p);
     backend_sommerfeld_packed(pack, p);
     backend_rk4_stage_packed(pack, 1.0/3.0, 1.0, dt);
 
     /* Stage 4: data = scratch + accum + dt/6 * rhs */
+    backend_enforce_algebraic_packed(pack);
     backend_ghost_exchange_packed(pack);
     backend_compute_rhs_packed(pack, p);
     backend_sommerfeld_packed(pack, p);
     backend_rk4_final_packed(pack, 1.0/6.0, dt);
 
-    backend_enforce_algebraic_packed(pack);
+    backend_enforce_algebraic_packed(pack);  /* final enforcement */
     backend_unmap_pack_sync(pack);
 
     meshblock_pack_sync_to_blocks(pack, m->blocks);
@@ -468,6 +473,7 @@ static void step_level(mesh_t *m, const sim_params_t *p,
     if (p->rk_method == RK_CK45) {
         backend_zero_packed(pack, PACK_BUF_SCRATCH);
         for (int s = 0; s < 5; s++) {
+            backend_enforce_algebraic_packed(pack);
             backend_ghost_exchange_packed(pack);
             backend_compute_rhs_packed(pack, p);
             backend_sommerfeld_packed(pack, p);
@@ -479,6 +485,7 @@ static void step_level(mesh_t *m, const sim_params_t *p,
         backend_zero_packed(pack, PACK_BUF_ACCUM);
 
         /* Stage 1 */
+        backend_enforce_algebraic_packed(pack);
         backend_ghost_exchange_packed(pack);
         backend_compute_rhs_packed(pack, p);
         backend_sommerfeld_packed(pack, p);
@@ -486,18 +493,21 @@ static void step_level(mesh_t *m, const sim_params_t *p,
         backend_rk4_stage_packed(pack, 1.0/6.0, 0.5, dt_level);
 
         /* Stage 2 */
+        backend_enforce_algebraic_packed(pack);
         backend_ghost_exchange_packed(pack);
         backend_compute_rhs_packed(pack, p);
         backend_sommerfeld_packed(pack, p);
         backend_rk4_stage_packed(pack, 1.0/3.0, 0.5, dt_level);
 
         /* Stage 3 */
+        backend_enforce_algebraic_packed(pack);
         backend_ghost_exchange_packed(pack);
         backend_compute_rhs_packed(pack, p);
         backend_sommerfeld_packed(pack, p);
         backend_rk4_stage_packed(pack, 1.0/3.0, 1.0, dt_level);
 
         /* Stage 4 */
+        backend_enforce_algebraic_packed(pack);
         backend_ghost_exchange_packed(pack);
         backend_compute_rhs_packed(pack, p);
         backend_sommerfeld_packed(pack, p);
@@ -759,24 +769,28 @@ static void step_level_gpu(mesh_t *m, const sim_params_t *p,
     backend_zero_packed(pack, PACK_BUF_ACCUM);
 
     /* Stage 1 */
+    backend_enforce_algebraic_packed(pack);
     backend_ghost_exchange_packed(pack);
     backend_compute_rhs_packed(pack, p);
     backend_sommerfeld_packed(pack, p);
     backend_rk4_stage_packed(pack, 1.0/6.0, 0.5, dt_level);
 
     /* Stage 2 */
+    backend_enforce_algebraic_packed(pack);
     backend_ghost_exchange_packed(pack);
     backend_compute_rhs_packed(pack, p);
     backend_sommerfeld_packed(pack, p);
     backend_rk4_stage_packed(pack, 1.0/3.0, 0.5, dt_level);
 
     /* Stage 3 */
+    backend_enforce_algebraic_packed(pack);
     backend_ghost_exchange_packed(pack);
     backend_compute_rhs_packed(pack, p);
     backend_sommerfeld_packed(pack, p);
     backend_rk4_stage_packed(pack, 1.0/3.0, 1.0, dt_level);
 
     /* Stage 4 */
+    backend_enforce_algebraic_packed(pack);
     backend_ghost_exchange_packed(pack);
     backend_compute_rhs_packed(pack, p);
     backend_sommerfeld_packed(pack, p);

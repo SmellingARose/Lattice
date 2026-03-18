@@ -94,7 +94,7 @@ void em_stress_energy(const double *const * restrict src, const grid_t *g,
      *
      * We compute everything in terms of conformal quantities and chi.
      */
-    double chi_inv = 1.0 / fmax(chi, 1.0e-10);
+    double chi_inv = 1.0 / fmax(chi, 1.0e-4);
 
     /* h_{ij} E^i E^j (conformal contraction) */
     double hEE = 0.0, hBB = 0.0;
@@ -127,7 +127,7 @@ void em_stress_energy(const double *const * restrict src, const grid_t *g,
      * epsilon^{ijk} = epsilon_{ijk} / sqrt(gamma)
      *               = epsilon_{ijk} * chi^{3/2}  (since det(gamma) = chi^{-3})
      * Ref: arXiv:0907.1151 Eq. (5) */
-    double chi32 = chi * sqrt(fmax(chi, 1.0e-10));
+    double chi32 = chi * sqrt(fmax(chi, 1.0e-4));
     FOR1(i) {
         j_em[i] = 0.0;
         FOR2(j, k) {

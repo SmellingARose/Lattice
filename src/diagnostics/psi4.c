@@ -267,7 +267,7 @@ static void psi4_compute(const double *const *fields, const grid_t *g,
 
     /* --- Load fields --- */
     double chi = fields[FIELD_CHI][idx];
-    if (chi < 1e-12) chi = 1e-12;
+    if (chi < 1e-4) chi = 1e-4;
 
     double h[3][3];
     h[0][0] = fields[FIELD_H11][idx]; h[0][1] = fields[FIELD_H12][idx]; h[0][2] = fields[FIELD_H13][idx];

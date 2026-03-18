@@ -40,7 +40,7 @@ double chi_gradient_max(const block_t *b)
                 double chi_val = chi[idx];
 
                 /* Protect against chi → 0 (near puncture) */
-                if (chi_val < 1.0e-6) chi_val = 1.0e-6;
+                if (chi_val < 1.0e-4) chi_val = 1.0e-4;
 
                 double chi2 = chi_val * chi_val;
 

@@ -1139,11 +1139,14 @@ void backend_enforce_algebraic_packed(meshblock_pack_t *pack)
             FIELD_PTR(FIELD_A23)[idx] = A_loc[1][2];
             FIELD_PTR(FIELD_A33)[idx] = A_loc[2][2];
 
-            /* Ensure chi > 0, lapse > 0 */
-            if (FIELD_PTR(FIELD_CHI)[idx] < 1.0e-12)
-                FIELD_PTR(FIELD_CHI)[idx] = 1.0e-12;
-            if (FIELD_PTR(FIELD_LAPSE)[idx] < 1.0e-12)
-                FIELD_PTR(FIELD_LAPSE)[idx] = 1.0e-12;
+            /* Ensure chi >= 1e-4, lapse >= 1e-4 (GRChombo convention).
+             * Prevents NaN from 1/chi in Ricci tensor, gauge, and diagnostics.
+             * Only activates deep inside AH (causally disconnected).
+             * Ref: GRChombo PositiveChiAndAlpha.hpp */
+            if (FIELD_PTR(FIELD_CHI)[idx] < 1.0e-4)
+                FIELD_PTR(FIELD_CHI)[idx] = 1.0e-4;
+            if (FIELD_PTR(FIELD_LAPSE)[idx] < 1.0e-4)
+                FIELD_PTR(FIELD_LAPSE)[idx] = 1.0e-4;
 
             #undef FIELD_PTR
         }

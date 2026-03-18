@@ -47,7 +47,7 @@ void add_ko_dissipation(double ** restrict rhs,
     double W = 1.0;
     if (p->noise.use_cako) {
         double chi = src[FIELD_CHI][idx];
-        W = sqrt(fmax(chi, 1.0e-10));
+        W = sqrt(fmax(chi, 1.0e-4));
     }
 
     /* Precompute per-field effective sigma to eliminate branches in hot loop.

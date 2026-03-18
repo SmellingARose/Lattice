@@ -130,10 +130,10 @@ static void enforce_algebraic_block(grid_t *g)
                 g->fields[FIELD_A23][idx] = A_loc[1][2];
                 g->fields[FIELD_A33][idx] = A_loc[2][2];
 
-                if (g->fields[FIELD_CHI][idx] < 1.0e-12)
-                    g->fields[FIELD_CHI][idx] = 1.0e-12;
-                if (g->fields[FIELD_LAPSE][idx] < 1.0e-12)
-                    g->fields[FIELD_LAPSE][idx] = 1.0e-12;
+                if (g->fields[FIELD_CHI][idx] < 1.0e-4)
+                    g->fields[FIELD_CHI][idx] = 1.0e-4;
+                if (g->fields[FIELD_LAPSE][idx] < 1.0e-4)
+                    g->fields[FIELD_LAPSE][idx] = 1.0e-4;
             }
         }
     }

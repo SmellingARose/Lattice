@@ -154,7 +154,7 @@ double compute_expansion(const grid_t *g, double x, double y, double z,
     interp_field_deriv_at(f[FIELD_CHI], g, x, y, z, chi_vd);
     double chi = chi_vd[0];
     double d_chi[3] = { chi_vd[1], chi_vd[2], chi_vd[3] };
-    if (chi < 1e-12) chi = 1e-12;
+    if (chi < 1e-4) chi = 1e-4;
 
     double K_val = interp_field_at(f[FIELD_K], g, x, y, z);
 
@@ -211,7 +211,7 @@ double compute_expansion(const grid_t *g, double x, double y, double z,
     double s_norm_sq = 0.0;
     FOR2(i, j) s_norm_sq += h_met[i][j] * s[i] * s[j] / chi;
     double alpha_s = sqrt(s_norm_sq);
-    if (alpha_s < 1e-12) alpha_s = 1e-12;
+    if (alpha_s < 1e-4) alpha_s = 1e-4;
     double s_hat[3];
     FOR1(i) s_hat[i] = s[i] / alpha_s;
 
@@ -389,7 +389,7 @@ static double ah_compute_expansion_at_amr(const ah_workspace_t *ws,
     interp_deriv_at_block(f[FIELD_CHI], b, pos[0], pos[1], pos[2], chi_vd);
     double chi = chi_vd[0];
     double d_chi[3] = { chi_vd[1], chi_vd[2], chi_vd[3] };
-    if (chi < 1e-12) chi = 1e-12;
+    if (chi < 1e-4) chi = 1e-4;
 
     double K_val = interp_at_block(f[FIELD_K], b, pos[0], pos[1], pos[2]);
 
@@ -446,7 +446,7 @@ static double ah_compute_expansion_at_amr(const ah_workspace_t *ws,
     double n_sq = 0.0;
     FOR2(i, j) n_sq += h_met[i][j] * n[i] * n[j] / chi;
     double alpha_s = sqrt(n_sq);
-    if (alpha_s < 1e-12) alpha_s = 1e-12;
+    if (alpha_s < 1e-4) alpha_s = 1e-4;
 
     double s_hat[3];
     FOR1(i) s_hat[i] = n[i] / alpha_s;
