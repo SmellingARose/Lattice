@@ -804,6 +804,24 @@ void set_bowen_york_mesh(mesh_t *m, int n_bh, const puncture_data_t *bhs,
         }
     }
 
+    /* Enforce chi >= 1e-4, lapse >= 1e-4 on initial data.
+     * The covering grid solver produces raw chi → 0 at the puncture.
+     * Without clamping, the first RHS evaluation and diagnostic will
+     * divide by chi and produce NaN.  Applied to ALL blocks (leaf +
+     * non-leaf) so ghost exchange propagates clamped values.
+     * Ref: GRChombo PositiveChiAndAlpha applied after initial data. */
+    for (int bid = 0; bid < m->num_blocks; bid++) {
+        block_t *blk = m->blocks[bid];
+        if (!blk || !blk->grid) continue;
+        grid_t *g = blk->grid;
+        for (size_t idx = 0; idx < g->npoints; idx++) {
+            if (g->fields[FIELD_CHI][idx] < 1.0e-4)
+                g->fields[FIELD_CHI][idx] = 1.0e-4;
+            if (g->fields[FIELD_LAPSE][idx] < 1.0e-4)
+                g->fields[FIELD_LAPSE][idx] = 1.0e-4;
+        }
+    }
+
     /* Ghost exchange for CCZ4 fields across blocks.
      * Use ghost_exchange_all_blocks so non-leaf parents also get valid
      * ghost zones (needed by ghost_fill_from_coarser during subcycling). */
