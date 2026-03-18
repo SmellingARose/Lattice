@@ -79,6 +79,7 @@ static void print_usage(void)
     fprintf(stderr, "  --chi_coarsen <float>  Coarsening threshold (default 0.01)\n");
     fprintf(stderr, "  --regrid_every <int>   Regrid check interval (default 1)\n");
     fprintf(stderr, "  --amr-levels <int>    Initial data solver levels (default: max-level)\n");
+    fprintf(stderr, "  --diag_level <int>     Fire diagnostics at this AMR level's dt (-1=off)\n");
     fprintf(stderr, "\nInitial data:\n");
     fprintf(stderr, "  --hispid               Force HiSpID (high-spin) initial data\n");
     fprintf(stderr, "\nBoundary conditions:\n");
@@ -227,6 +228,8 @@ int main(int argc, char **argv)
             p.amr.regrid_every = atoi(argv[++a]);
         } else if (strcmp(argv[a], "--amr-levels") == 0 && a + 1 < argc) {
             p.amr.solver_levels = atoi(argv[++a]);
+        } else if (strcmp(argv[a], "--diag_level") == 0 && a + 1 < argc) {
+            p.diag_level = atoi(argv[++a]);
         /* CCZ4 constraint damping */
         } else if (strcmp(argv[a], "--kappa1") == 0 && a + 1 < argc) {
             p.ccz4.kappa1 = atof(argv[++a]);

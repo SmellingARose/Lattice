@@ -11,6 +11,13 @@
 
 #include "device.h"
 #include <stdbool.h>
+#include <stddef.h>  /* for NULL */
+
+/* Subcycle diagnostic callback type.
+ * Fires after each step at a specified AMR level during subcycling.
+ * mesh is const void* to avoid circular include with mesh.h. */
+typedef void (*subcycle_diag_fn)(const void *mesh, double time,
+                                  int level, void *ctx);
 
 EXTERN_C_BEGIN
 
@@ -116,6 +123,15 @@ typedef struct {
     double kappa_em;      /* EM constraint damping (default 0.1)    */
 
     bc_type_t bc_type;    /* BC_SOMMERFELD or BC_CONSTRAINT_PRESERVING */
+
+    /* Subcycle diagnostic callback: fires after each step at diag_level.
+     * Use for fine-cadence BH tracking and Psi4 extraction.
+     * CLI: --diag_level N (default -1 = disabled, 0 = base level only).
+     * Ref: GRChombo specificPostTimeStep at extraction_level,
+     *      BAM extraction at level-3 dt, ET Multipole at out_every. */
+    subcycle_diag_fn subcycle_diag;  /* callback (NULL = disabled) */
+    int    diag_level;    /* fire callback at this level's dt (-1 = off) */
+    void  *diag_ctx;      /* user context (tracker, psi4_ws, FILE*, etc.) */
 } sim_params_t;
 
 /* Default parameter initialization */
@@ -179,6 +195,11 @@ static inline sim_params_t default_params(void)
     /* Boundary conditions: CP by default (better constraint preservation,
      * negligible overhead). Ref: arXiv:1212.2901 */
     p.bc_type = BC_CONSTRAINT_PRESERVING;
+
+    /* Subcycle diagnostics: disabled by default */
+    p.subcycle_diag = NULL;
+    p.diag_level    = -1;
+    p.diag_ctx      = NULL;
 
     return p;
 }

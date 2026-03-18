@@ -571,6 +571,12 @@ static void subcycle_level(mesh_t *m, const sim_params_t *p,
             b->time = t_start + dt_level;
     }
 
+    /* Subcycle diagnostic callback: fire after each step at diag_level.
+     * Enables fine-cadence BH tracking and Psi4 extraction.
+     * Ref: GRChombo specificPostTimeStep at extraction_level. */
+    if (p->subcycle_diag && level == p->diag_level)
+        p->subcycle_diag(m, t_start + dt_level, level, p->diag_ctx);
+
     /* Subcycle finer levels: 2 sub-steps at dt/2 */
     if (level < m->max_level) {
         subcycle_level(m, p, level + 1, dt_level / 2.0, t_start, 0);
@@ -819,6 +825,15 @@ static void subcycle_level_gpu(mesh_t *m, const sim_params_t *p,
     double frac = (level > 0) ? sub_step * 0.5 : 0.0;
 
     step_level_gpu(m, p, level, dt_level, frac);
+
+    /* Subcycle diagnostic callback.
+     * NOTE: GPU data must be synced to host for the callback to read
+     * valid field values. This is a PCIe transfer — use sparingly.
+     * Only fires at the specified diag_level, not every level. */
+    if (p->subcycle_diag && level == p->diag_level) {
+        gpu_sync_all_to_host(m);
+        p->subcycle_diag(m, t_start + dt_level, level, p->diag_ctx);
+    }
 
     /* Subcycle finer levels: 2 sub-steps at dt/2 */
     if (level < m->max_level) {

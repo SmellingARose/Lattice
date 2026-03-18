@@ -109,6 +109,72 @@
 /* Forward declaration — defined in src/io/output.c, no header. */
 extern void output_mesh_1d_slice(const mesh_t *m, int step, double time);
 
+/* Forward declaration */
+static double tracker_separation(const bh_tracker_t *tr);
+
+/* ====================================================================
+ * Subcycle diagnostic callback: fine-cadence Psi4 + BH tracking.
+ *
+ * Fires after each step at diag_level during subcycling.
+ * Extracts Psi4 at two radii and updates BH positions.
+ * Writes to a separate fine-cadence CSV for waveform analysis.
+ *
+ * Ref: BAM uses dt≈0.3M, Samurai resampled to 0.1M.
+ * ==================================================================== */
+typedef struct {
+    psi4_workspace_t *psi4_ws1;
+    psi4_workspace_t *psi4_ws2;
+    bh_tracker_t     *tracker;
+    FILE             *fp;
+    int               n_calls;
+} subcycle_diag_ctx_t;
+
+static void subcycle_diag_callback(const void *mesh_ptr, double time,
+                                    int level, void *ctx_ptr)
+{
+    const mesh_t *m = (const mesh_t *)mesh_ptr;
+    subcycle_diag_ctx_t *ctx = (subcycle_diag_ctx_t *)ctx_ptr;
+    (void)level;
+
+    /* BH position update (cheap — lapse min search) */
+    bh_tracker_update_positions(ctx->tracker, m);
+    double sep = tracker_separation(ctx->tracker);
+
+    /* Psi4 extraction at both radii */
+    psi4_extract(ctx->psi4_ws1, m);
+    psi4_extract(ctx->psi4_ws2, m);
+
+    /* (l=2, m=2) mode from radius 1 */
+    double psi4_re = 0.0, psi4_im = 0.0, psi4_amp = 0.0;
+    int mi22 = 4;  /* mode index for (l=2, m=2) */
+    if (mi22 < ctx->psi4_ws1->n_modes) {
+        psi4_re  = ctx->psi4_ws1->mode_re[mi22];
+        psi4_im  = ctx->psi4_ws1->mode_im[mi22];
+        psi4_amp = sqrt(psi4_re * psi4_re + psi4_im * psi4_im);
+    }
+
+    /* Write to fine-cadence CSV */
+    if (ctx->fp) {
+        fprintf(ctx->fp, "%.6f,%.6f,%.6f,%.6e,%.6e,%.6e",
+                time, sep,
+                ctx->tracker->bh[0].lapse_min < ctx->tracker->bh[1].lapse_min
+                    ? ctx->tracker->bh[0].lapse_min : ctx->tracker->bh[1].lapse_min,
+                psi4_re, psi4_im, psi4_amp);
+        /* Per-BH positions */
+        for (int i = 0; i < ctx->tracker->n_bh_initial; i++) {
+            if (ctx->tracker->bh[i].status == BH_STATUS_ACTIVE)
+                fprintf(ctx->fp, ",%.6f,%.6f,%.6f",
+                        ctx->tracker->bh[i].center[0],
+                        ctx->tracker->bh[i].center[1],
+                        ctx->tracker->bh[i].center[2]);
+            else
+                fprintf(ctx->fp, ",nan,nan,nan");
+        }
+        fprintf(ctx->fp, "\n");
+        if (++ctx->n_calls % 10 == 0) fflush(ctx->fp);
+    }
+}
+
 /* ====================================================================
  * Physical parameters
  * ====================================================================
@@ -440,6 +506,28 @@ int main(void)
                                            psi4_center, AH_REMNANT_RGUESS);
     printf("        AH finder: 1 remnant (%dx%d, r_guess = %.1f M)\n\n",
            AH_REMNANT_NTHETA, AH_REMNANT_NPHI, AH_REMNANT_RGUESS);
+
+    /* Fine-cadence subcycle diagnostics: Psi4 + BH tracking at level 5.
+     * dt_level5 = dt_base / 2^5 = 12 / 32 = 0.375M (matches BAM ~0.3M).
+     * Writes to separate CSV for waveform analysis. */
+    subcycle_diag_ctx_t sc_ctx;
+    sc_ctx.psi4_ws1 = psi4_ws1;
+    sc_ctx.psi4_ws2 = psi4_ws2;
+    sc_ctx.tracker  = tracker;
+    sc_ctx.n_calls  = 0;
+    sc_ctx.fp = fopen("build/inspiral_fine_psi4.csv", "w");
+    if (sc_ctx.fp) {
+        fprintf(sc_ctx.fp, "time,separation,alpha_min,"
+                "psi4_22_re,psi4_22_im,psi4_22_amp");
+        for (int i = 0; i < n_bh; i++)
+            fprintf(sc_ctx.fp, ",bh%d_x,bh%d_y,bh%d_z", i, i, i);
+        fprintf(sc_ctx.fp, "\n");
+    }
+    p.subcycle_diag = subcycle_diag_callback;
+    p.diag_level    = 5;   /* dt = 12M / 2^5 = 0.375M */
+    p.diag_ctx      = &sc_ctx;
+    printf("        Fine Psi4: level %d, dt = %.3f M (BAM uses ~0.3M)\n\n",
+           p.diag_level, p.dt / (1 << p.diag_level));
 
     /* -- Initial diagnostics ------------------------------------------- */
     double lx, ly, lz;
@@ -895,6 +983,7 @@ int main(void)
     printf("  ==================================================\n\n");
 
     /* -- Cleanup ------------------------------------------------------- */
+    if (sc_ctx.fp) fclose(sc_ctx.fp);
     if (diag_fp) fclose(diag_fp);
     bh_tracker_write_mergers(tracker, "build/inspiral_mergers.log");
     bh_tracker_free(tracker);
