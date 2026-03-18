@@ -60,7 +60,7 @@ GRChombo can handle. No charge, no spin, no Maxwell, no AMR. Uniform grid only.
 - Sommerfeld radiative boundary conditions
 - Puncture initial data (Brill-Lindquist for 1-2 BHs)
 - Psi4 / Weyl4 extraction
-- Algebraic enforcement: det(gambar)=1, tr(Abar)=0
+- Algebraic enforcement: det(gambar)=1, tr(Abar)=0, chi≥1e-4, lapse≥1e-4
 
 ### Phase 2: Novel Extensions
 
@@ -215,7 +215,13 @@ work on AMR meshes.
 - **N-body initial data:** Covering grid FAS multigrid constraint solver. Level-by-level from coarse to fine, each AMR level solved by creating a single temporary uniform grid spanning all blocks, running proven single-grid FAS (FMG + V-cycles + 8-color Newton-GS smoother). BY 1-field + HiSpID 4-field coupled solvers. No inter-block ghost exchange during MG — zero risk of cross-level corruption. FMG converges in 1 pass per level. Replaces old composite FAS multigrid and JFNK+BiCGSTAB. Inspiral solver benchmarks: D10 binary Ham L2 = 9.76e-5 in 172s, 4-BH Ham L2 = 1.01e-4 in 145s. Solver runs once at t=0 on CPU; evolution uses GPU for time-stepping. File is `jfnk_solver.c/h` for API compatibility.
 - **Einstein-Maxwell:** 6 new evolved fields (E^i, B^i), conformal Maxwell evolution with constraint damping, EM stress-energy coupling to CCZ4 (gated by `--em` flag), charged puncture initial data via `--puncture M,x,y,z,Px,Py,Pz,Sx,Sy,Sz,Q`.
 - **Spin:** Bowen-York spinning punctures + HiSpID high-spin initial data (quasi-isotropic Kerr conformal metric, coupled 4-field relaxation).
-- **Apparent horizons:** Hyperbolic flow method (BHaHAHA-inspired) with 6th-order off-grid interpolation, mass/spin/area extraction, `--ah` CLI flag. Works on both single-grid and AMR meshes.
+- **Apparent horizons:** Hyperbolic flow method (BHaHAHA-inspired) with 6th-order off-grid
+  interpolation, mass/spin/area extraction, `--ah` CLI flag. Works on both single-grid and
+  AMR meshes. AH finder requires tracker offset < 20% of AH radius (verified at dx=0.031M).
+  Production inspiral (24×48 angular grid, tol=1e-4, 500 max iterations) uses AH-radius
+  excision for constraint norms: `mesh_constraint_l2_ex(m, tracker)` excludes spheres of
+  1.5×r_AH around each tracked BH. Falls back to lapse < 0.3 when AH not found.
+  Ref: BHaHAHA arXiv:2505.15912, Einstein Toolkit CarpetMask.
 - **Psi4 extraction:** Newman-Penrose Psi4 via 3+1 Weyl decomposition (Electric + Magnetic Weyl tensors), Gram-Schmidt tetrad, spin-weighted spherical harmonic decomposition via Wigner d-matrix, Gauss-Legendre × trapezoidal quadrature, block-aware AMR extraction. CLI: `--psi4`, `--psi4_every`, `--psi4_radius`, `--psi4_l_max`, `--psi4_n_theta`, `--psi4_n_phi`. CSV mode output.
 - **CCE worldtube output:** SpECTRE-compatible AdmMetricNodal HDF5 format for
   Cauchy-Characteristic Evolution. Interpolates conformal CCZ4 fields on extraction
