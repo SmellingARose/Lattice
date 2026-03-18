@@ -169,11 +169,11 @@ extern void output_mesh_1d_slice(const mesh_t *m, int step, double time);
 /* ====================================================================
  * Apparent horizon parameters (individual BHs)
  * ==================================================================== */
-#define AH_NTHETA     12
-#define AH_NPHI       24
+#define AH_NTHETA     24
+#define AH_NPHI       48
 #define AH_RGUESS     0.5
-#define AH_TOL        1.0e-2
-#define AH_MAXITER    200
+#define AH_TOL        1.0e-4
+#define AH_MAXITER    500
 
 /* ====================================================================
  * Remnant apparent horizon parameters (post-merger)

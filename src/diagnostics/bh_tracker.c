@@ -55,11 +55,13 @@ bh_tracker_t *bh_tracker_alloc(int n_bh, const puncture_data_t bhs[],
         b->merged_into = -1;
         b->merge_time = -1.0;
 
-        /* AH workspace: initial radius guess = M/2 (isotropic Schwarzschild) */
-        double r_guess = bhs[i].mass / 2.0;
-        if (r_guess < 0.1) r_guess = 0.5;
+        /* AH workspace: r_guess = 0.5M (conservative — tolerates center offset
+         * from lapse-minimum tracking at coarse resolution).
+         * Don't override eta — default 5.0 is more stable than 10.0.
+         * Ref: BHaHAHA arXiv:2505.15912 uses 0.8 * R_search */
+        double r_guess = 0.5 * bhs[i].mass;
+        if (r_guess < 0.3) r_guess = 0.5;
         tr->ah[i] = ah_alloc(ah_n_theta, ah_n_phi, bhs[i].center, r_guess);
-        if (tr->ah[i]) tr->ah[i]->eta = 10.0;
     }
 
     return tr;
@@ -199,10 +201,21 @@ void bh_tracker_find_horizons(bh_tracker_t *tr, const mesh_t *m,
         ah_workspace_t *ws = tr->ah[i];
         if (!ws) continue;
 
-        /* Update AH center to current BH position */
+        /* Update AH center to current BH position and reinitialize
+         * the surface to r_guess. Without this, a previous failed/diverged
+         * attempt leaves garbage in h[] that corrupts the next find. */
         ws->center[0] = tr->bh[i].center[0];
         ws->center[1] = tr->bh[i].center[1];
         ws->center[2] = tr->bh[i].center[2];
+        {
+            double r_guess = 0.5 * tr->bh[i].initial_mass;
+            if (r_guess < 0.3) r_guess = 0.5;
+            int np = ws->n_theta * ws->n_phi;
+            for (int p = 0; p < np; p++) {
+                ws->h[p] = r_guess;
+                ws->v[p] = 0.0;
+            }
+        }
 
         int conv = ah_find_amr(ws, m, tol, max_iter, 0);
         if (conv) {
@@ -261,11 +274,13 @@ void bh_tracker_check_mergers(bh_tracker_t *tr, double time)
                 rem->merged_into = -1;
                 rem->merge_time = -1.0;
 
-                /* Allocate AH workspace for remnant */
-                double r_guess = rem->initial_mass / 2.0;
+                /* Allocate AH workspace for remnant.
+                 * r_guess larger than individual BHs — remnant horizon
+                 * is bigger than either parent. */
+                double r_guess = rem->initial_mass;
+                if (r_guess < 0.5) r_guess = 0.5;
                 tr->ah[rid] = ah_alloc(tr->ah_n_theta, tr->ah_n_phi,
                                         rem->center, r_guess);
-                if (tr->ah[rid]) tr->ah[rid]->eta = 10.0;
 
                 /* Mark parents as merged */
                 tr->bh[i].status = BH_STATUS_MERGED;
