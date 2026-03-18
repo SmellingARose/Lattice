@@ -147,11 +147,11 @@ extern void output_mesh_1d_slice(const mesh_t *m, int step, double time);
 /* ====================================================================
  * Diagnostic schedule
  * ==================================================================== */
-#define DIAG_EVERY    1
+#define DIAG_EVERY    1     /* every base step = 12M (coarser than ET's 2.56M) */
 #define REGRID_EVERY  1
 #define SLICE_EVERY   200
-#define PSI4_EVERY    1
-#define AH_EVERY      1
+#define PSI4_EVERY    1     /* matches DIAG_EVERY */
+#define AH_EVERY      1     /* matches DIAG_EVERY */
 
 /* ====================================================================
  * Wave extraction parameters
