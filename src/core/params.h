@@ -129,7 +129,8 @@ typedef struct {
      * CLI: --diag_level N (default -1 = disabled, 0 = base level only).
      * Ref: GRChombo specificPostTimeStep at extraction_level,
      *      BAM extraction at level-3 dt, ET Multipole at out_every. */
-    subcycle_diag_fn subcycle_diag;  /* callback (NULL = disabled) */
+    subcycle_diag_fn subcycle_diag;      /* CPU callback (NULL = disabled) */
+    subcycle_diag_fn subcycle_diag_gpu;  /* GPU callback — no host sync */
     int    diag_level;    /* fire callback at this level's dt (-1 = off) */
     void  *diag_ctx;      /* user context (tracker, psi4_ws, FILE*, etc.) */
 } sim_params_t;
@@ -197,9 +198,10 @@ static inline sim_params_t default_params(void)
     p.bc_type = BC_CONSTRAINT_PRESERVING;
 
     /* Subcycle diagnostics: disabled by default */
-    p.subcycle_diag = NULL;
-    p.diag_level    = -1;
-    p.diag_ctx      = NULL;
+    p.subcycle_diag     = NULL;
+    p.subcycle_diag_gpu = NULL;
+    p.diag_level        = -1;
+    p.diag_ctx          = NULL;
 
     return p;
 }

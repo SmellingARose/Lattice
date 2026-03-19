@@ -827,12 +827,16 @@ static void subcycle_level_gpu(mesh_t *m, const sim_params_t *p,
     step_level_gpu(m, p, level, dt_level, frac);
 
     /* Subcycle diagnostic callback.
-     * NOTE: GPU data must be synced to host for the callback to read
-     * valid field values. This is a PCIe transfer — use sparingly.
-     * Only fires at the specified diag_level, not every level. */
-    if (p->subcycle_diag && level == p->diag_level) {
-        gpu_sync_all_to_host(m);
-        p->subcycle_diag(m, t_start + dt_level, level, p->diag_ctx);
+     * GPU path: call GPU callback directly on device-resident data.
+     * CPU path (fallback): sync to host, call CPU callback.
+     * Ref: AthenaK keeps data on device, uses Kokkos reduction for scalars. */
+    if (level == p->diag_level) {
+        if (p->subcycle_diag_gpu) {
+            p->subcycle_diag_gpu(m, t_start + dt_level, level, p->diag_ctx);
+        } else if (p->subcycle_diag) {
+            gpu_sync_all_to_host(m);
+            p->subcycle_diag(m, t_start + dt_level, level, p->diag_ctx);
+        }
     }
 
     /* Subcycle finer levels: 2 sub-steps at dt/2 */

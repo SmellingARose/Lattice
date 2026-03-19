@@ -201,13 +201,17 @@ void bh_tracker_find_horizons(bh_tracker_t *tr, const mesh_t *m,
         ah_workspace_t *ws = tr->ah[i];
         if (!ws) continue;
 
-        /* Update AH center to current BH position and reinitialize
-         * the surface to r_guess. Without this, a previous failed/diverged
-         * attempt leaves garbage in h[] that corrupts the next find. */
+        /* Update AH center to current BH position.
+         * Warm-start: reuse previous converged surface (h[]).
+         * Cold-start only if previous find failed (mass_irr == 0).
+         * Warm-start cuts iterations from ~500 to ~20-50.
+         * Ref: AHFinderDirect reset_horizon_after_not_finding,
+         *      SpEC reuses last converged surface for tracking. */
         ws->center[0] = tr->bh[i].center[0];
         ws->center[1] = tr->bh[i].center[1];
         ws->center[2] = tr->bh[i].center[2];
-        {
+        if (tr->bh[i].mass_irr <= 0.0) {
+            /* Cold start: previous find failed or first call */
             double r_guess = 0.5 * tr->bh[i].initial_mass;
             if (r_guess < 0.3) r_guess = 0.5;
             int np = ws->n_theta * ws->n_phi;
@@ -216,6 +220,7 @@ void bh_tracker_find_horizons(bh_tracker_t *tr, const mesh_t *m,
                 ws->v[p] = 0.0;
             }
         }
+        /* else: warm start — h[] retains previous converged surface */
 
         int conv = ah_find_amr(ws, m, tol, max_iter, 0);
         if (conv) {
