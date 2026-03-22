@@ -181,8 +181,9 @@ work on AMR meshes.
     recursive subcycle on device. `fields_old` buffer for temporal
     interpolation. `hip_cross_level_ghost_fill` kernel reads from coarser
     pack with linear temporal interpolation. `gpu_ensure_level_packs()`
-    builds packs + cross-level maps on first step or regrid. Single
-    `gpu_sync_all_to_host()` at end of global step.
+    builds packs + cross-level maps on first step or regrid. Data stays
+    on device after subcycling; `gpu_sync_all_to_host()` called by main.c
+    only when CPU-only work is needed.
   - *Solver:* GPU solver removed (produced inf residuals at inspiral scale).
     CPU covering grid FAS always used — FMG converges in 1 pass per level,
     no inter-block ghost exchange during MG. ~2800 lines of GPU solver backend
@@ -198,9 +199,8 @@ work on AMR meshes.
   **Conditional host sync:** `gpu_sync_all_to_host()` (now public in `rk4.h`)
   removed from unconditional post-step path in `rk4_step_mesh`. main.c
   computes per-step need flags and syncs ONCE only when CPU-only work is
-  required (regrid, checkpoint, output, AH finder, BH tracker, Psi4, CCE).
-  Steps with no diagnostics skip the ~1.2 GB transfer entirely. Diagnostics
-  still use CPU mesh functions after sync (volume-weighted multi-level norms).
+  required (regrid, checkpoint, output, AH finder, BH tracker, CCE).
+  Steps with no diagnostics skip the ~1.2 GB transfer entirely.
   **GPU-native diagnostics in main.c:** Constraint L2 and Psi4 extraction
   run directly on device-resident level packs when GPU AMR is active.
   `gpu_constraint_l2()` / `gpu_momentum_l2()` loop over level packs using
@@ -208,8 +208,13 @@ work on AMR meshes.
   multi-level volume-weighted combination). `gpu_psi4_extract()` activates
   level-0 pack and calls `backend_psi4_extract_packed`. These diagnostics
   need zero host sync — only ~100 bytes of scalar results return to host.
+  **GPU BH tracker:** `bh_tracker_update_positions_packed()` uses
+  `backend_min_lapse_excl_packed` (N exclusion zones) on device-resident
+  level packs. Same successive lapse-min algorithm as CPU, but each pass
+  is a single GPU kernel launch. Only ~100 bytes transfer per BH.
+  HIP kernel: `hip_min_lapse_multi_excl_partial` with device-side
+  exclusion arrays. `find_horizons` (AH per BH) remains CPU-only.
   **Missing GPU kernels:** AH finder (fully CPU, biggest bottleneck at 5-50s),
-  BH tracker position update (could reuse `backend_min_lapse_packed` in a loop),
   CCE worldtube interpolation (similar to Psi4 infrastructure).
 - **Volume-weighted AMR constraint L2:** `mesh_constraint_l2()`, `mesh_momentum_l2()`,
   and packed variants (CPU + GPU) now weight each cell by dV=dx^3 and normalize by
@@ -295,6 +300,8 @@ work on AMR meshes.
   inspiral solver smoke (7-level D10 binary + 6-level 4-BH square, 4/4).
   N-body tracker (40/40: init, position update, AH loop, merger detection,
   bookkeeping, CSV output, 25-BH alloc, post-merger tracking).
+  GPU tracker (9/9: single BH, two-BH with exclusion, boosted BH tracking,
+  CPU vs packed path equivalence).
   N-body smoke tests:
   3-BH line, 5-BH pentagon. Total: 31 evolved fields (25 CCZ4 + 6 EM).
 
@@ -387,6 +394,7 @@ lattice/
 │   ├── test_nbody_track.c      # N-body BH tracker (init, position, AH, merger, CSV, 40/40)
 │   ├── test_inspiral_convergence.c  # AMR binary inspiral convergence (3 resolutions)
 │   ├── test_checkpoint.c       # Checkpoint/restart validation (uniform + AMR, 14/14)
+│   ├── test_gpu_tracker.c     # GPU vs CPU BH tracker (packed lapse-min, boosted BH, 9/9)
 │   └── test_gpu_debug.c       # GPU kernel isolation test (per-kernel sync barriers)
 ├── docs/
 │   ├── architecture.html       # consolidated architecture & design reference
@@ -429,6 +437,7 @@ make test-inspiral-solver  # Inspiral solver smoke test (8-level binary + 7-leve
 make test-nbody-track  # N-body BH tracker (init, position, AH, merger, CSV, 40/40)
 make test-inspiral-convergence  # AMR binary inspiral convergence (long run, ~hours)
 make test-checkpoint   # Checkpoint/restart (uniform + AMR, bitwise-identical)
+make test-gpu-tracker  # GPU vs CPU BH tracker (packed lapse-min, boosted BH, 9/9)
 make test-gpu-debug    # GPU kernel isolation test (requires BACKEND=gpu)
 make clean
 ```

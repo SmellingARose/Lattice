@@ -123,7 +123,7 @@ LDFLAGS = $(BACKEND_LIBS) $(HDF5_LIBS) -lm $(LTO_FLAGS)
 BUILD = build
 
 # Targets
-.PHONY: all debug test test-single-bh test-convergence test-constraints test-head-on test-amr-mesh test-amr-ghost test-amr-prolong test-amr-refine test-amr-evolve test-pack-evolve test-subcycle test-bowen-york test-hispid test-maxwell test-ah test-psi4 test-cce test-cp-bc test-inspiral test-inspiral-smoke test-inspiral-solver test-inspiral-convergence test-jfnk test-checkpoint test-nbody-track clean
+.PHONY: all debug test test-single-bh test-convergence test-constraints test-head-on test-amr-mesh test-amr-ghost test-amr-prolong test-amr-refine test-amr-evolve test-pack-evolve test-subcycle test-bowen-york test-hispid test-maxwell test-ah test-psi4 test-cce test-cp-bc test-inspiral test-inspiral-smoke test-inspiral-solver test-inspiral-convergence test-jfnk test-checkpoint test-nbody-track test-gpu-tracker clean
 
 all: $(BUILD)/lattice
 
@@ -386,6 +386,10 @@ test-gpu-debug: $(BUILD)/test_gpu_debug
 test-nbody-track: $(BUILD)/test_nbody_track
 	@echo "=== Running N-body BH tracker test ==="
 	$(BUILD)/test_nbody_track
+
+test-gpu-tracker: $(BUILD)/test_gpu_tracker
+	@echo "=== Running GPU vs CPU BH tracker test ==="
+	$(BUILD)/test_gpu_tracker
 
 clean:
 	rm -rf $(BUILD)
