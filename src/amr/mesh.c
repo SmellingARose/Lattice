@@ -17,6 +17,73 @@
 #include <stdint.h>
 #include <string.h>
 
+/*
+ * Hash table for O(1) block lookup by (level, lx1, lx2, lx3).
+ * Open addressing with linear probing. Key includes level to
+ * distinguish blocks at different refinement levels with the
+ * same logical coordinates.
+ *
+ * Persisted on mesh_t for use by mesh_find_block[_at].
+ * Rebuilt in mesh_rebuild_neighbors after every regrid.
+ */
+typedef struct {
+    uint64_t *keys;     /* hash keys (0 = empty slot) */
+    int      *values;   /* block IDs */
+    int       capacity; /* table size (power of 2) */
+    int       mask;     /* capacity - 1 for fast modulo */
+} block_hash_t;
+
+/* Encode (level, lx1, lx2, lx3) into a non-zero 64-bit key */
+static inline uint64_t block_hash_key(int level, int lx1, int lx2, int lx3)
+{
+    return ((uint64_t)(level + 1) << 48)
+         | ((uint64_t)(lx1 & 0xFFFF) << 32)
+         | ((uint64_t)(lx2 & 0xFFFF) << 16)
+         | (uint64_t)(lx3 & 0xFFFF);
+}
+
+static void block_hash_init(block_hash_t *ht, int n_entries)
+{
+    int cap = 16;
+    while (cap < 2 * n_entries) cap *= 2;
+    ht->capacity = cap;
+    ht->mask = cap - 1;
+    ht->keys = calloc(cap, sizeof(uint64_t));
+    ht->values = calloc(cap, sizeof(int));
+}
+
+static void block_hash_free(block_hash_t *ht)
+{
+    free(ht->keys);
+    free(ht->values);
+}
+
+static void block_hash_insert(block_hash_t *ht, int level,
+                                int lx1, int lx2, int lx3, int block_id)
+{
+    uint64_t key = block_hash_key(level, lx1, lx2, lx3);
+    int slot = (int)(key & ht->mask);
+    while (ht->keys[slot] != 0) {
+        if (ht->keys[slot] == key) { ht->values[slot] = block_id; return; }
+        slot = (slot + 1) & ht->mask;
+    }
+    ht->keys[slot] = key;
+    ht->values[slot] = block_id;
+}
+
+/* Returns block ID or -1 if not found */
+static int block_hash_find(const block_hash_t *ht, int level,
+                             int lx1, int lx2, int lx3)
+{
+    uint64_t key = block_hash_key(level, lx1, lx2, lx3);
+    int slot = (int)(key & ht->mask);
+    while (ht->keys[slot] != 0) {
+        if (ht->keys[slot] == key) return ht->values[slot];
+        slot = (slot + 1) & ht->mask;
+    }
+    return -1;
+}
+
 mesh_t *mesh_create_ex(int N_block, double L, rk_method_t method,
                        int n_fields)
 {
@@ -114,6 +181,10 @@ void mesh_free(mesh_t *m)
     }
     free(m->blocks);
     free(m->ghost_scratch);
+    if (m->block_hash) {
+        block_hash_free((block_hash_t *)m->block_hash);
+        free(m->block_hash);
+    }
     free(m);
 }
 
@@ -129,6 +200,14 @@ int mesh_num_leaves(const mesh_t *m)
 
 block_t *mesh_find_block(const mesh_t *m, int level, int lx1, int lx2, int lx3)
 {
+    /* O(1) hash lookup if hash table is built */
+    if (m->block_hash) {
+        int id = block_hash_find((const block_hash_t *)m->block_hash,
+                                 level, lx1, lx2, lx3);
+        return (id >= 0) ? m->blocks[id] : NULL;
+    }
+
+    /* Fallback: linear scan (before first mesh_rebuild_neighbors call) */
     for (int i = 0; i < m->num_blocks; i++) {
         block_t *b = m->blocks[i];
         if (!b) continue;
@@ -143,6 +222,47 @@ block_t *mesh_find_block(const mesh_t *m, int level, int lx1, int lx2, int lx3)
 
 block_t *mesh_find_block_at(const mesh_t *m, double x, double y, double z)
 {
+    /* O(max_level) hash-based lookup: convert physical (x,y,z) to logical
+     * block coordinates at each level, starting from finest. First leaf
+     * block found is the answer (finest level wins).
+     *
+     * Domain: [-L/2, +L/2] in each dimension.
+     * At level l: block_size = L / 2^l, blocks_per_side = 2^l.
+     * Logical index: lx = floor((x + L/2) / block_size). */
+    if (m->block_hash) {
+        const block_hash_t *ht = (const block_hash_t *)m->block_hash;
+        double half_L = m->L * 0.5;
+        double px = x + half_L;
+        double py = y + half_L;
+        double pz = z + half_L;
+
+        /* Check out of domain */
+        if (px < 0.0 || px >= m->L ||
+            py < 0.0 || py >= m->L ||
+            pz < 0.0 || pz >= m->L)
+            return NULL;
+
+        /* Search from finest to coarsest — first leaf hit is the answer */
+        for (int level = m->max_level; level >= 0; level--) {
+            double block_size = m->L / (double)(1 << level);
+            int lx = (int)(px / block_size);
+            int ly = (int)(py / block_size);
+            int lz = (int)(pz / block_size);
+
+            /* Clamp to valid range (handles edge case at x = +L/2) */
+            int bps = 1 << level;
+            if (lx >= bps) lx = bps - 1;
+            if (ly >= bps) ly = bps - 1;
+            if (lz >= bps) lz = bps - 1;
+
+            int id = block_hash_find(ht, level, lx, ly, lz);
+            if (id >= 0 && m->blocks[id] && m->blocks[id]->is_leaf)
+                return m->blocks[id];
+        }
+        return NULL;
+    }
+
+    /* Fallback: linear scan (before first mesh_rebuild_neighbors call) */
     block_t *best = NULL;
     int best_level = -1;
 
@@ -153,7 +273,6 @@ block_t *mesh_find_block_at(const mesh_t *m, double x, double y, double z)
         double dx = b->grid->dx;
         int N = b->grid->N;
 
-        /* Check if (x,y,z) falls within this block's interior cell range */
         int inside = 1;
         for (int d = 0; d < 3; d++) {
             double lo = b->origin[d];
@@ -266,76 +385,6 @@ static int blocks_per_side(const mesh_t *m, int level)
     return (1 << level);
 }
 
-/*
- * Hash table for O(1) block lookup by (level, lx1, lx2, lx3).
- * Open addressing with linear probing. Key includes level to
- * distinguish blocks at different refinement levels with the
- * same logical coordinates.
- *
- * Built locally in mesh_rebuild_neighbors, freed after use.
- * Reduces neighbor-finding from O(N^2) to O(N) for N blocks.
- */
-typedef struct {
-    uint64_t *keys;     /* hash keys (0 = empty slot) */
-    int      *values;   /* block IDs */
-    int       capacity; /* table size (power of 2) */
-    int       mask;     /* capacity - 1 for fast modulo */
-} block_hash_t;
-
-/* Encode (level, lx1, lx2, lx3) into a non-zero 64-bit key */
-static inline uint64_t block_hash_key(int level, int lx1, int lx2, int lx3)
-{
-    /* Pack: level in bits 48-63, coords in lower 48 bits (16 each).
-     * Add 1 to ensure key is never zero (zero = empty slot). */
-    return ((uint64_t)(level + 1) << 48)
-         | ((uint64_t)(lx1 & 0xFFFF) << 32)
-         | ((uint64_t)(lx2 & 0xFFFF) << 16)
-         | (uint64_t)(lx3 & 0xFFFF);
-}
-
-static void block_hash_init(block_hash_t *ht, int n_entries)
-{
-    /* Size: next power of 2 >= 2 * n_entries (load factor <= 0.5) */
-    int cap = 16;
-    while (cap < 2 * n_entries) cap *= 2;
-    ht->capacity = cap;
-    ht->mask = cap - 1;
-    ht->keys = calloc(cap, sizeof(uint64_t));
-    ht->values = calloc(cap, sizeof(int));
-}
-
-static void block_hash_free(block_hash_t *ht)
-{
-    free(ht->keys);
-    free(ht->values);
-}
-
-static void block_hash_insert(block_hash_t *ht, int level,
-                                int lx1, int lx2, int lx3, int block_id)
-{
-    uint64_t key = block_hash_key(level, lx1, lx2, lx3);
-    int slot = (int)(key & ht->mask);
-    while (ht->keys[slot] != 0) {
-        if (ht->keys[slot] == key) { ht->values[slot] = block_id; return; }
-        slot = (slot + 1) & ht->mask;
-    }
-    ht->keys[slot] = key;
-    ht->values[slot] = block_id;
-}
-
-/* Returns block ID or -1 if not found */
-static int block_hash_find(const block_hash_t *ht, int level,
-                             int lx1, int lx2, int lx3)
-{
-    uint64_t key = block_hash_key(level, lx1, lx2, lx3);
-    int slot = (int)(key & ht->mask);
-    while (ht->keys[slot] != 0) {
-        if (ht->keys[slot] == key) return ht->values[slot];
-        slot = (slot + 1) & ht->mask;
-    }
-    return -1;
-}
-
 void mesh_rebuild_neighbors(mesh_t *m)
 {
     /* First pass: update max_level */
@@ -347,16 +396,22 @@ void mesh_rebuild_neighbors(mesh_t *m)
             m->max_level = b->loc.level;
     }
 
-    /* Build hash table for O(1) block lookup by (level, lx1, lx2, lx3).
-     * Replaces the O(N) linear scan in mesh_find_block(). */
-    block_hash_t ht;
-    block_hash_init(&ht, m->num_blocks);
+    /* Build/rebuild persistent hash table for O(1) block lookup.
+     * Used by mesh_find_block, mesh_find_block_at, and neighbor search. */
+    if (m->block_hash) {
+        block_hash_free((block_hash_t *)m->block_hash);
+        free(m->block_hash);
+    }
+    block_hash_t *ht_p = malloc(sizeof(block_hash_t));
+    block_hash_init(ht_p, m->num_blocks);
     for (int i = 0; i < m->num_blocks; i++) {
         block_t *b = m->blocks[i];
         if (!b) continue;
-        block_hash_insert(&ht, b->loc.level,
+        block_hash_insert(ht_p, b->loc.level,
                           b->loc.lx1, b->loc.lx2, b->loc.lx3, b->id);
     }
+    m->block_hash = ht_p;
+    block_hash_t ht = *ht_p;  /* local copy for neighbor search below */
 
     /* Second pass: rebuild neighbors for every block */
     for (int i = 0; i < m->num_blocks; i++) {
@@ -447,6 +502,6 @@ void mesh_rebuild_neighbors(mesh_t *m)
         }
     }
 
-    block_hash_free(&ht);
+    /* Hash persists on m->block_hash for mesh_find_block[_at] */
 }
 

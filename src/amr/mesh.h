@@ -51,6 +51,11 @@ typedef struct mesh_s {
     meshblock_pack_t *leaf_pack;
     meshblock_pack_t *level_packs[MAX_AMR_LEVELS];
     int         packs_dirty;
+
+    /* Persistent hash table for O(1) block lookup by (level, lx, ly, lz).
+     * Built in mesh_rebuild_neighbors, reused by mesh_find_block[_at].
+     * Opaque pointer to block_hash_t (defined in mesh.c). */
+    void       *block_hash;
 } mesh_t;
 
 /*
@@ -121,8 +126,8 @@ void mesh_compact(mesh_t *m);
 
 /*
  * Find the finest-level leaf block whose interior contains point (x,y,z).
- * Linear scan of leaf blocks. Returns NULL if outside all blocks.
- * O(n_blocks) per call — adequate for AH finder (~1000 calls × ~100 blocks).
+ * O(max_level) with persistent hash table (built by mesh_rebuild_neighbors).
+ * Falls back to O(n_blocks) linear scan if hash not yet built.
  */
 block_t *mesh_find_block_at(const mesh_t *m, double x, double y, double z);
 

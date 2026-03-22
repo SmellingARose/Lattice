@@ -3,6 +3,32 @@
 > **Note:** When adding/removing/renaming files or functions, also update
 > `docs/architecture.html` — the living map of the codebase structure.
 
+## 2026-03-22: Persistent spatial hash for O(1) block lookup
+
+**Problem:** `mesh_find_block_at(x,y,z)` used O(n_blocks) linear scan. With
+1184 blocks at 11 AMR levels, the AH finder cold-start (500 iterations ×
+1152 angular points) took ~30 min due to ~681M block comparisons.
+
+**Fix:** Persist the existing `block_hash_t` (open-addressing, linear probing)
+on `mesh_t`. Built in `mesh_rebuild_neighbors` (already existed locally, just
+stop freeing it). `mesh_find_block_at` now converts physical (x,y,z) to logical
+block coordinates at each level (finest→coarsest), does O(1) hash lookup per
+level. Total cost: O(max_level) per call instead of O(n_blocks).
+
+`mesh_find_block(level, lx, ly, lz)` also accelerated — single hash probe.
+
+**Benchmark (512 leaves, 3 levels, 50k lookups):**
+- Hash: 0.008s vs Linear: 0.040s → **4.7x speedup**
+- At production scale (1184 blocks, 11 levels): estimated **~100x**
+- AH finder cold-start: ~30 min → ~18 seconds
+
+**Files changed:** `src/amr/mesh.c` (hash moved to file scope, persisted on
+mesh_t, used in both find functions), `src/amr/mesh.h` (added `void *block_hash`
+to `mesh_t`, updated docstring). Zero physics changes.
+
+**Tests:** AH finder 13/13, Psi4 15/15, Maxwell 15/15 — all pass with
+identical results between hash and linear fallback paths.
+
 ## 2026-03-13: Inspiral test — production dissipation + 2-radius Psi4
 
 **Per-field sigma + CAKO + SSL enabled in inspiral test.** Previously the test

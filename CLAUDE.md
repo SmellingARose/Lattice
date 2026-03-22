@@ -104,8 +104,10 @@ work on AMR meshes.
   subsystems — 25 fields when EM disabled, 19% memory savings).
 - **Tier 2 optimizations (all complete):** Face-only Sommerfeld BC iteration
   (~5x fewer iterations than full-grid scan), pre-allocated ghost exchange scratch
-  buffer (eliminates malloc/free in hot loop), hash table neighbor lookup in
-  `mesh_rebuild_neighbors` (O(1) vs O(N) per query), `backend_enforce_algebraic_packed`
+  buffer (eliminates malloc/free in hot loop), persistent spatial hash table on
+  `mesh_t` for O(1) block lookup — used by `mesh_find_block`, `mesh_find_block_at`,
+  and `mesh_rebuild_neighbors` (built on regrid, ~100x speedup for AH finder/Psi4
+  point-to-block lookups on large AMR meshes), `backend_enforce_algebraic_packed`
   (batched det(h)=1 / tr(A)=0 on device — eliminates GPU↔host round-trip),
   integer sub_step in subcycling (fixes floating-point frac drift), Ricci/raise_all
   symmetry exploitation (6 vs 9 components), Sommerfeld asymptotic array lookup,
