@@ -845,6 +845,8 @@ make clean              # rm -rf build/</code></pre>
 <tr><td><code>make test-checkpoint</code></td><td>Checkpoint/restart: uniform + AMR, bitwise-identical evolution after restart (14 tests)</td><td><span class="badge badge-green">Passing</span></td></tr>
 <tr><td><code>make test-gpu-tracker</code></td><td>GPU vs CPU BH tracker: single BH, two-BH exclusion, boosted BH motion tracking (9 tests)</td><td><span class="badge badge-green">Passing</span></td></tr>
 <tr><td><code>make test-gpu-debug</code></td><td>GPU kernel isolation test with per-kernel sync barriers (requires BACKEND=gpu)</td><td><span class="badge badge-green">Passing</span></td></tr>
+<tr><td><code>make test-qnm</code></td><td>Schwarzschild QNM ringdown: AMR dx=0.5M, Psi4(2,0) frequency+damping vs Leaver (~1 hr CPU)</td><td><span class="badge badge-yellow">Pending</span></td></tr>
+<tr><td><code>make test-qnm-pub</code></td><td>Publication QNM: dx=M/8, 2-radius Psi4, (2,0)+(2,2) modes, AH mass, 13 checks (GPU, ~10 min H100)</td><td><span class="badge badge-yellow">Pending</span></td></tr>
 </table>
 
 <!-- ========================================== -->

@@ -391,5 +391,13 @@ test-gpu-tracker: $(BUILD)/test_gpu_tracker
 	@echo "=== Running GPU vs CPU BH tracker test ==="
 	$(BUILD)/test_gpu_tracker
 
+test-qnm: $(BUILD)/test_qnm_ringdown
+	@echo "=== Running Schwarzschild QNM ringdown test ==="
+	$(BUILD)/test_qnm_ringdown
+
+test-qnm-pub: $(BUILD)/test_qnm_publication
+	@echo "=== Running publication-quality QNM ringdown test ==="
+	$(BUILD)/test_qnm_publication
+
 clean:
 	rm -rf $(BUILD)

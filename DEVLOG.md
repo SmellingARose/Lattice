@@ -3,6 +3,28 @@
 > **Note:** When adding/removing/renaming files or functions, also update
 > `docs/architecture.html` — the living map of the codebase structure.
 
+## 2026-03-22: Schwarzschild QNM ringdown tests
+
+**Two tests added for validating Psi4 gravitational wave extraction against
+the known Schwarzschild l=2 quasi-normal mode (Leaver 1985):**
+
+**Quick test** (`test_qnm_ringdown.c`): N_block=32, L=64, 2 AMR levels,
+dx_fine=0.5M. Single BH, T=100M, Psi4(2,0) at r=15M. Measures QNM frequency
+and damping from zero crossings and peak decay. Expected ~10-20% accuracy.
+Runs in ~1 hr on CPU, ~0.7 GB memory.
+
+**Publication test** (`test_qnm_publication.c`): N_block=32, L=256, 6 AMR
+levels, dx_fine=M/8=0.125M. Psi4 at r=30M and r=50M (Richardson extrapolation),
+(2,0) and (2,2) modes, constraint + AH mass time series. 13 pass/fail checks:
+frequency within 5% of Leaver, damping within 15%, two-radius consistency <3%,
+(2,2) mode suppressed, AH mass conserved <1%. ~17 GB memory, needs GPU.
+
+**HTML doc** (`docs/qnm_ringdown.html`): Physics background, numerical setup,
+comparison table vs BAM/SpEC/GRChombo, results placeholder.
+
+Known Schwarzschild l=2 QNM: ω_R = 0.37367/M, ω_I = 0.08896/M.
+Ref: Leaver (1985), Berti et al. (2009, arXiv:0905.2975).
+
 ## 2026-03-22: GPU BH tracker position update
 
 **New:** `bh_tracker_update_positions_packed()` runs successive lapse-minimum

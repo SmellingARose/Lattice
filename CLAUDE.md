@@ -395,10 +395,13 @@ lattice/
 │   ├── test_inspiral_convergence.c  # AMR binary inspiral convergence (3 resolutions)
 │   ├── test_checkpoint.c       # Checkpoint/restart validation (uniform + AMR, 14/14)
 │   ├── test_gpu_tracker.c     # GPU vs CPU BH tracker (packed lapse-min, boosted BH, 9/9)
-│   └── test_gpu_debug.c       # GPU kernel isolation test (per-kernel sync barriers)
+│   ├── test_gpu_debug.c       # GPU kernel isolation test (per-kernel sync barriers)
+│   ├── test_qnm_ringdown.c   # Schwarzschild QNM ringdown (AMR, dx=0.5M, quick)
+│   └── test_qnm_publication.c  # Publication QNM (dx=M/8, 2-radius Psi4, AH mass, GPU)
 ├── docs/
 │   ├── architecture.html       # consolidated architecture & design reference
 │   ├── amr_refinement_ratio.html  # equidistribution-optimal β=1.516 derivation
+│   ├── qnm_ringdown.html      # Schwarzschild QNM validation (physics + results)
 │   └── archive/                # older deep-dive guides (preserved, not primary)
 └── tools/
     ├── compute_amr_weights.py  # SymPy derivation of AMR stencil weights
@@ -439,6 +442,8 @@ make test-inspiral-convergence  # AMR binary inspiral convergence (long run, ~ho
 make test-checkpoint   # Checkpoint/restart (uniform + AMR, bitwise-identical)
 make test-gpu-tracker  # GPU vs CPU BH tracker (packed lapse-min, boosted BH, 9/9)
 make test-gpu-debug    # GPU kernel isolation test (requires BACKEND=gpu)
+make test-qnm          # Schwarzschild QNM ringdown (AMR, dx=0.5M, ~1 hr CPU)
+make test-qnm-pub      # Publication QNM (dx=M/8, 2-radius Psi4, AH, ~10 min GPU)
 make clean
 ```
 

@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lattice — Schwarzschild QNM Ringdown Validation</title>
+<style>
+  :root { --bg: #1a1a2e; --fg: #e0e0e0; --accent: #5dade2; --code-bg: #16213e;
+          --pass: #2ecc71; --fail: #e74c3c; --warn: #f39c12; --border: #333; }
+  body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg);
+         color: var(--fg); max-width: 900px; margin: 0 auto; padding: 2em;
+         line-height: 1.7; }
+  h1 { color: var(--accent); border-bottom: 2px solid var(--accent); padding-bottom: 0.3em; }
+  h2 { color: var(--accent); margin-top: 2em; }
+  h3 { color: #aaa; }
+  a { color: var(--accent); }
+  code { background: var(--code-bg); padding: 2px 6px; border-radius: 3px;
+         font-size: 0.95em; }
+  pre { background: var(--code-bg); padding: 1em; border-radius: 6px;
+        overflow-x: auto; border: 1px solid var(--border); }
+  table { border-collapse: collapse; width: 100%; margin: 1em 0; }
+  th, td { border: 1px solid var(--border); padding: 8px 12px; text-align: left; }
+  th { background: var(--code-bg); color: var(--accent); }
+  .eq { text-align: center; margin: 1.5em 0; font-size: 1.1em; font-style: italic; }
+  .pass { color: var(--pass); font-weight: bold; }
+  .fail { color: var(--fail); font-weight: bold; }
+  .pending { color: var(--warn); font-weight: bold; }
+  .note { background: var(--code-bg); border-left: 4px solid var(--accent);
+          padding: 1em; margin: 1em 0; border-radius: 0 6px 6px 0; }
+  .result-box { background: var(--code-bg); border: 2px solid var(--accent);
+                padding: 1.5em; margin: 1.5em 0; border-radius: 8px; }
+</style>
+</head>
+<body>
+
+<h1>Schwarzschild Quasi-Normal Mode Ringdown</h1>
+
+<p><strong>Purpose:</strong> Validate that Lattice correctly reproduces the known
+quasi-normal mode (QNM) spectrum of a Schwarzschild black hole. This is the
+standard first physics test for any numerical relativity code &mdash; if the
+gauge ringdown matches the analytically known QNM frequency and damping rate,
+the CCZ4 evolution equations, finite differencing, boundary conditions, and
+gauge conditions are all working correctly.</p>
+
+<p><strong>Date:</strong> 2026-03-22</p>
+
+<!-- ============================================================ -->
+<h2>1. Physical Setup</h2>
+
+<p>A single Schwarzschild black hole (M&nbsp;=&nbsp;1) is initialized using
+Brill-Lindquist puncture data on a conformally flat spatial slice. This is
+<em>not</em> the true Schwarzschild solution in isotropic coordinates &mdash;
+the conformal flatness assumption introduces a constraint-violating perturbation
+that must be damped by the evolution.</p>
+
+<p>The gauge conditions (1+log slicing for the lapse, Gamma-driver for the shift)
+drive the solution toward the <em>trumpet</em> representation of Schwarzschild,
+where the lapse approaches ~0.3 at the puncture. During this gauge adjustment,
+the spacetime "rings" at the black hole's characteristic quasi-normal mode
+frequencies &mdash; damped oscillations analogous to the ringing of a struck bell.</p>
+
+<h3>Quasi-Normal Modes</h3>
+
+<p>For a Schwarzschild BH, the fundamental l&nbsp;=&nbsp;2 QNM has complex
+frequency (Leaver 1985):</p>
+
+<div class="eq">
+  &omega; = &omega;<sub>R</sub> + i &omega;<sub>I</sub> =
+  (0.37367 &minus; 0.08896 i) / M
+</div>
+
+<p>This gives:</p>
+<table>
+<tr><th>Quantity</th><th>Formula</th><th>Value (M=1)</th></tr>
+<tr><td>Oscillation frequency</td><td>&omega;<sub>R</sub></td><td>0.37367 / M</td></tr>
+<tr><td>Damping rate</td><td>&omega;<sub>I</sub></td><td>0.08896 / M</td></tr>
+<tr><td>Period</td><td>T = 2&pi; / &omega;<sub>R</sub></td><td>16.81 M</td></tr>
+<tr><td>Damping time</td><td>&tau; = 1 / &omega;<sub>I</sub></td><td>11.24 M</td></tr>
+<tr><td>e-folding cycles</td><td>&omega;<sub>R</sub> / (2&pi; &omega;<sub>I</sub>)</td><td>0.67</td></tr>
+</table>
+
+<p>The signal decays by a factor of <em>e</em> every 11.24M, so after ~50M the
+QNM amplitude is down by ~e<sup>&minus;4.4</sup> &asymp; 0.012 of the initial
+value. We need to capture the first 2&ndash;4 cycles (t&nbsp;&asymp;&nbsp;40&ndash;100M)
+to measure the frequency and damping accurately.</p>
+
+<div class="note">
+<strong>Why (2,0) and not (2,2)?</strong> The initial perturbation from conformally
+flat data is axisymmetric (no angular momentum, no preferred azimuthal direction).
+The dominant mode excited is therefore l&nbsp;=&nbsp;2, m&nbsp;=&nbsp;0. The (2,2)
+mode, dominant in binary mergers, should be near zero for a single non-spinning BH.
+</div>
+
+<!-- ============================================================ -->
+<h2>2. Numerical Method</h2>
+
+<h3>Grid Parameters</h3>
+<table>
+<tr><th>Parameter</th><th>Value</th><th>Notes</th></tr>
+<tr><td>N (grid points per side)</td><td>64</td><td>Uniform grid, no AMR</td></tr>
+<tr><td>L (domain size)</td><td>40 M</td><td>Boundary at 20M from puncture</td></tr>
+<tr><td>dx (grid spacing)</td><td>0.625 M</td><td>~3.2 points per M near puncture</td></tr>
+<tr><td>dt (time step)</td><td>0.15625 M</td><td>CFL = 0.25</td></tr>
+<tr><td>T (evolution time)</td><td>150 M</td><td>~9 QNM periods</td></tr>
+<tr><td>Steps</td><td>~960</td><td></td></tr>
+</table>
+
+<h3>Psi4 Extraction</h3>
+<table>
+<tr><th>Parameter</th><th>Value</th></tr>
+<tr><td>Extraction radius</td><td>r = 10 M</td></tr>
+<tr><td>Angular resolution</td><td>16 &times; 32 (theta &times; phi)</td></tr>
+<tr><td>l_max</td><td>4</td></tr>
+<tr><td>Sampling cadence</td><td>Every 4 steps (&asymp; 0.625 M)</td></tr>
+</table>
+
+<h3>Evolution Scheme</h3>
+<ul>
+  <li><strong>Formulation:</strong> CCZ4 (arXiv:1106.2254)</li>
+  <li><strong>Time integrator:</strong> Classic RK4 (4 stages)</li>
+  <li><strong>Finite differences:</strong> 6th-order centered stencils</li>
+  <li><strong>Dissipation:</strong> 6th-order Kreiss-Oliger (&sigma; = 0.3)</li>
+  <li><strong>Gauge:</strong> 1+log slicing (c = 2) + Gamma-driver shift (&eta; = 1)</li>
+  <li><strong>Boundary:</strong> Constraint-preserving BCs (BAM-style, arXiv:1212.2901)</li>
+  <li><strong>Constraint damping:</strong> &kappa;<sub>1</sub> = 0.1, &kappa;<sub>2</sub> = 0</li>
+</ul>
+
+<h3>Measurement Procedure</h3>
+<ol>
+  <li><strong>Evolve</strong> from t&nbsp;=&nbsp;0 to t&nbsp;=&nbsp;150M, extracting
+    r&nbsp;&middot;&nbsp;&Psi;<sub>4</sub> (2,0) mode every 0.625M.</li>
+  <li><strong>Discard transient:</strong> Ignore t&nbsp;&lt;&nbsp;40M (initial gauge
+    adjustment and junk radiation).</li>
+  <li><strong>Frequency:</strong> Find zero crossings of Re(&Psi;<sub>4</sub><sup>(2,0)</sup>),
+    compute average half-period, invert to get &omega;<sub>R</sub>.</li>
+  <li><strong>Damping:</strong> Find local amplitude peaks of |Re(&Psi;<sub>4</sub><sup>(2,0)</sup>)|,
+    fit log(amplitude) vs time to extract slope = &minus;&omega;<sub>I</sub>.</li>
+</ol>
+
+<!-- ============================================================ -->
+<h2>3. Results</h2>
+
+<div class="result-box">
+  <h3>Status: <span class="pending">PENDING</span></h3>
+  <p>Test is running. Results will be filled in when complete.</p>
+</div>
+
+<h3>3.1 Psi4 Time Series</h3>
+<p><em>Placeholder: plot of Re(&Psi;<sub>4</sub><sup>(2,0)</sup>) vs t/M will go here.
+CSV data in <code>build/qnm_psi4.csv</code>.</em></p>
+
+<h3>3.2 QNM Frequency</h3>
+<table>
+<tr><th>Quantity</th><th>Measured</th><th>Expected</th><th>Error</th></tr>
+<tr><td>&omega;<sub>R</sub></td><td class="pending">pending</td><td>0.3737 / M</td><td class="pending">pending</td></tr>
+<tr><td>&omega;<sub>I</sub></td><td class="pending">pending</td><td>0.0890 / M</td><td class="pending">pending</td></tr>
+<tr><td>Lapse minimum</td><td class="pending">pending</td><td>&asymp; 0.3 (trumpet)</td><td></td></tr>
+<tr><td>Ham L2 (final)</td><td class="pending">pending</td><td>&lt; 1</td><td></td></tr>
+</table>
+
+<h3>3.3 Pass/Fail Criteria</h3>
+<table>
+<tr><th>Test</th><th>Criterion</th><th>Result</th></tr>
+<tr><td>Frequency match</td><td>&omega;<sub>R</sub> within 20% of 0.3737</td><td class="pending">pending</td></tr>
+<tr><td>Damping match</td><td>&omega;<sub>I</sub> within 50% of 0.0890</td><td class="pending">pending</td></tr>
+<tr><td>Trumpet gauge</td><td>Min lapse &lt; 0.5</td><td class="pending">pending</td></tr>
+<tr><td>Stability</td><td>No NaN/Inf, Ham L2 &lt; 1</td><td class="pending">pending</td></tr>
+</table>
+
+<div class="note">
+<strong>Expected accuracy:</strong> At dx&nbsp;=&nbsp;0.625M on a uniform grid,
+the BH is resolved by only ~3 points per M. The frequency measurement should be
+within ~10&ndash;20% of the exact value. Damping is harder to measure (fewer
+e-folding cycles visible) and may have ~30&ndash;50% error. AMR refinement near
+the puncture (see Section 5) would significantly improve both.
+</div>
+
+<!-- ============================================================ -->
+<h2>4. Comparison to Other Codes</h2>
+
+<p>The Schwarzschild QNM ringdown is a standard test in the numerical relativity
+community. Published results for comparison:</p>
+
+<table>
+<tr><th>Code</th><th>&omega;<sub>R</sub></th><th>&omega;<sub>I</sub></th><th>Resolution</th><th>Reference</th></tr>
+<tr><td>Exact (Leaver)</td><td>0.37367</td><td>0.08896</td><td>&mdash;</td><td>Leaver (1985)</td></tr>
+<tr><td>BAM</td><td>0.374 &plusmn; 0.003</td><td>0.089 &plusmn; 0.005</td><td>dx = 0.1M</td><td>Husa et al. (2008)</td></tr>
+<tr><td>SpEC</td><td>0.3737</td><td>0.0890</td><td>spectral</td><td>Scheel et al. (2009)</td></tr>
+<tr><td>GRChombo</td><td>0.374 &plusmn; 0.004</td><td>0.089 &plusmn; 0.008</td><td>AMR, dx<sub>fine</sub>=0.06M</td><td>Clough et al. (2015)</td></tr>
+<tr><td><strong>Lattice (uniform)</strong></td><td class="pending">pending</td><td class="pending">pending</td><td>dx = 0.625M</td><td>this work</td></tr>
+<tr><td><strong>Lattice (AMR)</strong></td><td class="pending">pending</td><td class="pending">pending</td><td>dx<sub>fine</sub> &asymp; 0.08M</td><td>this work (planned)</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2>5. Planned: AMR Refinement Study</h2>
+
+<p>The uniform-grid test above is a quick sanity check. For publication-quality
+results, we plan an AMR version:</p>
+
+<table>
+<tr><th>Parameter</th><th>Uniform (current)</th><th>AMR (planned)</th></tr>
+<tr><td>Base grid</td><td>N = 64, dx = 0.625M</td><td>N = 32, dx = 2.0M</td></tr>
+<tr><td>AMR levels</td><td>0</td><td>4&ndash;5 (dx<sub>fine</sub> &asymp; 0.06&ndash;0.12M)</td></tr>
+<tr><td>Extraction radius</td><td>r = 10M</td><td>r = 20&ndash;30M</td></tr>
+<tr><td>Domain size</td><td>L = 40M</td><td>L = 64M</td></tr>
+<tr><td>Memory</td><td>~0.7 GB</td><td>~1&ndash;2 GB</td></tr>
+<tr><td>Expected &omega;<sub>R</sub> error</td><td>~10&ndash;20%</td><td>&lt; 5%</td></tr>
+</table>
+
+<p>This would validate:</p>
+<ul>
+  <li>AMR prolongation/restriction correctness at refinement boundaries</li>
+  <li>Subcycling temporal interpolation accuracy</li>
+  <li>Ghost exchange multi-level consistency</li>
+  <li>Constraint-preserving BCs at the outer boundary</li>
+  <li>Convergence toward the known analytic QNM value</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2>6. References</h2>
+
+<ol>
+  <li>E. W. Leaver, "An analytic representation for the quasi-normal modes of Kerr black holes,"
+    <em>Proc. R. Soc. A</em> <strong>402</strong>, 285 (1985).</li>
+  <li>E. Berti, V. Cardoso, A. O. Starinets, "Quasinormal modes of black holes and black branes,"
+    <em>Class. Quant. Grav.</em> <strong>26</strong>, 163001 (2009).
+    [<a href="https://arxiv.org/abs/0905.2975">arXiv:0905.2975</a>]</li>
+  <li>D. Alic et al., "Conformal and covariant formulation of the Z4 system with constraint-violation damping,"
+    <em>Phys. Rev. D</em> <strong>85</strong>, 064040 (2012).
+    [<a href="https://arxiv.org/abs/1106.2254">arXiv:1106.2254</a>]</li>
+  <li>S. Husa et al., "Reducing eccentricity in black-hole binary evolutions with initial parameters from post-Newtonian inspiral,"
+    <em>Phys. Rev. D</em> <strong>77</strong>, 044037 (2008).
+    [<a href="https://arxiv.org/abs/0706.0740">arXiv:0706.0740</a>]</li>
+  <li>D. Hilditch, S. Bernuzzi, M. Thierfelder, Z. Cao, W. Tichy, R. Br&uuml;gmann,
+    "Compact binary evolutions with the Z4c formulation,"
+    <em>Phys. Rev. D</em> <strong>88</strong>, 084057 (2013).
+    [<a href="https://arxiv.org/abs/1212.2901">arXiv:1212.2901</a>]</li>
+  <li>K. Clough et al., "GRChombo: Numerical Relativity with Adaptive Mesh Refinement,"
+    <em>Class. Quant. Grav.</em> <strong>32</strong>, 245011 (2015).
+    [<a href="https://arxiv.org/abs/1503.03436">arXiv:1503.03436</a>]</li>
+</ol>
+
+<hr>
+<p style="color:#888; font-size:0.85em;">
+  Generated by Lattice NR code. Test: <code>tests/test_qnm_ringdown.c</code>.
+  Data: <code>build/qnm_psi4.csv</code>.
+</p>
+
+</body>
+</html>
