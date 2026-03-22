@@ -295,15 +295,29 @@ void backend_unmap_pack_diag(meshblock_pack_t *pack);
 
 /*
  * Hamiltonian constraint L2 norm over all interior points on device.
- * Returns sqrt(sum(H^2) / count).
+ * Returns sqrt(sum(H^2 * dV) / sum(dV)).
  */
 double backend_constraint_l2_packed(meshblock_pack_t *pack);
 
 /*
+ * Raw Hamiltonian constraint: returns sum(H^2 * dV) and sum(dV) separately.
+ * Use for combining results across multiple level packs in AMR:
+ *   total = sqrt((sum1 + sum2 + ...) / (vol1 + vol2 + ...))
+ */
+void backend_constraint_l2_raw_packed(meshblock_pack_t *pack,
+                                       double *out_sum, double *out_vol);
+
+/*
  * Momentum constraint L2 norm over all interior points on device.
- * Returns sqrt(sum(|M_i|^2) / (3 * count)).
+ * Returns sqrt(sum(|M_i|^2 * dV) / sum(dV)).
  */
 double backend_momentum_l2_packed(meshblock_pack_t *pack);
+
+/*
+ * Raw momentum constraint: returns sum(|M_i|^2 * dV) and sum(dV) separately.
+ */
+void backend_momentum_l2_raw_packed(meshblock_pack_t *pack,
+                                      double *out_sum, double *out_vol);
 
 /*
  * Minimum lapse over all interior points on device.

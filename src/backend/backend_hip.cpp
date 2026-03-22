@@ -1895,6 +1895,57 @@ double backend_constraint_l2_packed(meshblock_pack_t *pack)
 }
 
 extern "C"
+void backend_constraint_l2_raw_packed(meshblock_pack_t *pack,
+                                       double *out_sum, double *out_vol)
+{
+    *out_sum = 0.0;
+    *out_vol = 0.0;
+    if (!d_ptrs_valid) return;
+
+    int nb = pack->n_blocks;
+    int N = pack->N;
+    int total_points = nb * N * N * N;
+
+    int bs = 64;
+    int gs = (total_points + bs - 1) / bs;
+
+    double *d_ham, *d_mom, *d_vol;
+    HIP_CHECK(hipMalloc(&d_ham, gs * sizeof(double)));
+    HIP_CHECK(hipMalloc(&d_mom, gs * sizeof(double)));
+    HIP_CHECK(hipMalloc(&d_vol, gs * sizeof(double)));
+
+    size_t shared_bytes = bs * 3 * sizeof(double);
+    hipLaunchKernelGGL(hip_constraint_l2_partial, gs, bs, shared_bytes,
+                       gpu_stream,
+                       d_ptrs.data, d_ptrs.dx_per_block,
+                       nb, (size_t)pack->npts, pack->n_fields,
+                       N, pack->ghost, pack->Ntotal,
+                       d_ham, d_mom, d_vol, total_points);
+
+    double *h_ham = (double *)malloc(gs * sizeof(double));
+    double *h_vol = (double *)malloc(gs * sizeof(double));
+    HIP_CHECK(hipStreamSynchronize(gpu_stream));
+    HIP_CHECK(hipMemcpy(h_ham, d_ham, gs * sizeof(double), hipMemcpyDeviceToHost));
+    HIP_CHECK(hipMemcpy(h_vol, d_vol, gs * sizeof(double), hipMemcpyDeviceToHost));
+
+    double sum = 0.0;
+    double vol = 0.0;
+    for (int i = 0; i < gs; i++) {
+        sum += h_ham[i];
+        vol += h_vol[i];
+    }
+
+    free(h_ham);
+    free(h_vol);
+    (void)hipFree(d_ham);
+    (void)hipFree(d_mom);
+    (void)hipFree(d_vol);
+
+    *out_sum = sum;
+    *out_vol = vol;
+}
+
+extern "C"
 double backend_momentum_l2_packed(meshblock_pack_t *pack)
 {
     if (!d_ptrs_valid) return 0.0;
@@ -1940,6 +1991,57 @@ double backend_momentum_l2_packed(meshblock_pack_t *pack)
     (void)hipFree(d_vol);
 
     return (vol > 0.0) ? sqrt(sum / (3.0 * vol)) : 0.0;
+}
+
+extern "C"
+void backend_momentum_l2_raw_packed(meshblock_pack_t *pack,
+                                      double *out_sum, double *out_vol)
+{
+    *out_sum = 0.0;
+    *out_vol = 0.0;
+    if (!d_ptrs_valid) return;
+
+    int nb = pack->n_blocks;
+    int N = pack->N;
+    int total_points = nb * N * N * N;
+
+    int bs = 64;
+    int gs = (total_points + bs - 1) / bs;
+
+    double *d_ham, *d_mom, *d_vol;
+    HIP_CHECK(hipMalloc(&d_ham, gs * sizeof(double)));
+    HIP_CHECK(hipMalloc(&d_mom, gs * sizeof(double)));
+    HIP_CHECK(hipMalloc(&d_vol, gs * sizeof(double)));
+
+    size_t shared_bytes = bs * 3 * sizeof(double);
+    hipLaunchKernelGGL(hip_constraint_l2_partial, gs, bs, shared_bytes,
+                       gpu_stream,
+                       d_ptrs.data, d_ptrs.dx_per_block,
+                       nb, (size_t)pack->npts, pack->n_fields,
+                       N, pack->ghost, pack->Ntotal,
+                       d_ham, d_mom, d_vol, total_points);
+
+    double *h_mom = (double *)malloc(gs * sizeof(double));
+    double *h_vol = (double *)malloc(gs * sizeof(double));
+    HIP_CHECK(hipStreamSynchronize(gpu_stream));
+    HIP_CHECK(hipMemcpy(h_mom, d_mom, gs * sizeof(double), hipMemcpyDeviceToHost));
+    HIP_CHECK(hipMemcpy(h_vol, d_vol, gs * sizeof(double), hipMemcpyDeviceToHost));
+
+    double sum = 0.0;
+    double vol = 0.0;
+    for (int i = 0; i < gs; i++) {
+        sum += h_mom[i];
+        vol += h_vol[i];
+    }
+
+    free(h_mom);
+    free(h_vol);
+    (void)hipFree(d_ham);
+    (void)hipFree(d_mom);
+    (void)hipFree(d_vol);
+
+    *out_sum = sum;
+    *out_vol = vol;
 }
 
 /* ---- Kernel: Min lapse with position tracking ---- */

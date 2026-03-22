@@ -201,6 +201,13 @@ work on AMR meshes.
   required (regrid, checkpoint, output, AH finder, BH tracker, Psi4, CCE).
   Steps with no diagnostics skip the ~1.2 GB transfer entirely. Diagnostics
   still use CPU mesh functions after sync (volume-weighted multi-level norms).
+  **GPU-native diagnostics in main.c:** Constraint L2 and Psi4 extraction
+  run directly on device-resident level packs when GPU AMR is active.
+  `gpu_constraint_l2()` / `gpu_momentum_l2()` loop over level packs using
+  `backend_constraint_l2_raw_packed` (returns sum+vol separately for correct
+  multi-level volume-weighted combination). `gpu_psi4_extract()` activates
+  level-0 pack and calls `backend_psi4_extract_packed`. These diagnostics
+  need zero host sync — only ~100 bytes of scalar results return to host.
   **Missing GPU kernels:** AH finder (fully CPU, biggest bottleneck at 5-50s),
   BH tracker position update (could reuse `backend_min_lapse_packed` in a loop),
   CCE worldtube interpolation (similar to Psi4 infrastructure).

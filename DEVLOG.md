@@ -3,6 +3,32 @@
 > **Note:** When adding/removing/renaming files or functions, also update
 > `docs/architecture.html` — the living map of the codebase structure.
 
+## 2026-03-22: GPU-native constraint/Psi4 diagnostics in main.c
+
+**Change:** Wired GPU diagnostic kernels into main.c AMR evolution loop.
+Constraints and Psi4 now run directly on device-resident level packs —
+zero host sync needed for these diagnostics.
+
+**New functions in main.c:**
+- `gpu_constraint_l2(m)` — loops over level packs, accumulates raw
+  (sum, vol) via `backend_constraint_l2_raw_packed`, combines into
+  volume-weighted L2 norm. Falls back to CPU `mesh_constraint_l2` if
+  not on GPU.
+- `gpu_momentum_l2(m)` — same pattern for momentum constraint.
+- `gpu_psi4_extract(ws, m)` — activates level-0 pack, calls
+  `backend_psi4_extract_packed`. Falls back to CPU `psi4_extract`.
+
+**New backend API:**
+- `backend_constraint_l2_raw_packed(pack, &sum, &vol)` — returns raw
+  sum(H^2*dV) and sum(dV) for multi-level combination.
+- `backend_momentum_l2_raw_packed(pack, &sum, &vol)` — same for momentum.
+  Implemented in both `backend_cpu.c` and `backend_hip.cpp`.
+
+**Host sync logic:** main.c now only syncs for: regrid, output, checkpoint,
+AH finder, BH tracker, CCE. Constraint checks (every 100 steps) and Psi4
+extraction run on GPU without syncing. In a typical inspiral with
+tracker_every=10, most non-tracker steps are now fully GPU-resident.
+
 ## 2026-03-22: Conditional host sync — skip gpu_sync_all_to_host on idle steps
 
 **Change:** Removed unconditional `gpu_sync_all_to_host()` from `rk4_step_mesh`

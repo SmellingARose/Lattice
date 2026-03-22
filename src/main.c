@@ -30,9 +30,69 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 /* Forward declaration for output */
 extern void output_mesh_1d_slice(const mesh_t *m, int step, double time);
+
+/*
+ * GPU-accelerated constraint/momentum L2 norms for AMR meshes.
+ * Loops over device-resident level packs, accumulates raw (sum, vol)
+ * from each, combines into a single volume-weighted L2 norm.
+ * Falls back to CPU mesh_constraint_l2 if not on GPU or no level packs.
+ */
+static double gpu_constraint_l2(mesh_t *m)
+{
+    if (!backend_is_gpu() || m->max_level == 0 || !m->level_packs[0])
+        return mesh_constraint_l2(m);
+
+    double total_sum = 0.0, total_vol = 0.0;
+    for (int L = 0; L <= m->max_level; L++) {
+        meshblock_pack_t *pack = m->level_packs[L];
+        if (!pack || pack->n_blocks == 0) continue;
+        backend_activate_pack(pack);
+        double s, v;
+        backend_constraint_l2_raw_packed(pack, &s, &v);
+        total_sum += s;
+        total_vol += v;
+    }
+    return (total_vol > 0.0) ? sqrt(total_sum / total_vol) : 0.0;
+}
+
+static double gpu_momentum_l2(mesh_t *m)
+{
+    if (!backend_is_gpu() || m->max_level == 0 || !m->level_packs[0])
+        return mesh_momentum_l2(m);
+
+    double total_sum = 0.0, total_vol = 0.0;
+    for (int L = 0; L <= m->max_level; L++) {
+        meshblock_pack_t *pack = m->level_packs[L];
+        if (!pack || pack->n_blocks == 0) continue;
+        backend_activate_pack(pack);
+        double s, v;
+        backend_momentum_l2_raw_packed(pack, &s, &v);
+        total_sum += s;
+        total_vol += v;
+    }
+    return (total_vol > 0.0) ? sqrt(total_sum / (3.0 * total_vol)) : 0.0;
+}
+
+/*
+ * GPU-accelerated Psi4 extraction on device-resident level packs.
+ * Uses the coarsest level pack (level 0) which covers the extraction sphere.
+ * Falls back to CPU psi4_extract if not on GPU.
+ */
+static void gpu_psi4_extract(psi4_workspace_t *ws, mesh_t *m)
+{
+    if (!backend_is_gpu() || !m->level_packs[0]) {
+        psi4_extract(ws, m);
+        return;
+    }
+    meshblock_pack_t *pack = m->level_packs[0];
+    backend_activate_pack(pack);
+    backend_ghost_exchange_packed(pack);
+    backend_psi4_extract_packed(pack, ws, m);
+}
 
 static void print_usage(void)
 {
@@ -535,7 +595,7 @@ int main(int argc, char **argv)
             rk4_step_mesh(m, &p, rhs_func, p.dt);
             p.time += p.dt;
 
-            /* Determine what CPU-only work is needed this step */
+            /* Determine what work is needed this step */
             int need_regrid = (p.amr.regrid_every > 0 &&
                                step % p.amr.regrid_every == 0);
             int need_output = (p.output_every > 0 &&
@@ -556,14 +616,38 @@ int main(int argc, char **argv)
             int need_cce = 0;
 #endif
 
-            /* Sync GPU→host ONCE if any CPU-only operation is needed.
-             * Regrid, output, checkpoint, AH finder, BH tracker, and
-             * CCE all require host-side data. GPU-only steps skip this
-             * entirely — the dominant performance win. */
+            /* GPU diagnostic path: constraints, Psi4, and BH separation
+             * run directly on device-resident level packs — no host sync.
+             * Only CPU-only operations (regrid, output, checkpoint, AH
+             * finder, BH tracker, CCE) force a gpu_sync_all_to_host. */
+            int gpu_resident = backend_is_gpu() && m->max_level > 0
+                               && m->level_packs[0];
+
+            /* --- GPU-native diagnostics (no host sync needed) --- */
+            if (need_ham100 && gpu_resident) {
+                double ham = gpu_constraint_l2(m);
+                printf("  step %5d  t=%.4f  Ham L2=%.6e  blocks=%d\n",
+                       step, p.time, ham, mesh_num_leaves(m));
+            }
+
+            if (need_psi4 && gpu_resident) {
+                gpu_psi4_extract(psi4_ws, m);
+                psi4_write_modes(psi4_ws, p.time, "build/psi4_modes.csv");
+                int mi_22 = 4 + 2 + 2 - 4; /* (2,2) mode index */
+                double re22 = psi4_ws->mode_re[mi_22];
+                double im22 = psi4_ws->mode_im[mi_22];
+                printf("  Psi4 step %5d: r*Psi4(2,2) = %.6e + %.6ei\n",
+                       step, re22, im22);
+            }
+
+            /* --- CPU-only operations: sync to host first --- */
             int need_host_sync = need_regrid || need_output ||
                                  need_checkpoint || need_ah ||
-                                 need_tracker || need_cce ||
-                                 need_ham100 || need_psi4;
+                                 need_tracker || need_cce;
+            /* Also sync for diagnostics when NOT on GPU path */
+            if (!gpu_resident)
+                need_host_sync |= need_ham100 || need_psi4;
+
             if (need_host_sync && backend_is_gpu())
                 gpu_sync_all_to_host(m);
 
@@ -573,24 +657,27 @@ int main(int argc, char **argv)
             if (need_output)
                 output_mesh_1d_slice(m, step, p.time);
 
-            if (need_ham100) {
+            /* CPU constraint check (non-GPU path only) */
+            if (need_ham100 && !gpu_resident) {
                 double ham = mesh_constraint_l2(m);
                 printf("  step %5d  t=%.4f  Ham L2=%.6e  blocks=%d\n",
                        step, p.time, ham, mesh_num_leaves(m));
             }
 
-            /* N-body BH tracker (AMR path) */
+            /* N-body BH tracker (CPU-only: lapse-min search + AH per BH) */
             if (need_tracker) {
                 bh_tracker_update_positions(tracker, m);
                 bh_tracker_find_horizons(tracker, m, ah_tol, ah_max_iter);
                 bh_tracker_check_mergers(tracker, p.time);
-                double ham_tr = mesh_constraint_l2(m);
-                double mom_tr = mesh_momentum_l2(m);
+                double ham_tr = gpu_resident ? gpu_constraint_l2(m)
+                                             : mesh_constraint_l2(m);
+                double mom_tr = gpu_resident ? gpu_momentum_l2(m)
+                                             : mesh_momentum_l2(m);
                 bh_tracker_write_csv(tracker, tracker_csv, p.time,
                                       ham_tr, mom_tr, mesh_num_leaves(m));
             }
 
-            /* AH finder (AMR path) */
+            /* AH finder (CPU-only: pseudo-time PDE solve) */
             if (need_ah) {
                 int conv = ah_find_amr(ah_ws, m, ah_tol, ah_max_iter, 0);
                 if (conv) {
@@ -601,11 +688,11 @@ int main(int argc, char **argv)
                 }
             }
 
-            /* Psi4 extraction (AMR path) */
-            if (need_psi4) {
+            /* Psi4 extraction (CPU path when not GPU-resident) */
+            if (need_psi4 && !gpu_resident) {
                 psi4_extract(psi4_ws, m);
                 psi4_write_modes(psi4_ws, p.time, "build/psi4_modes.csv");
-                int mi_22 = 4 + 2 + 2 - 4; /* (2,2) mode index */
+                int mi_22 = 4 + 2 + 2 - 4;
                 double re22 = psi4_ws->mode_re[mi_22];
                 double im22 = psi4_ws->mode_im[mi_22];
                 printf("  Psi4 step %5d: r*Psi4(2,2) = %.6e + %.6ei\n",
@@ -613,7 +700,7 @@ int main(int argc, char **argv)
             }
 
 #ifdef LATTICE_HDF5
-            /* CCE worldtube extraction (AMR path) */
+            /* CCE worldtube (CPU-only: interpolation + HDF5 I/O) */
             if (need_cce)
                 cce_extract(cce_ws, m, p.time);
 #endif

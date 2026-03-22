@@ -1233,6 +1233,52 @@ double backend_constraint_l2_packed(meshblock_pack_t *pack)
     return (vol > 0.0) ? sqrt(sum / vol) : 0.0;
 }
 
+void backend_constraint_l2_raw_packed(meshblock_pack_t *pack,
+                                       double *out_sum, double *out_vol)
+{
+    int nb = pack->n_blocks;
+    int N = pack->N;
+    int ghost = pack->ghost;
+    int Nt = pack->Ntotal;
+    size_t npts = pack->npts;
+    int nf = pack->n_fields;
+
+    double sum = 0.0;
+    double vol = 0.0;
+
+    #pragma omp parallel for schedule(static) reduction(+:sum,vol)
+    for (int bpt = 0; bpt < nb * N * N * N; bpt++) {
+        int b = bpt / (N * N * N);
+        int pt = bpt % (N * N * N);
+        int i = ghost + pt % N;
+        int j = ghost + (pt / N) % N;
+        int k = ghost + pt / (N * N);
+
+        const double *src_ptrs[NUM_FIELDS];
+        for (int f = 0; f < nf; f++)
+            src_ptrs[f] = pack->data + (size_t)f * nb * npts + (size_t)b * npts;
+
+        grid_t g_local;
+        memset(&g_local, 0, sizeof(grid_t));
+        g_local.N = N;
+        g_local.ghost = ghost;
+        g_local.Ntotal = Nt;
+        g_local.npoints = npts;
+        g_local.n_fields = nf;
+        g_local.dx = pack->dx_per_block[b];
+        g_local.inv_dx = 1.0 / pack->dx_per_block[b];
+
+        double dV = g_local.dx * g_local.dx * g_local.dx;
+        double H = compute_hamiltonian_at(
+            (const double *const *)src_ptrs, &g_local, i, j, k);
+        sum += H * H * dV;
+        vol += dV;
+    }
+
+    *out_sum = sum;
+    *out_vol = vol;
+}
+
 double backend_momentum_l2_packed(meshblock_pack_t *pack)
 {
     int nb = pack->n_blocks;
@@ -1276,6 +1322,53 @@ double backend_momentum_l2_packed(meshblock_pack_t *pack)
     }
 
     return (vol > 0.0) ? sqrt(sum / (3.0 * vol)) : 0.0;
+}
+
+void backend_momentum_l2_raw_packed(meshblock_pack_t *pack,
+                                      double *out_sum, double *out_vol)
+{
+    int nb = pack->n_blocks;
+    int N = pack->N;
+    int ghost = pack->ghost;
+    int Nt = pack->Ntotal;
+    size_t npts = pack->npts;
+    int nf = pack->n_fields;
+
+    double sum = 0.0;
+    double vol = 0.0;
+
+    #pragma omp parallel for schedule(static) reduction(+:sum,vol)
+    for (int bpt = 0; bpt < nb * N * N * N; bpt++) {
+        int b = bpt / (N * N * N);
+        int pt = bpt % (N * N * N);
+        int i = ghost + pt % N;
+        int j = ghost + (pt / N) % N;
+        int k = ghost + pt / (N * N);
+
+        const double *src_ptrs[NUM_FIELDS];
+        for (int f = 0; f < nf; f++)
+            src_ptrs[f] = pack->data + (size_t)f * nb * npts + (size_t)b * npts;
+
+        grid_t g_local;
+        memset(&g_local, 0, sizeof(grid_t));
+        g_local.N = N;
+        g_local.ghost = ghost;
+        g_local.Ntotal = Nt;
+        g_local.npoints = npts;
+        g_local.n_fields = nf;
+        g_local.dx = pack->dx_per_block[b];
+        g_local.inv_dx = 1.0 / pack->dx_per_block[b];
+
+        double dV = g_local.dx * g_local.dx * g_local.dx;
+        double mom[3];
+        compute_momentum_at(
+            (const double *const *)src_ptrs, &g_local, i, j, k, mom);
+        sum += (mom[0]*mom[0] + mom[1]*mom[1] + mom[2]*mom[2]) * dV;
+        vol += dV;
+    }
+
+    *out_sum = sum;
+    *out_vol = vol;
 }
 
 double backend_min_lapse_packed(meshblock_pack_t *pack,
