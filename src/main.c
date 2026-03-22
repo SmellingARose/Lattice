@@ -524,26 +524,63 @@ int main(int argc, char **argv)
 
         /* Evolution loop.
          * p.time tracks the simulation time for subcycling's temporal
-         * interpolation (Berger-Oliger). dt is the coarsest-level step. */
+         * interpolation (Berger-Oliger). dt is the coarsest-level step.
+         *
+         * GPU path: after rk4_step_mesh, data stays on device. We only
+         * sync to host when CPU-only work is needed (regrid, checkpoint,
+         * output, AH finder). GPU diagnostic kernels (constraints, Psi4,
+         * BH separation) run directly on device packs. */
         p.time = 0.0;
         for (int step = 1; step <= p.num_steps; step++) {
             rk4_step_mesh(m, &p, rhs_func, p.dt);
             p.time += p.dt;
 
-            if (p.amr.regrid_every > 0 && step % p.amr.regrid_every == 0)
+            /* Determine what CPU-only work is needed this step */
+            int need_regrid = (p.amr.regrid_every > 0 &&
+                               step % p.amr.regrid_every == 0);
+            int need_output = (p.output_every > 0 &&
+                               step % p.output_every == 0);
+            int need_ham100 = (step % 100 == 0 || step == p.num_steps);
+            int need_tracker = (tracker && tracker_every > 0 &&
+                                step % tracker_every == 0);
+            int need_ah = (ah_ws && ah_every > 0 &&
+                           step % ah_every == 0);
+            int need_psi4 = (psi4_ws && psi4_every > 0 &&
+                             step % psi4_every == 0);
+            int need_checkpoint = (checkpoint_every > 0 &&
+                                   step % checkpoint_every == 0);
+#ifdef LATTICE_HDF5
+            int need_cce = (cce_ws && cce_every > 0 &&
+                            step % cce_every == 0);
+#else
+            int need_cce = 0;
+#endif
+
+            /* Sync GPU→host ONCE if any CPU-only operation is needed.
+             * Regrid, output, checkpoint, AH finder, BH tracker, and
+             * CCE all require host-side data. GPU-only steps skip this
+             * entirely — the dominant performance win. */
+            int need_host_sync = need_regrid || need_output ||
+                                 need_checkpoint || need_ah ||
+                                 need_tracker || need_cce ||
+                                 need_ham100 || need_psi4;
+            if (need_host_sync && backend_is_gpu())
+                gpu_sync_all_to_host(m);
+
+            if (need_regrid)
                 mesh_regrid(m, &p.amr);
 
-            if (p.output_every > 0 && step % p.output_every == 0)
+            if (need_output)
                 output_mesh_1d_slice(m, step, p.time);
 
-            if (step % 100 == 0 || step == p.num_steps) {
+            if (need_ham100) {
                 double ham = mesh_constraint_l2(m);
                 printf("  step %5d  t=%.4f  Ham L2=%.6e  blocks=%d\n",
                        step, p.time, ham, mesh_num_leaves(m));
             }
 
             /* N-body BH tracker (AMR path) */
-            if (tracker && tracker_every > 0 && step % tracker_every == 0) {
+            if (need_tracker) {
                 bh_tracker_update_positions(tracker, m);
                 bh_tracker_find_horizons(tracker, m, ah_tol, ah_max_iter);
                 bh_tracker_check_mergers(tracker, p.time);
@@ -554,7 +591,7 @@ int main(int argc, char **argv)
             }
 
             /* AH finder (AMR path) */
-            if (ah_ws && ah_every > 0 && step % ah_every == 0) {
+            if (need_ah) {
                 int conv = ah_find_amr(ah_ws, m, ah_tol, ah_max_iter, 0);
                 if (conv) {
                     ah_result_t ahr = ah_compute_diagnostics_amr(ah_ws, m);
@@ -565,7 +602,7 @@ int main(int argc, char **argv)
             }
 
             /* Psi4 extraction (AMR path) */
-            if (psi4_ws && psi4_every > 0 && step % psi4_every == 0) {
+            if (need_psi4) {
                 psi4_extract(psi4_ws, m);
                 psi4_write_modes(psi4_ws, p.time, "build/psi4_modes.csv");
                 int mi_22 = 4 + 2 + 2 - 4; /* (2,2) mode index */
@@ -577,12 +614,12 @@ int main(int argc, char **argv)
 
 #ifdef LATTICE_HDF5
             /* CCE worldtube extraction (AMR path) */
-            if (cce_ws && cce_every > 0 && step % cce_every == 0)
+            if (need_cce)
                 cce_extract(cce_ws, m, p.time);
 #endif
 
             /* Checkpoint (after diagnostics, before next step) */
-            if (checkpoint_every > 0 && step % checkpoint_every == 0) {
+            if (need_checkpoint) {
                 char ckpt_path[256];
                 snprintf(ckpt_path, sizeof(ckpt_path),
                          "build/checkpoint_%06d.lat", step);

@@ -3,6 +3,47 @@
 > **Note:** When adding/removing/renaming files or functions, also update
 > `docs/architecture.html` — the living map of the codebase structure.
 
+## 2026-03-22: Conditional host sync — skip gpu_sync_all_to_host on idle steps
+
+**Change:** Removed unconditional `gpu_sync_all_to_host()` from `rk4_step_mesh`
+(AMR GPU path). Data stays on device after subcycling. main.c now computes
+per-step need flags and calls `gpu_sync_all_to_host()` ONCE only when CPU-only
+work is needed (regrid, checkpoint, output, AH finder, tracker, Psi4, CCE).
+
+**Impact:** In a typical inspiral (tracker_every=10, psi4_every=10, ah_every=100,
+checkpoint_every=1000, output_every=0), ~80% of base steps have NO diagnostics
+and skip the ~1.2 GB PCIe transfer + CPU ghost exchange entirely. GPU utilization
+should stay near 100% during these idle steps.
+
+**Public API:** `gpu_sync_all_to_host()` exposed in `rk4.h` for main.c to call.
+
+**Tests:** All pass (AH 13/13, Psi4 15/15, Maxwell 15/15, checkpoint 14/14,
+pack_evolve 5/5, Bowen-York 33/33).
+
+## 2026-03-22: GPU diagnostic audit — main.c still uses CPU paths
+
+**Audit finding:** 6 GPU diagnostic kernels exist in `backend.h` / `backend_hip.cpp`
+but main.c never calls them. All diagnostics run on CPU after `gpu_sync_all_to_host()`:
+
+| Kernel | Exists? | Wired in main.c? |
+|--------|---------|-------------------|
+| `backend_constraint_l2_packed` | YES | NO — main.c uses `mesh_constraint_l2()` |
+| `backend_momentum_l2_packed` | YES | NO — main.c uses `mesh_momentum_l2()` |
+| `backend_min_lapse_packed` | YES | NO |
+| `backend_bh_separation_packed` | YES | NO — main.c uses `bh_tracker_update_positions()` |
+| `backend_psi4_extract_packed` | YES | NO — main.c uses `psi4_extract()` |
+| `backend_check_finite_packed` | YES | NO |
+| AH finder | NO | N/A — fully CPU |
+| BH tracker position update | NO | N/A — per-BH lapse min with exclusion |
+| CCE worldtube interpolation | NO | N/A — similar to Psi4 |
+
+**Impact:** Every base step forces `gpu_sync_all_to_host()` (~1.2 GB transfer +
+CPU ghost exchange) just to feed CPU diagnostics. On H200, this is the dominant
+overhead — GPU sits idle while CPU processes diagnostics.
+
+**Plan:** Wire existing GPU kernels in main.c, write missing kernels for BH tracker
+and CCE, make `gpu_sync_all_to_host()` conditional (only for checkpoint/output/AH).
+
 ## 2026-03-22: Persistent spatial hash for O(1) block lookup
 
 **Problem:** `mesh_find_block_at(x,y,z)` used O(n_blocks) linear scan. With

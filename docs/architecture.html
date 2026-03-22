@@ -344,14 +344,15 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 <!-- ========================================== -->
 <h2 id="mod-diagnostics">Module: diagnostics/</h2>
 
-<p>Runtime diagnostics that do not modify the evolved data. The Hamiltonian and momentum constraints measure how well the numerical solution satisfies Einstein's equations (should converge to zero with resolution). The apparent horizon finder locates the outermost trapped surface and extracts remnant properties (mass, spin, area).</p>
+<p>Runtime diagnostics that do not modify the evolved data. The Hamiltonian and momentum constraints measure how well the numerical solution satisfies Einstein's equations (should converge to zero with resolution). The apparent horizon finder locates the outermost trapped surface and extracts remnant properties (mass, spin, area). GPU packed kernels exist for constraints, momentum, min lapse, BH separation, NaN check, and Psi4 extraction (<code>backend_*_packed</code> in <code>backend.h</code>). <strong>Status:</strong> main.c still calls CPU-side mesh functions; only <code>test_binary_inspiral.c</code> uses GPU diagnostic kernels via subcycle callback. AH finder, BH tracker position update, and CCE worldtube have no GPU kernels yet.</p>
 
 <table class="file-table">
 <tr><th>File</th><th>Purpose</th></tr>
 <tr><td><code>constraints.h/c</code></td><td>Hamiltonian (H = R + 2/3 K^2 - A^ij A_ij) and momentum constraints. Volume-weighted L2 norms for AMR mesh (each cell weighted by dV=dx^3). <code>compute_hamiltonian_at()</code> and <code>compute_momentum_at()</code> annotated <code>LATTICE_DEVICE</code> for GPU diagnostic kernels.</td></tr>
 <tr><td><code>ah_finder.h/c</code></td><td>Hyperbolic flow AH finder (BHaHAHA-inspired). 6th-order off-grid interpolation. Works on single-grid and AMR. Ref: arXiv:2505.15912.</td></tr>
 <tr><td><code>psi4.h/c</code></td><td>Weyl scalar Psi4 for gravitational wave extraction. <code>psi4_at_point()</code> and <code>psi4_compute()</code> annotated <code>LATTICE_DEVICE</code> for GPU extraction kernel. <code>psi4_decompose_modes()</code> factored out for host-only mode decomposition after GPU sphere extraction.</td></tr>
-<tr><td><code>cce_worldtube.h/c</code></td><td>SpECTRE-compatible CCE worldtube HDF5 output. Interpolates conformal CCZ4 fields on extraction sphere, reconstructs physical ADM quantities, writes 49 datasets. Optional: requires <code>make HDF5=on</code>.</td></tr>
+<tr><td><code>bh_tracker.h/c</code></td><td>Multi-BH position tracking via successive lapse-minimum searches with exclusion zones (GRChombo PunctureTracker pattern). Per-BH AH finding, pairwise merger detection. CSV diagnostic output. CPU-only: iterates blocks with OMP parallelism. No GPU kernel yet (could reuse <code>backend_min_lapse_packed</code> per BH).</td></tr>
+<tr><td><code>cce_worldtube.h/c</code></td><td>SpECTRE-compatible CCE worldtube HDF5 output. Interpolates conformal CCZ4 fields on extraction sphere, reconstructs physical ADM quantities, writes 49 datasets. Optional: requires <code>make HDF5=on</code>. CPU-only: no GPU kernel yet (similar interpolation pattern to Psi4).</td></tr>
 </table>
 
 <!-- ========================================== -->

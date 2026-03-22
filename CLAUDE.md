@@ -187,15 +187,23 @@ work on AMR meshes.
     CPU covering grid FAS always used — FMG converges in 1 pass per level,
     no inter-block ghost exchange during MG. ~2800 lines of GPU solver backend
     code deleted (kernels, device state, packed API).
-- **GPU diagnostics (all complete):** On-device constraint L2, momentum L2,
+- **GPU diagnostics:** On-device kernels exist for constraint L2, momentum L2,
   min lapse with position, BH separation (two-pass lapse minimum), NaN/Inf
   check, and Psi4 extraction. Diagnostic-only pack mapping
   (`backend_map_pack_diag`) transfers data + metadata without rhs/scratch/accum
   (~75% savings). Constraint/momentum kernels use shared-memory block-level
   reduction. Psi4 kernel: host pre-computes angular-point-to-block mapping
   via `mesh_find_block_at`, GPU calls `psi4_compute` per point (512 threads),
-  mode decomposition on host. AH finder remains CPU-only.
-  Eliminates ~250s/step diagnostic overhead on large AMR meshes.
+  mode decomposition on host.
+  **Conditional host sync:** `gpu_sync_all_to_host()` (now public in `rk4.h`)
+  removed from unconditional post-step path in `rk4_step_mesh`. main.c
+  computes per-step need flags and syncs ONCE only when CPU-only work is
+  required (regrid, checkpoint, output, AH finder, BH tracker, Psi4, CCE).
+  Steps with no diagnostics skip the ~1.2 GB transfer entirely. Diagnostics
+  still use CPU mesh functions after sync (volume-weighted multi-level norms).
+  **Missing GPU kernels:** AH finder (fully CPU, biggest bottleneck at 5-50s),
+  BH tracker position update (could reuse `backend_min_lapse_packed` in a loop),
+  CCE worldtube interpolation (similar to Psi4 infrastructure).
 - **Volume-weighted AMR constraint L2:** `mesh_constraint_l2()`, `mesh_momentum_l2()`,
   and packed variants (CPU + GPU) now weight each cell by dV=dx^3 and normalize by
   total volume. Eliminates diagnostic artifacts on AMR meshes where fine cells near

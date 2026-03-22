@@ -29,4 +29,12 @@ struct mesh_s;  /* forward declaration to avoid circular include */
 void rk4_step_mesh(struct mesh_s *m, const sim_params_t *p,
                    rk4_rhs_func_t rhs_func, double dt);
 
+/*
+ * Sync all GPU-resident level packs back to host blocks.
+ * Called from main.c before CPU-only operations (checkpoint, output,
+ * AH finder, regrid). No-op if data is already on host.
+ * After this call, block->grid->fields contain current data.
+ */
+void gpu_sync_all_to_host(struct mesh_s *m);
+
 #endif /* LATTICE_RK4_H */

@@ -733,7 +733,7 @@ static void gpu_ensure_level_packs(mesh_t *m, const sim_params_t *p)
  * Called once after the full GPU-resident subcycling completes.
  * Also runs ghost_exchange and restrict_to_parents on host for consistency.
  */
-static void gpu_sync_all_to_host(mesh_t *m)
+void gpu_sync_all_to_host(mesh_t *m)
 {
     for (int L = 0; L <= m->max_level; L++) {
         meshblock_pack_t *pack = m->level_packs[L];
@@ -885,7 +885,9 @@ void rk4_step_mesh(mesh_t *m, const sim_params_t *p,
          * Requires classic RK4 (not CK45 — no quartic temporal interp). */
         gpu_ensure_level_packs(m, p);
         subcycle_level_gpu(m, p, 0, dt, p->time, 0);
-        gpu_sync_all_to_host(m);
+        /* Data stays on device — caller syncs to host only when needed
+         * (checkpoint, output, AH finder, regrid). GPU diagnostics
+         * (constraints, Psi4, BH separation) run directly on device packs. */
         if (m->packs_dirty) m->packs_dirty = 0;
     } else {
         /* CPU AMR subcycling (existing path).
