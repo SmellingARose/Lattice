@@ -1490,6 +1490,76 @@ double backend_bh_separation_packed(meshblock_pack_t *pack, double excl_radius,
                 (pz1 - pz2) * (pz1 - pz2));
 }
 
+double backend_min_lapse_excl_packed(meshblock_pack_t *pack,
+                                       int n_excl,
+                                       const double excl_centers[][3],
+                                       const double *excl_radii,
+                                       double *out_x, double *out_y,
+                                       double *out_z)
+{
+    int nb = pack->n_blocks;
+    int N = pack->N;
+    int ghost = pack->ghost;
+    int Nt = pack->Ntotal;
+    size_t npts = pack->npts;
+
+    double global_min = 1.0e30;
+    double gx = 0.0, gy = 0.0, gz = 0.0;
+
+    #pragma omp parallel
+    {
+        double local_min = 1.0e30;
+        double lx = 0.0, ly = 0.0, lz = 0.0;
+
+        #pragma omp for schedule(static)
+        for (int bpt = 0; bpt < nb * N * N * N; bpt++) {
+            int b = bpt / (N * N * N);
+            int pt = bpt % (N * N * N);
+            int i = ghost + pt % N;
+            int j = ghost + (pt / N) % N;
+            int k = ghost + pt / (N * N);
+
+            int idx = k * Nt * Nt + j * Nt + i;
+            size_t off = (size_t)FIELD_LAPSE * nb * npts + (size_t)b * npts + idx;
+            double a = pack->data[off];
+
+            if (a >= local_min) continue;
+
+            double dx = pack->dx_per_block[b];
+            double cx = pack->origins[b * 3 + 0] + (i - ghost + 0.5) * dx;
+            double cy = pack->origins[b * 3 + 1] + (j - ghost + 0.5) * dx;
+            double cz = pack->origins[b * 3 + 2] + (k - ghost + 0.5) * dx;
+
+            /* Check exclusion zones */
+            int excluded = 0;
+            for (int e = 0; e < n_excl; e++) {
+                double ex = cx - excl_centers[e][0];
+                double ey = cy - excl_centers[e][1];
+                double ez = cz - excl_centers[e][2];
+                if (ex*ex + ey*ey + ez*ez < excl_radii[e] * excl_radii[e]) {
+                    excluded = 1;
+                    break;
+                }
+            }
+            if (excluded) continue;
+
+            local_min = a;
+            lx = cx; ly = cy; lz = cz;
+        }
+
+        #pragma omp critical
+        {
+            if (local_min < global_min) {
+                global_min = local_min;
+                gx = lx; gy = ly; gz = lz;
+            }
+        }
+    }
+
+    *out_x = gx; *out_y = gy; *out_z = gz;
+    return global_min;
+}
+
 int backend_check_finite_packed(meshblock_pack_t *pack)
 {
     size_t total = (size_t)pack->n_fields * pack->n_blocks * pack->npts;

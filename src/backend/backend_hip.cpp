@@ -2302,6 +2302,162 @@ double backend_bh_separation_packed(meshblock_pack_t *pack, double excl_radius,
                 (pz1 - *z2) * (pz1 - *z2));
 }
 
+/* ---- Kernel: Min lapse with N exclusion zones ---- */
+
+__global__ void hip_min_lapse_multi_excl_partial(
+    double *data, double *dx_arr, double *origins,
+    int nb, size_t npts, int nf, int N, int ghost, int Nt,
+    double *excl_cx, double *excl_cy, double *excl_cz, double *excl_r2,
+    int n_excl,
+    double *partial_min, double *partial_pos,
+    int total_points)
+{
+    extern __shared__ double sdata[];
+    double *s_val = sdata;
+    double *s_pos = &sdata[blockDim.x];
+
+    int tid = (int)((size_t)blockIdx.x * blockDim.x + threadIdx.x);
+    int ltid = threadIdx.x;
+
+    double my_val = 1.0e30;
+    double my_pos[3] = {0.0, 0.0, 0.0};
+
+    if (tid < total_points) {
+        int interior_per_block = N * N * N;
+        int b = tid / interior_per_block;
+        int pt = tid % interior_per_block;
+
+        int i = ghost + pt % N;
+        int j = ghost + (pt / N) % N;
+        int k = ghost + pt / (N * N);
+
+        int idx = k * Nt * Nt + j * Nt + i;
+        size_t off = (size_t)FIELD_LAPSE * nb * npts + (size_t)b * npts + idx;
+        double a = data[off];
+
+        double dx = dx_arr[b];
+        double cx = origins[b * 3 + 0] + (i - ghost + 0.5) * dx;
+        double cy = origins[b * 3 + 1] + (j - ghost + 0.5) * dx;
+        double cz = origins[b * 3 + 2] + (k - ghost + 0.5) * dx;
+
+        int excluded = 0;
+        for (int e = 0; e < n_excl; e++) {
+            double ex = cx - excl_cx[e];
+            double ey = cy - excl_cy[e];
+            double ez = cz - excl_cz[e];
+            if (ex*ex + ey*ey + ez*ez < excl_r2[e]) {
+                excluded = 1;
+                break;
+            }
+        }
+
+        if (!excluded) {
+            my_val = a;
+            my_pos[0] = cx; my_pos[1] = cy; my_pos[2] = cz;
+        }
+    }
+
+    s_val[ltid] = my_val;
+    s_pos[ltid * 3 + 0] = my_pos[0];
+    s_pos[ltid * 3 + 1] = my_pos[1];
+    s_pos[ltid * 3 + 2] = my_pos[2];
+    __syncthreads();
+
+    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+        if (ltid < s && s_val[ltid + s] < s_val[ltid]) {
+            s_val[ltid] = s_val[ltid + s];
+            s_pos[ltid * 3 + 0] = s_pos[(ltid + s) * 3 + 0];
+            s_pos[ltid * 3 + 1] = s_pos[(ltid + s) * 3 + 1];
+            s_pos[ltid * 3 + 2] = s_pos[(ltid + s) * 3 + 2];
+        }
+        __syncthreads();
+    }
+
+    if (ltid == 0) {
+        partial_min[blockIdx.x] = s_val[0];
+        partial_pos[blockIdx.x * 3 + 0] = s_pos[0];
+        partial_pos[blockIdx.x * 3 + 1] = s_pos[1];
+        partial_pos[blockIdx.x * 3 + 2] = s_pos[2];
+    }
+}
+
+extern "C"
+double backend_min_lapse_excl_packed(meshblock_pack_t *pack,
+                                       int n_excl,
+                                       const double excl_centers[][3],
+                                       const double *excl_radii,
+                                       double *out_x, double *out_y,
+                                       double *out_z)
+{
+    *out_x = *out_y = *out_z = 0.0;
+    if (!d_ptrs_valid) return 1.0e30;
+
+    if (n_excl == 0)
+        return backend_min_lapse_packed(pack, out_x, out_y, out_z);
+
+    int nb = pack->n_blocks;
+    int N = pack->N;
+    int total_points = nb * N * N * N;
+
+    int bs = 256;
+    int gs = (total_points + bs - 1) / bs;
+
+    /* Upload exclusion zones to device (small: max 32 BHs × 8 bytes) */
+    double h_cx[32], h_cy[32], h_cz[32], h_r2[32];
+    for (int e = 0; e < n_excl && e < 32; e++) {
+        h_cx[e] = excl_centers[e][0];
+        h_cy[e] = excl_centers[e][1];
+        h_cz[e] = excl_centers[e][2];
+        h_r2[e] = excl_radii[e] * excl_radii[e];
+    }
+
+    double *d_cx, *d_cy, *d_cz, *d_r2;
+    HIP_CHECK(hipMalloc(&d_cx, n_excl * sizeof(double)));
+    HIP_CHECK(hipMalloc(&d_cy, n_excl * sizeof(double)));
+    HIP_CHECK(hipMalloc(&d_cz, n_excl * sizeof(double)));
+    HIP_CHECK(hipMalloc(&d_r2, n_excl * sizeof(double)));
+    HIP_CHECK(hipMemcpy(d_cx, h_cx, n_excl * sizeof(double), hipMemcpyHostToDevice));
+    HIP_CHECK(hipMemcpy(d_cy, h_cy, n_excl * sizeof(double), hipMemcpyHostToDevice));
+    HIP_CHECK(hipMemcpy(d_cz, h_cz, n_excl * sizeof(double), hipMemcpyHostToDevice));
+    HIP_CHECK(hipMemcpy(d_r2, h_r2, n_excl * sizeof(double), hipMemcpyHostToDevice));
+
+    double *d_min, *d_pos;
+    HIP_CHECK(hipMalloc(&d_min, gs * sizeof(double)));
+    HIP_CHECK(hipMalloc(&d_pos, gs * 3 * sizeof(double)));
+
+    size_t shared_bytes = bs * (1 + 3) * sizeof(double);
+    hipLaunchKernelGGL(hip_min_lapse_multi_excl_partial, gs, bs, shared_bytes,
+                       gpu_stream,
+                       d_ptrs.data, d_ptrs.dx_per_block, d_ptrs.origins,
+                       nb, (size_t)pack->npts, pack->n_fields,
+                       N, pack->ghost, pack->Ntotal,
+                       d_cx, d_cy, d_cz, d_r2, n_excl,
+                       d_min, d_pos, total_points);
+
+    double *h_min = (double *)malloc(gs * sizeof(double));
+    double *h_pos = (double *)malloc(gs * 3 * sizeof(double));
+    HIP_CHECK(hipStreamSynchronize(gpu_stream));
+    HIP_CHECK(hipMemcpy(h_min, d_min, gs * sizeof(double), hipMemcpyDeviceToHost));
+    HIP_CHECK(hipMemcpy(h_pos, d_pos, gs * 3 * sizeof(double), hipMemcpyDeviceToHost));
+
+    double best = 1.0e30;
+    for (int i = 0; i < gs; i++) {
+        if (h_min[i] < best) {
+            best = h_min[i];
+            *out_x = h_pos[i * 3 + 0];
+            *out_y = h_pos[i * 3 + 1];
+            *out_z = h_pos[i * 3 + 2];
+        }
+    }
+
+    free(h_min); free(h_pos);
+    (void)hipFree(d_min); (void)hipFree(d_pos);
+    (void)hipFree(d_cx); (void)hipFree(d_cy);
+    (void)hipFree(d_cz); (void)hipFree(d_r2);
+
+    return best;
+}
+
 /* ---- Kernel: NaN/Inf check ---- */
 
 __global__ void hip_check_finite(double *data, size_t total_elements, int *any_bad)

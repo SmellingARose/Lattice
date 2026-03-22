@@ -640,13 +640,21 @@ int main(int argc, char **argv)
                        step, re22, im22);
             }
 
+            /* --- GPU-native BH tracker position update (no sync) --- */
+            if (need_tracker && gpu_resident) {
+                bh_tracker_update_positions_packed(tracker, m);
+                bh_tracker_check_mergers(tracker, p.time);
+            }
+
             /* --- CPU-only operations: sync to host first --- */
             int need_host_sync = need_regrid || need_output ||
-                                 need_checkpoint || need_ah ||
-                                 need_tracker || need_cce;
+                                 need_checkpoint || need_ah || need_cce;
+            /* Tracker needs sync only for find_horizons (AH per BH) */
+            if (need_tracker)
+                need_host_sync = 1;  /* find_horizons is CPU-only */
             /* Also sync for diagnostics when NOT on GPU path */
             if (!gpu_resident)
-                need_host_sync |= need_ham100 || need_psi4;
+                need_host_sync |= need_ham100 || need_psi4 || need_tracker;
 
             if (need_host_sync && backend_is_gpu())
                 gpu_sync_all_to_host(m);
@@ -664,11 +672,15 @@ int main(int argc, char **argv)
                        step, p.time, ham, mesh_num_leaves(m));
             }
 
-            /* N-body BH tracker (CPU-only: lapse-min search + AH per BH) */
+            /* N-body BH tracker */
             if (need_tracker) {
-                bh_tracker_update_positions(tracker, m);
+                if (!gpu_resident)
+                    bh_tracker_update_positions(tracker, m);
+                /* GPU path already did position update + merger check above;
+                 * but find_horizons needs host data (AH finder is CPU-only) */
                 bh_tracker_find_horizons(tracker, m, ah_tol, ah_max_iter);
-                bh_tracker_check_mergers(tracker, p.time);
+                if (!gpu_resident)
+                    bh_tracker_check_mergers(tracker, p.time);
                 double ham_tr = gpu_resident ? gpu_constraint_l2(m)
                                              : mesh_constraint_l2(m);
                 double mom_tr = gpu_resident ? gpu_momentum_l2(m)

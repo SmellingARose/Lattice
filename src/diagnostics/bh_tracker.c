@@ -189,6 +189,74 @@ void bh_tracker_update_positions(bh_tracker_t *tr, const mesh_t *m)
     }
 }
 
+/*
+ * GPU-native position update: successive lapse-min searches on device packs.
+ * Same algorithm as bh_tracker_update_positions but uses
+ * backend_min_lapse_excl_packed on the finest level pack.
+ * Only scalar results (~100 bytes) transfer D→H per BH.
+ */
+void bh_tracker_update_positions_packed(bh_tracker_t *tr, mesh_t *m)
+{
+    /* Find the finest non-empty level pack */
+    meshblock_pack_t *pack = NULL;
+    for (int L = m->max_level; L >= 0; L--) {
+        if (m->level_packs[L] && m->level_packs[L]->n_blocks > 0) {
+            pack = m->level_packs[L];
+            break;
+        }
+    }
+    if (!pack) return;
+
+    backend_activate_pack(pack);
+
+    double excl_centers[MAX_PUNCTURES][3];
+    double excl_radii[MAX_PUNCTURES];
+    int n_excl = 0;
+
+    int assigned[MAX_PUNCTURES];
+    memset(assigned, 0, sizeof(assigned));
+
+    for (int pass = 0; pass < tr->n_active; pass++) {
+        double pos[3] = {0, 0, 0};
+        double min_lapse = backend_min_lapse_excl_packed(
+            pack, n_excl, (const double (*)[3])excl_centers, excl_radii,
+            &pos[0], &pos[1], &pos[2]);
+
+        if (min_lapse >= 1e30) break;
+
+        /* Assign to nearest unassigned active BH */
+        int best_id = -1;
+        double best_dist = 1e30;
+        for (int i = 0; i < tr->n_bh; i++) {
+            if (tr->bh[i].status != BH_STATUS_ACTIVE) continue;
+            if (assigned[i]) continue;
+            double dx = pos[0] - tr->bh[i].center[0];
+            double dy = pos[1] - tr->bh[i].center[1];
+            double dz = pos[2] - tr->bh[i].center[2];
+            double d = sqrt(dx*dx + dy*dy + dz*dz);
+            if (d < best_dist) {
+                best_dist = d;
+                best_id = i;
+            }
+        }
+
+        if (best_id < 0) break;
+
+        assigned[best_id] = 1;
+        tr->bh[best_id].center[0] = pos[0];
+        tr->bh[best_id].center[1] = pos[1];
+        tr->bh[best_id].center[2] = pos[2];
+        tr->bh[best_id].lapse_min = min_lapse;
+
+        excl_centers[n_excl][0] = pos[0];
+        excl_centers[n_excl][1] = pos[1];
+        excl_centers[n_excl][2] = pos[2];
+        excl_radii[n_excl] = 2.0 * tr->bh[best_id].initial_mass;
+        if (excl_radii[n_excl] < 1.0) excl_radii[n_excl] = 1.0;
+        n_excl++;
+    }
+}
+
 /* ================================================================
  * AH finding per active BH
  * ================================================================ */

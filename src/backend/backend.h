@@ -336,6 +336,19 @@ double backend_bh_separation_packed(meshblock_pack_t *pack, double excl_radius,
                                       double *x2, double *y2, double *z2);
 
 /*
+ * Minimum lapse with exclusion zones on device.
+ * Skips points within any exclusion sphere. Used by BH tracker for
+ * successive lapse-minimum searches (one call per BH).
+ * n_excl=0 is equivalent to backend_min_lapse_packed.
+ */
+double backend_min_lapse_excl_packed(meshblock_pack_t *pack,
+                                       int n_excl,
+                                       const double excl_centers[][3],
+                                       const double *excl_radii,
+                                       double *out_x, double *out_y,
+                                       double *out_z);
+
+/*
  * Check all evolved fields for NaN/Inf on device. Returns 1 if all finite.
  */
 int backend_check_finite_packed(meshblock_pack_t *pack);

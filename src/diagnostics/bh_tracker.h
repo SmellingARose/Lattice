@@ -73,6 +73,13 @@ void bh_tracker_free(bh_tracker_t *tr);
 void bh_tracker_update_positions(bh_tracker_t *tr, const mesh_t *m);
 
 /*
+ * GPU-native position update on device-resident level packs.
+ * Same algorithm but uses backend_min_lapse_excl_packed — no host sync.
+ * Only ~100 bytes of scalar results (positions, lapse values) return to host.
+ */
+void bh_tracker_update_positions_packed(bh_tracker_t *tr, mesh_t *m);
+
+/*
  * Run AH finder on each active BH, extract mass/spin/area.
  * Updates ah workspace center to current BH position before finding.
  */

@@ -3,6 +3,27 @@
 > **Note:** When adding/removing/renaming files or functions, also update
 > `docs/architecture.html` — the living map of the codebase structure.
 
+## 2026-03-22: GPU BH tracker position update
+
+**New:** `bh_tracker_update_positions_packed()` runs successive lapse-minimum
+searches on device-resident level packs via `backend_min_lapse_excl_packed`.
+Same exclusion-zone algorithm as CPU version, but each pass is a single GPU
+kernel launch instead of an OMP loop over host blocks. Only ~100 bytes of
+scalar results (positions, lapse values) transfer D→H per BH per step.
+
+**New backend kernel:** `backend_min_lapse_excl_packed(pack, n_excl,
+excl_centers, excl_radii, &x, &y, &z)` — min lapse with N exclusion spheres.
+CPU: OMP-parallel loop with exclusion check. HIP: dedicated
+`hip_min_lapse_multi_excl_partial` kernel with device-side exclusion arrays.
+
+**main.c:** GPU path calls `bh_tracker_update_positions_packed` +
+`bh_tracker_check_mergers` before the host sync. `bh_tracker_find_horizons`
+(AH per BH) still needs host data — this is the remaining reason tracker
+steps force a sync. Separating position updates from horizon finding
+(different frequencies) would eliminate most tracker syncs.
+
+**Tests:** N-body tracker 40/40 pass.
+
 ## 2026-03-22: GPU-native constraint/Psi4 diagnostics in main.c
 
 **Change:** Wired GPU diagnostic kernels into main.c AMR evolution loop.
