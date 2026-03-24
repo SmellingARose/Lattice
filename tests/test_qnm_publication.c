@@ -40,6 +40,14 @@
 #include "../src/diagnostics/constraints.h"
 #include "../src/diagnostics/psi4.h"
 #include "../src/backend/backend.h"
+#include <time.h>
+
+static double wtime(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec + ts.tv_nsec * 1e-9;
+}
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -211,8 +219,10 @@ int main(void)
     /* --- Evolution --- */
     int is_gpu = backend_is_gpu() && m->max_level > 0;
     p.time = 0.0;
+    double t_wall_start = wtime();
 
     for (int step = 1; step <= total_steps; step++) {
+        double t_step_start = wtime();
         rk4_step_mesh(m, &p, ccz4_rhs_point, p.dt);
         p.time += p.dt;
 
@@ -295,7 +305,9 @@ int main(void)
             printf("  step %4d  t=%6.1fM  Ham=%.3e  Mom=%.3e  lapse=%.4f",
                    step, p.time, ham, mom, ml);
             if (amp20 > 0) printf("  |Psi4|=%.3e", amp20);
-            printf("\n");
+            double elapsed = wtime() - t_wall_start;
+            double dt_wall = wtime() - t_step_start;
+            printf("  [%.1fs/step, %.0fs total]\n", dt_wall, elapsed);
         } else if (do_diag) {
             /* CPU fallback */
             double ham = mesh_constraint_l2(m);
@@ -316,7 +328,9 @@ int main(void)
             printf("  step %4d  t=%6.1fM  Ham=%.3e  Mom=%.3e  lapse=%.4f",
                    step, p.time, ham, mom, ml);
             if (amp20 > 0) printf("  |Psi4|=%.3e", amp20);
-            printf("\n");
+            double elapsed = wtime() - t_wall_start;
+            double dt_wall = wtime() - t_step_start;
+            printf("  [%.1fs/step, %.0fs total]\n", dt_wall, elapsed);
         }
     }
 
