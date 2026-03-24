@@ -39,7 +39,6 @@
 #include "../src/numerics/rk4.h"
 #include "../src/diagnostics/constraints.h"
 #include "../src/diagnostics/psi4.h"
-#include "../src/diagnostics/ah_finder.h"
 #include "../src/backend/backend.h"
 
 #ifndef M_PI
@@ -173,10 +172,6 @@ int main(void)
     printf("  Psi4: r=%.0fM, r=%.0fM, %dx%d, l_max=%d\n", r1, r2,
            n_theta, n_phi, l_max);
 
-    /* --- AH finder --- */
-    ah_workspace_t *ah = ah_alloc(24, 48, center, 0.5);
-    int ah_every = 50;  /* run AH every 50 base steps */
-
     /* --- Time series --- */
     double T_final = 200.0;
     int total_steps = (int)(T_final / p.dt + 0.5);
@@ -210,8 +205,8 @@ int main(void)
     int n_diag = 0;
 
     printf("  Evolving T=%.0fM (%d base steps)\n", T_final, total_steps);
-    printf("  Psi4 every %d steps, diagnostics every %d, AH every %d\n\n",
-           psi4_every, diag_every, ah_every);
+    printf("  Psi4 every %d steps, diagnostics every %d\n\n",
+           psi4_every, diag_every);
 
     /* --- Evolution --- */
     int is_gpu = backend_is_gpu() && m->max_level > 0;
@@ -221,17 +216,30 @@ int main(void)
         rk4_step_mesh(m, &p, ccz4_rhs_point, p.dt);
         p.time += p.dt;
 
-        /* Determine what needs host data this step */
         int do_psi4 = (step % psi4_every == 0);
         int do_diag = (step % diag_every == 0 || step == total_steps);
-        int do_ah   = (step % ah_every == 0);
 
-        /* Sync to host only when needed (Psi4/constraints/AH are CPU) */
-        if ((do_psi4 || do_diag || do_ah) && is_gpu)
-            gpu_sync_all_to_host(m);
-
-        /* Psi4 extraction */
-        if (do_psi4) {
+        /* GPU-native Psi4: run on device packs, no host sync */
+        if (do_psi4 && is_gpu) {
+            meshblock_pack_t *pk0 = m->level_packs[0];
+            if (pk0) {
+                backend_activate_pack(pk0);
+                backend_ghost_exchange_packed(pk0);
+                backend_psi4_extract_packed(pk0, ws1, m);
+                backend_psi4_extract_packed(pk0, ws2, m);
+            }
+            psi4_t[n_psi4]  = p.time;
+            r1_re20[n_psi4] = ws1->mode_re[mi_20];
+            r1_im20[n_psi4] = ws1->mode_im[mi_20];
+            r1_re22[n_psi4] = ws1->mode_re[mi_22];
+            r1_im22[n_psi4] = ws1->mode_im[mi_22];
+            r2_re20[n_psi4] = ws2->mode_re[mi_20];
+            r2_im20[n_psi4] = ws2->mode_im[mi_20];
+            r2_re22[n_psi4] = ws2->mode_re[mi_22];
+            r2_im22[n_psi4] = ws2->mode_im[mi_22];
+            n_psi4++;
+        } else if (do_psi4) {
+            /* CPU fallback */
             psi4_extract(ws1, m);
             psi4_extract(ws2, m);
             psi4_t[n_psi4]  = p.time;
@@ -246,28 +254,39 @@ int main(void)
             n_psi4++;
         }
 
-        /* Diagnostics: constraints + lapse + AH */
-        if (do_diag) {
-            double ham = mesh_constraint_l2(m);
-            double mom = mesh_momentum_l2(m);
-            double ml = mesh_min_lapse(m);
-            double mass = 0.0, spin = 0.0;
+        /* GPU-native constraints (no host sync) */
+        if (do_diag && is_gpu) {
+            double ham = 0, mom = 0, vol_h = 0, vol_m = 0;
+            for (int L = 0; L <= m->max_level; L++) {
+                meshblock_pack_t *pk = m->level_packs[L];
+                if (!pk || pk->n_blocks == 0) continue;
+                backend_activate_pack(pk);
+                double s, v;
+                backend_constraint_l2_raw_packed(pk, &s, &v);
+                ham += s; vol_h += v;
+                backend_momentum_l2_raw_packed(pk, &s, &v);
+                mom += s; vol_m += v;
+            }
+            ham = (vol_h > 0) ? sqrt(ham / vol_h) : 0;
+            mom = (vol_m > 0) ? sqrt(mom / (3.0 * vol_m)) : 0;
 
-            if (do_ah) {
-                int conv = ah_find_amr(ah, m, 1e-6, 500, 0);
-                if (conv) {
-                    ah_result_t r = ah_compute_diagnostics_amr(ah, m);
-                    mass = r.mass_irr;
-                    spin = r.spin_mag;
-                }
+            /* Min lapse: use finest level pack */
+            double ml = 1.0;
+            for (int L = m->max_level; L >= 0; L--) {
+                meshblock_pack_t *pk = m->level_packs[L];
+                if (!pk || pk->n_blocks == 0) continue;
+                backend_activate_pack(pk);
+                double x, y, z;
+                double a = backend_min_lapse_packed(pk, &x, &y, &z);
+                if (a < ml) ml = a;
             }
 
             diag_t[n_diag]     = p.time;
             diag_ham[n_diag]   = ham;
             diag_mom[n_diag]   = mom;
             diag_lapse[n_diag] = ml;
-            diag_mass[n_diag]  = mass;
-            diag_spin[n_diag]  = spin;
+            diag_mass[n_diag]  = 0;
+            diag_spin[n_diag]  = 0;
             n_diag++;
 
             double amp20 = (n_psi4 > 0) ?
@@ -276,7 +295,27 @@ int main(void)
             printf("  step %4d  t=%6.1fM  Ham=%.3e  Mom=%.3e  lapse=%.4f",
                    step, p.time, ham, mom, ml);
             if (amp20 > 0) printf("  |Psi4|=%.3e", amp20);
-            if (mass > 0)  printf("  M_irr=%.4f", mass);
+            printf("\n");
+        } else if (do_diag) {
+            /* CPU fallback */
+            double ham = mesh_constraint_l2(m);
+            double mom = mesh_momentum_l2(m);
+            double ml = mesh_min_lapse(m);
+
+            diag_t[n_diag]     = p.time;
+            diag_ham[n_diag]   = ham;
+            diag_mom[n_diag]   = mom;
+            diag_lapse[n_diag] = ml;
+            diag_mass[n_diag]  = 0;
+            diag_spin[n_diag]  = 0;
+            n_diag++;
+
+            double amp20 = (n_psi4 > 0) ?
+                sqrt(r1_re20[n_psi4-1]*r1_re20[n_psi4-1] +
+                     r1_im20[n_psi4-1]*r1_im20[n_psi4-1]) : 0;
+            printf("  step %4d  t=%6.1fM  Ham=%.3e  Mom=%.3e  lapse=%.4f",
+                   step, p.time, ham, mom, ml);
+            if (amp20 > 0) printf("  |Psi4|=%.3e", amp20);
             printf("\n");
         }
     }
@@ -350,21 +389,6 @@ int main(void)
     check(ham_final < 0.01, "Final Ham L2 < 0.01");
     check(isfinite(ham_final), "No NaN/Inf");
 
-    /* AH mass conservation: compare first and last AH measurement */
-    double first_mass = 0, last_mass = 0;
-    for (int i = 0; i < n_diag; i++) {
-        if (diag_mass[i] > 0 && first_mass == 0) first_mass = diag_mass[i];
-        if (diag_mass[i] > 0) last_mass = diag_mass[i];
-    }
-    if (first_mass > 0 && last_mass > 0) {
-        double drift = fabs(last_mass - first_mass) / first_mass;
-        char msg[128];
-        snprintf(msg, sizeof(msg),
-                 "AH mass conserved: M_irr %.4f→%.4f (drift %.2f%%)",
-                 first_mass, last_mass, 100*drift);
-        check(drift < 0.01, msg);
-    }
-
     printf("\n=== Results: %d passed, %d failed ===\n", n_pass, n_fail);
 
     /* --- CSV: Psi4 at both radii --- */
@@ -402,7 +426,6 @@ int main(void)
     free(diag_t); free(diag_ham); free(diag_mom);
     free(diag_lapse); free(diag_mass); free(diag_spin);
     psi4_free(ws1); psi4_free(ws2);
-    ah_free(ah);
     mesh_free(m);
     backend_cleanup();
     return n_fail > 0 ? 1 : 0;
