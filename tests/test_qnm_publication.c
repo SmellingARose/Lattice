@@ -10,12 +10,12 @@
  *   ω_R = 0.37367 / M,  ω_I = 0.08896 / M
  *
  * Grid: N_block=32, L=64, 4 AMR levels → dx_fine = 0.125M = M/8
- *   dx_base = 2M at extraction radii (r=15M, r=20M) — resolves QNM waves.
- *   Boundary at 32M. Analysis from t=40M (past junk + reflections).
+ *   Level 1 (dx=2M) covers extraction radii (r=20M, r=25M).
+ *   Boundary at 64M. Reflections reach r=25M at t≈78M. T=100M safe.
  *
  * Output CSVs for plotting:
- *   build/qnm_pub_r15.csv     — Psi4 modes at r=15M
  *   build/qnm_pub_r20.csv     — Psi4 modes at r=20M
+ *   build/qnm_pub_r25.csv     — Psi4 modes at r=25M
  *   build/qnm_pub_diag.csv    — constraints + lapse over time
  *
  * Memory: ~200 blocks × 40³ × 25 × 4 × 8 ≈ 10 GB
@@ -134,16 +134,17 @@ int main(void)
     printf("=== Schwarzschild QNM Ringdown — Publication Quality ===\n\n");
     backend_init();
 
-    /* --- Grid: L=64, 4 AMR levels, dx_fine = M/8 = 0.125M ---
-     * dx_base = 64/32 = 2M — resolves waves at extraction radii (r=15,20M).
-     * Boundary at 32M. Reflections reach r=20M at t≈24M, r=15M at t≈34M.
-     * Analysis window: t=40M onward (past junk + reflections).
-     * Old setup (L=256, dx_base=8M) had dx=8M at extraction — below Nyquist.
-     * Literature: all codes achieve dx ≤ 2M at extraction (BAM, GRChombo). */
+    /* --- Grid: L=128, 5 AMR levels, dx_fine = M/8 = 0.125M ---
+     * dx_base = 128/32 = 4M. Boundary at 64M.
+     * Level 1 (dx=2M) covers r≤32M — extraction at r=20M,25M has dx=2M
+     *   (8 points per QNM wavelength, matches BAM standard).
+     * Reflections reach r=25M at t ≈ 2*(64-25) = 78M.
+     * Analysis window: t=40M to 78M = 38M ≈ 2.3 clean QNM cycles.
+     * Memory: ~200 blocks × 40³ × 25 × 4 × 8 ≈ 10 GB. */
     int N_block = 32;
-    double L = 64.0;
+    double L = 128.0;
     double M_bh = 1.0;
-    int max_level = 4;
+    int max_level = 5;
 
     mesh_t *m = mesh_create_ex(N_block, L, RK_CLASSIC, NUM_CCZ4_FIELDS);
     mesh_rebuild_neighbors(m);
@@ -178,7 +179,7 @@ int main(void)
     printf("  Initial: Ham=%.4e, Mom=%.4e, lapse_min=%.4f\n\n", ham0, mom0, ml0);
 
     /* --- Psi4 at two radii --- */
-    double r1 = 15.0, r2 = 20.0;
+    double r1 = 20.0, r2 = 25.0;
     double center[3] = {0, 0, 0};
     int n_theta = 24, n_phi = 48, l_max = 4;
     psi4_workspace_t *ws1 = psi4_alloc(n_theta, n_phi, l_max, r1, center);
@@ -187,7 +188,7 @@ int main(void)
            n_theta, n_phi, l_max);
 
     /* --- Time series --- */
-    double T_final = 200.0;
+    double T_final = 100.0;  /* reflections reach r=25M at t≈78M; safe to 80M */
     int total_steps = (int)(T_final / p.dt + 0.5);
     int psi4_every = 1;   /* every base step = 2M cadence, ~8 samples/QNM cycle */
     int diag_every = 10;  /* constraints every 10 steps */
@@ -334,17 +335,17 @@ int main(void)
     /* Frequency */
     double wR1 = measure_omega_R(psi4_t, r1_re20, n_psi4, t_start);
     double wR2 = measure_omega_R(psi4_t, r2_re20, n_psi4, t_start);
-    printf("  ω_R(r=15M) = %.5f/M  (expected 0.37367, err=%.2f%%)\n",
-           wR1, wR1 > 0 ? 100*fabs(wR1-0.37367)/0.37367 : -1.0);
     printf("  ω_R(r=20M) = %.5f/M  (expected 0.37367, err=%.2f%%)\n",
+           wR1, wR1 > 0 ? 100*fabs(wR1-0.37367)/0.37367 : -1.0);
+    printf("  ω_R(r=25M) = %.5f/M  (expected 0.37367, err=%.2f%%)\n",
            wR2, wR2 > 0 ? 100*fabs(wR2-0.37367)/0.37367 : -1.0);
 
     /* Damping */
     double wI1 = measure_omega_I(psi4_t, r1_re20, n_psi4, t_start);
     double wI2 = measure_omega_I(psi4_t, r2_re20, n_psi4, t_start);
-    printf("  ω_I(r=15M) = %.5f/M  (expected 0.08896, err=%.2f%%)\n",
-           wI1, wI1 > 0 ? 100*fabs(wI1-0.08896)/0.08896 : -1.0);
     printf("  ω_I(r=20M) = %.5f/M  (expected 0.08896, err=%.2f%%)\n",
+           wI1, wI1 > 0 ? 100*fabs(wI1-0.08896)/0.08896 : -1.0);
+    printf("  ω_I(r=25M) = %.5f/M  (expected 0.08896, err=%.2f%%)\n",
            wI2, wI2 > 0 ? 100*fabs(wI2-0.08896)/0.08896 : -1.0);
 
     /* (2,2) mode — should be near zero for non-spinning BH */
@@ -372,22 +373,22 @@ int main(void)
     /* --- Pass/fail --- */
     printf("\n=== Pass/Fail ===\n");
 
-    check(wR1 > 0, "ω_R(r=15) measurable");
-    check(wR2 > 0, "ω_R(r=20) measurable");
+    check(wR1 > 0, "ω_R(r=20) measurable");
+    check(wR2 > 0, "ω_R(r=25) measurable");
     if (wR1 > 0)
         check(fabs(wR1-0.37367)/0.37367 < 0.05,
-              "ω_R(r=15) within 5% of Leaver");
+              "ω_R(r=20) within 5% of Leaver");
     if (wR2 > 0)
         check(fabs(wR2-0.37367)/0.37367 < 0.05,
-              "ω_R(r=20) within 5% of Leaver");
+              "ω_R(r=25) within 5% of Leaver");
     if (wR1 > 0 && wR2 > 0)
         check(fabs(wR1-wR2)/(0.5*(wR1+wR2)) < 0.03,
               "ω_R consistent across radii (<3%)");
 
-    check(wI1 > 0, "ω_I(r=15) measurable");
+    check(wI1 > 0, "ω_I(r=20) measurable");
     if (wI1 > 0)
         check(fabs(wI1-0.08896)/0.08896 < 0.15,
-              "ω_I(r=15) within 15% of Leaver");
+              "ω_I(r=20) within 15% of Leaver");
 
     check(max_20 > 0, "Psi4(2,0) mode excited");
     check(max_22 < 0.1 * max_20,
@@ -401,7 +402,7 @@ int main(void)
     printf("\n=== Results: %d passed, %d failed ===\n", n_pass, n_fail);
 
     /* --- CSV: Psi4 at both radii --- */
-    FILE *fp = fopen("build/qnm_pub_r15.csv", "w");
+    FILE *fp = fopen("build/qnm_pub_r20.csv", "w");
     if (fp) {
         fprintf(fp, "t,re_20,im_20,re_22,im_22\n");
         for (int i = 0; i < n_psi4; i++)
@@ -409,7 +410,7 @@ int main(void)
                     psi4_t[i], r1_re20[i], r1_im20[i], r1_re22[i], r1_im22[i]);
         fclose(fp);
     }
-    fp = fopen("build/qnm_pub_r20.csv", "w");
+    fp = fopen("build/qnm_pub_r25.csv", "w");
     if (fp) {
         fprintf(fp, "t,re_20,im_20,re_22,im_22\n");
         for (int i = 0; i < n_psi4; i++)
@@ -428,7 +429,7 @@ int main(void)
                     diag_lapse[i], diag_mass[i], diag_spin[i]);
         fclose(fp);
     }
-    printf("  CSV: qnm_pub_r15.csv, qnm_pub_r20.csv, qnm_pub_diag.csv\n");
+    printf("  CSV: qnm_pub_r20.csv, qnm_pub_r25.csv, qnm_pub_diag.csv\n");
 
     free(psi4_t); free(r1_re20); free(r1_im20); free(r1_re22); free(r1_im22);
     free(r2_re20); free(r2_im20); free(r2_re22); free(r2_im22);
