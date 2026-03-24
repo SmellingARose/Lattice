@@ -175,7 +175,7 @@ int main(void)
     /* --- Time series --- */
     double T_final = 200.0;
     int total_steps = (int)(T_final / p.dt + 0.5);
-    int psi4_every = 4;   /* every 4 base steps ≈ 8M (>10 samples/QNM cycle) */
+    int psi4_every = 1;   /* every base step = 2M cadence, ~8 samples/QNM cycle */
     int diag_every = 10;  /* constraints every 10 steps */
     int max_psi4 = total_steps / psi4_every + 2;
     int max_diag = total_steps / diag_every + 2;
