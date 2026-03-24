@@ -9,16 +9,17 @@
  * Known Schwarzschild l=2 QNM (Leaver 1985):
  *   ω_R = 0.37367 / M,  ω_I = 0.08896 / M
  *
- * Grid: N_block=32, L=256, 6 AMR levels → dx_fine = 0.125M = M/8
- *   Boundary at 128M — reflections reach r=50M at t ≈ 206M (clean T=200M).
+ * Grid: N_block=32, L=64, 4 AMR levels → dx_fine = 0.125M = M/8
+ *   dx_base = 2M at extraction radii (r=15M, r=20M) — resolves QNM waves.
+ *   Boundary at 32M. Analysis from t=40M (past junk + reflections).
  *
  * Output CSVs for plotting:
- *   build/qnm_pub_r30.csv     — Psi4 modes at r=30M
- *   build/qnm_pub_r50.csv     — Psi4 modes at r=50M
- *   build/qnm_pub_diag.csv    — constraints + lapse + AH over time
+ *   build/qnm_pub_r15.csv     — Psi4 modes at r=15M
+ *   build/qnm_pub_r20.csv     — Psi4 modes at r=20M
+ *   build/qnm_pub_diag.csv    — constraints + lapse over time
  *
- * Memory: ~330 blocks × 40³ × 25 × 4 × 8 ≈ 17 GB
- * Requires: GPU with ≥40 GB VRAM, or workstation with ≥32 GB RAM.
+ * Memory: ~200 blocks × 40³ × 25 × 4 × 8 ≈ 10 GB
+ * Runs on: GPU (≥16 GB VRAM) or CPU (≥16 GB RAM).
  *
  * Ref: Leaver (1985), Berti et al. (2009, arXiv:0905.2975)
  * Ref: Etienne (2024, arXiv:2404.01137)
@@ -133,11 +134,16 @@ int main(void)
     printf("=== Schwarzschild QNM Ringdown — Publication Quality ===\n\n");
     backend_init();
 
-    /* --- Grid: L=256, 6 AMR levels, dx_fine = M/8 --- */
+    /* --- Grid: L=64, 4 AMR levels, dx_fine = M/8 = 0.125M ---
+     * dx_base = 64/32 = 2M — resolves waves at extraction radii (r=15,20M).
+     * Boundary at 32M. Reflections reach r=20M at t≈24M, r=15M at t≈34M.
+     * Analysis window: t=40M onward (past junk + reflections).
+     * Old setup (L=256, dx_base=8M) had dx=8M at extraction — below Nyquist.
+     * Literature: all codes achieve dx ≤ 2M at extraction (BAM, GRChombo). */
     int N_block = 32;
-    double L = 256.0;
+    double L = 64.0;
     double M_bh = 1.0;
-    int max_level = 6;
+    int max_level = 4;
 
     mesh_t *m = mesh_create_ex(N_block, L, RK_CLASSIC, NUM_CCZ4_FIELDS);
     mesh_rebuild_neighbors(m);
@@ -172,7 +178,7 @@ int main(void)
     printf("  Initial: Ham=%.4e, Mom=%.4e, lapse_min=%.4f\n\n", ham0, mom0, ml0);
 
     /* --- Psi4 at two radii --- */
-    double r1 = 30.0, r2 = 50.0;
+    double r1 = 15.0, r2 = 20.0;
     double center[3] = {0, 0, 0};
     int n_theta = 24, n_phi = 48, l_max = 4;
     psi4_workspace_t *ws1 = psi4_alloc(n_theta, n_phi, l_max, r1, center);
@@ -229,27 +235,14 @@ int main(void)
         int do_psi4 = (step % psi4_every == 0);
         int do_diag = (step % diag_every == 0 || step == total_steps);
 
-        /* GPU-native Psi4: run on device packs, no host sync */
-        if (do_psi4 && is_gpu) {
-            meshblock_pack_t *pk0 = m->level_packs[0];
-            if (pk0) {
-                backend_activate_pack(pk0);
-                backend_ghost_exchange_packed(pk0);
-                backend_psi4_extract_packed(pk0, ws1, m);
-                backend_psi4_extract_packed(pk0, ws2, m);
-            }
-            psi4_t[n_psi4]  = p.time;
-            r1_re20[n_psi4] = ws1->mode_re[mi_20];
-            r1_im20[n_psi4] = ws1->mode_im[mi_20];
-            r1_re22[n_psi4] = ws1->mode_re[mi_22];
-            r1_im22[n_psi4] = ws1->mode_im[mi_22];
-            r2_re20[n_psi4] = ws2->mode_re[mi_20];
-            r2_im20[n_psi4] = ws2->mode_im[mi_20];
-            r2_re22[n_psi4] = ws2->mode_re[mi_22];
-            r2_im22[n_psi4] = ws2->mode_im[mi_22];
-            n_psi4++;
-        } else if (do_psi4) {
-            /* CPU fallback */
+        /* Psi4 extraction needs the finest block at each angular point.
+         * GPU level_packs[0] only has the coarse base grid (dx=8M) —
+         * Psi4 second derivatives are unresolvable there. CPU psi4_extract
+         * uses mesh_find_block_at to find the finest block at each point.
+         * Sync cost: ~2s per step vs 48s evolution = 4% overhead. */
+        if (do_psi4) {
+            if (is_gpu)
+                gpu_sync_all_to_host(m);
             psi4_extract(ws1, m);
             psi4_extract(ws2, m);
             psi4_t[n_psi4]  = p.time;
@@ -341,17 +334,17 @@ int main(void)
     /* Frequency */
     double wR1 = measure_omega_R(psi4_t, r1_re20, n_psi4, t_start);
     double wR2 = measure_omega_R(psi4_t, r2_re20, n_psi4, t_start);
-    printf("  ω_R(r=30M) = %.5f/M  (expected 0.37367, err=%.2f%%)\n",
+    printf("  ω_R(r=15M) = %.5f/M  (expected 0.37367, err=%.2f%%)\n",
            wR1, wR1 > 0 ? 100*fabs(wR1-0.37367)/0.37367 : -1.0);
-    printf("  ω_R(r=50M) = %.5f/M  (expected 0.37367, err=%.2f%%)\n",
+    printf("  ω_R(r=20M) = %.5f/M  (expected 0.37367, err=%.2f%%)\n",
            wR2, wR2 > 0 ? 100*fabs(wR2-0.37367)/0.37367 : -1.0);
 
     /* Damping */
     double wI1 = measure_omega_I(psi4_t, r1_re20, n_psi4, t_start);
     double wI2 = measure_omega_I(psi4_t, r2_re20, n_psi4, t_start);
-    printf("  ω_I(r=30M) = %.5f/M  (expected 0.08896, err=%.2f%%)\n",
+    printf("  ω_I(r=15M) = %.5f/M  (expected 0.08896, err=%.2f%%)\n",
            wI1, wI1 > 0 ? 100*fabs(wI1-0.08896)/0.08896 : -1.0);
-    printf("  ω_I(r=50M) = %.5f/M  (expected 0.08896, err=%.2f%%)\n",
+    printf("  ω_I(r=20M) = %.5f/M  (expected 0.08896, err=%.2f%%)\n",
            wI2, wI2 > 0 ? 100*fabs(wI2-0.08896)/0.08896 : -1.0);
 
     /* (2,2) mode — should be near zero for non-spinning BH */
@@ -369,7 +362,9 @@ int main(void)
     printf("  max|Psi4(2,2)| = %.4e  (ratio to (2,0): %.2e)\n",
            max_22, max_20 > 0 ? max_22/max_20 : 0);
 
-    /* Gauge */
+    /* Gauge — sync to host for final CPU diagnostics */
+    if (is_gpu)
+        gpu_sync_all_to_host(m);
     double min_alpha = mesh_min_lapse(m);
     double ham_final = mesh_constraint_l2(m);
     printf("  Final: lapse_min=%.4f, Ham=%.4e\n", min_alpha, ham_final);
@@ -377,22 +372,22 @@ int main(void)
     /* --- Pass/fail --- */
     printf("\n=== Pass/Fail ===\n");
 
-    check(wR1 > 0, "ω_R(r=30) measurable");
-    check(wR2 > 0, "ω_R(r=50) measurable");
+    check(wR1 > 0, "ω_R(r=15) measurable");
+    check(wR2 > 0, "ω_R(r=20) measurable");
     if (wR1 > 0)
         check(fabs(wR1-0.37367)/0.37367 < 0.05,
-              "ω_R(r=30) within 5% of Leaver");
+              "ω_R(r=15) within 5% of Leaver");
     if (wR2 > 0)
         check(fabs(wR2-0.37367)/0.37367 < 0.05,
-              "ω_R(r=50) within 5% of Leaver");
+              "ω_R(r=20) within 5% of Leaver");
     if (wR1 > 0 && wR2 > 0)
         check(fabs(wR1-wR2)/(0.5*(wR1+wR2)) < 0.03,
               "ω_R consistent across radii (<3%)");
 
-    check(wI1 > 0, "ω_I(r=30) measurable");
+    check(wI1 > 0, "ω_I(r=15) measurable");
     if (wI1 > 0)
         check(fabs(wI1-0.08896)/0.08896 < 0.15,
-              "ω_I(r=30) within 15% of Leaver");
+              "ω_I(r=15) within 15% of Leaver");
 
     check(max_20 > 0, "Psi4(2,0) mode excited");
     check(max_22 < 0.1 * max_20,
@@ -406,7 +401,7 @@ int main(void)
     printf("\n=== Results: %d passed, %d failed ===\n", n_pass, n_fail);
 
     /* --- CSV: Psi4 at both radii --- */
-    FILE *fp = fopen("build/qnm_pub_r30.csv", "w");
+    FILE *fp = fopen("build/qnm_pub_r15.csv", "w");
     if (fp) {
         fprintf(fp, "t,re_20,im_20,re_22,im_22\n");
         for (int i = 0; i < n_psi4; i++)
@@ -414,7 +409,7 @@ int main(void)
                     psi4_t[i], r1_re20[i], r1_im20[i], r1_re22[i], r1_im22[i]);
         fclose(fp);
     }
-    fp = fopen("build/qnm_pub_r50.csv", "w");
+    fp = fopen("build/qnm_pub_r20.csv", "w");
     if (fp) {
         fprintf(fp, "t,re_20,im_20,re_22,im_22\n");
         for (int i = 0; i < n_psi4; i++)
@@ -433,7 +428,7 @@ int main(void)
                     diag_lapse[i], diag_mass[i], diag_spin[i]);
         fclose(fp);
     }
-    printf("  CSV: qnm_pub_r30.csv, qnm_pub_r50.csv, qnm_pub_diag.csv\n");
+    printf("  CSV: qnm_pub_r15.csv, qnm_pub_r20.csv, qnm_pub_diag.csv\n");
 
     free(psi4_t); free(r1_re20); free(r1_im20); free(r1_re22); free(r1_im22);
     free(r2_re20); free(r2_im20); free(r2_re22); free(r2_im22);
