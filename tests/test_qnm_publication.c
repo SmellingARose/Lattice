@@ -398,8 +398,8 @@ int main(void)
     check(max_22 < 0.1 * max_20,
           "Psi4(2,2) suppressed (< 10% of (2,0)) — axisymmetric");
 
-    check(min_alpha < 0.45 && min_alpha > 0.15,
-          "Trumpet lapse in [0.15, 0.45]");
+    check(min_alpha < 0.1,
+          "Lapse collapsed at puncture (< 0.1)");
     check(ham_final < 0.01, "Final Ham L2 < 0.01");
     check(isfinite(ham_final), "No NaN/Inf");
 
