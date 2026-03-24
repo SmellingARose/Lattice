@@ -10,10 +10,11 @@
  *   ω_R = 0.37367 / M   (oscillation frequency)
  *   ω_I = 0.08896 / M   (damping rate)
  *
- * AMR grid: N_block=32, L=64, 4 refinement levels.
+ * AMR grid: N_block=32, L=64, 3 refinement levels, CK45 integrator.
  *   Level 0: dx = 2.0M   (boundary at 32M)
- *   Level 4: dx = 0.125M (resolves trumpet gauge)
+ *   Level 3: dx = 0.25M  (resolves trumpet gauge)
  * Extraction at r=15M on the base level.
+ * Memory: ~12 GB (CK45). Needs ≥16 GB RAM or GPU.
  *
  * Ref: Leaver (1985), Berti et al. (2009, arXiv:0905.2975)
  */
@@ -79,21 +80,22 @@ int main(void)
     printf("=== Schwarzschild QNM Ringdown Test (AMR) ===\n\n");
     backend_init();
 
-    /* AMR grid: N_block=32, L=64, 2 levels → dx_fine = 0.5M
+    /* AMR grid: N_block=32, L=64, 3 levels → dx_fine = 0.25M
      * Level 0: 1 block (32³), dx=2M.  Boundary at 32M.
-     * Level 2: ~64 blocks (32³), dx=0.5M near puncture.
-     * dx=0.5M resolves trumpet gauge (verified by test_single_bh at N=128).
-     * Memory: ~73 blocks × 40³ × 25 × 4 × 8 ≈ 3.7 GB. */
+     * Level 3: ~64 blocks (32³), dx=0.25M near puncture.
+     * dx=0.5M crashes at t≈20M (gauge instability). dx=0.25M is stable.
+     * CK45: 3 memory blocks (25% less than RK4 classic).
+     * Memory: ~120 blocks × 40³ × 25 × 3 × 8 ≈ 5.8 GB. */
     int N_block = 32;
     double L = 64.0;
     double M_bh = 1.0;
-    int max_level = 2;
+    int max_level = 3;
 
-    mesh_t *m = mesh_create_ex(N_block, L, RK_CLASSIC, NUM_CCZ4_FIELDS);
+    mesh_t *m = mesh_create_ex(N_block, L, RK_CK45, NUM_CCZ4_FIELDS);
     mesh_rebuild_neighbors(m);
 
     sim_params_t p = default_params();
-    /* RK_CLASSIC: 4 stages, faster than CK45 (5 stages) */
+    p.rk_method = RK_CK45;
     p.N = N_block;
     p.L = L;
     p.dx = m->dx_base;
