@@ -52,7 +52,9 @@ typedef struct {
     double  *scratch;      /* CK45 dU register, or classic RK4 backup U^0  */
     double  *accum;        /* classic RK4 accumulator (NULL if CK45)        */
 
-    int      n_blocks;     /* number of blocks in this pack                */
+    int      n_blocks;     /* total blocks in pack (leaf + buffer)          */
+    int      n_evolve;     /* leaf blocks to evolve (first n_evolve entries) */
+                           /* buffer (non-leaf) blocks: [n_evolve, n_blocks) */
     size_t   npts;         /* grid points per block = Ntotal^3             */
     int      n_fields;     /* active fields per block (<= NUM_FIELDS)      */
 

@@ -9,9 +9,9 @@
  * Known Schwarzschild l=2 QNM (Leaver 1985):
  *   ω_R = 0.37367 / M,  ω_I = 0.08896 / M
  *
- * Grid: N_block=32, L=64, 4 AMR levels → dx_fine = 0.125M = M/8
- *   Level 1 (dx=2M) covers extraction radii (r=20M, r=25M).
- *   Boundary at 64M. Reflections reach r=25M at t≈78M. T=100M safe.
+ * Grid: N_block=32, L=128, 5 AMR levels → dx_fine = 0.125M = M/8
+ *   Level 2 (dx=1M) covers extraction radii (r=20M, r=25M).
+ *   Boundary at 64M. Reflections reach r=25M at t≈103M. T=100M safe.
  *
  * Output CSVs for plotting:
  *   build/qnm_pub_r20.csv     — Psi4 modes at r=20M
@@ -136,10 +136,10 @@ int main(void)
 
     /* --- Grid: L=128, 5 AMR levels, dx_fine = M/8 = 0.125M ---
      * dx_base = 128/32 = 4M. Boundary at 64M.
-     * Level 1 (dx=2M) covers r≤32M — extraction at r=20M,25M has dx=2M
-     *   (8 points per QNM wavelength, matches BAM standard).
-     * Reflections reach r=25M at t ≈ 2*(64-25) = 78M.
-     * Analysis window: t=40M to 78M = 38M ≈ 2.3 clean QNM cycles.
+     * Level 2 (dx=1M) covers r≤32M — extraction at r=20M,25M has dx≤1M
+     *   (≥16 points per QNM wavelength = 16.8M).
+     * Reflections reach r=25M at t ≈ 64 + (64-25) = 103M > T=100M.
+     * Analysis window: t=40M to 100M = 60M = 3.6 clean QNM cycles.
      * Memory: ~200 blocks × 40³ × 25 × 4 × 8 ≈ 10 GB. */
     int N_block = 32;
     double L = 128.0;
@@ -161,7 +161,7 @@ int main(void)
     double dx_fine = p.dx / (1 << max_level);
     printf("  Grid: N_block=%d, L=%.0f, dx_base=%.3f, dx_fine=%.4f (M/%.0f)\n",
            N_block, L, p.dx, dx_fine, 1.0/dx_fine);
-    printf("  Time: dt=%.4f, T=200M, CFL=0.25\n", p.dt);
+    printf("  Time: dt=%.4f, T=100M, CFL=0.25\n", p.dt);
 
     /* --- Initial data with AMR --- */
     puncture_data_t bh = {.mass = M_bh, .center = {0, 0, 0}};
@@ -188,7 +188,7 @@ int main(void)
            n_theta, n_phi, l_max);
 
     /* --- Time series --- */
-    double T_final = 100.0;  /* reflections reach r=25M at t≈78M; safe to 80M */
+    double T_final = 100.0;  /* reflections reach r=25M at t≈103M; T=100M safe */
     int total_steps = (int)(T_final / p.dt + 0.5);
     int psi4_every = 1;   /* every base step = 2M cadence, ~8 samples/QNM cycle */
     int diag_every = 10;  /* constraints every 10 steps */
@@ -236,11 +236,9 @@ int main(void)
         int do_psi4 = (step % psi4_every == 0);
         int do_diag = (step % diag_every == 0 || step == total_steps);
 
-        /* Psi4 extraction needs the finest block at each angular point.
-         * GPU level_packs[0] only has the coarse base grid (dx=8M) —
-         * Psi4 second derivatives are unresolvable there. CPU psi4_extract
-         * uses mesh_find_block_at to find the finest block at each point.
-         * Sync cost: ~2s per step vs 48s evolution = 4% overhead. */
+        /* Psi4 extraction: CPU psi4_extract uses mesh_find_block_at to
+         * find the finest block at each angular point. GPU-resident data
+         * needs sync to host for CPU extraction. */
         if (do_psi4) {
             if (is_gpu)
                 gpu_sync_all_to_host(m);
@@ -363,7 +361,7 @@ int main(void)
     printf("  max|Psi4(2,2)| = %.4e  (ratio to (2,0): %.2e)\n",
            max_22, max_20 > 0 ? max_22/max_20 : 0);
 
-    /* Gauge — sync to host for final CPU diagnostics */
+    /* Final CPU diagnostics — sync from device if needed */
     if (is_gpu)
         gpu_sync_all_to_host(m);
     double min_alpha = mesh_min_lapse(m);

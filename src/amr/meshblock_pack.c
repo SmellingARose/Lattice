@@ -101,6 +101,7 @@ meshblock_pack_t *meshblock_pack_create(int n_blocks, size_t npts,
     }
 
     pack->n_blocks = n_blocks;
+    pack->n_evolve = n_blocks;  /* default: all blocks evolved (caller overrides for buffer) */
     pack->npts     = npts;
     pack->n_fields = n_fields;
     pack->level    = level;

@@ -844,12 +844,58 @@ static void subcycle_level_gpu(mesh_t *m, const sim_params_t *p,
         subcycle_level_gpu(m, p, level + 1, dt_level / 2.0, t_start, 0);
         subcycle_level_gpu(m, p, level + 1, dt_level / 2.0,
                            t_start + dt_level / 2.0, 1);
-    }
 
-    /* No post-subcycle restrict needed during device-resident subcycling:
-     * Cross-level ghost fill reads from leaf blocks in the coarse pack
-     * (which have correct stepped data). Restriction to non-leaf parents
-     * is done once at the end (gpu_sync_all_to_host). */
+        /* Post-subcycle restriction: sync to host, restrict fine→coarse
+         * non-leaf parents, ghost exchange to propagate to leaf ghost zones,
+         * sync updated coarse pack back to device.
+         *
+         * This is the standard Berger-Oliger post-subcycle synchronization.
+         * All major AMR codes do this: GRChombo (coarseAverage + fillAllGhosts),
+         * Athena++ (RestrictCellCenteredValues + FillSameRank),
+         * CarpetX (average_down + fillPatch), BAM.
+         *
+         * Host round-trip cost: ~1 GB per level × 2 directions ÷ 60 GB/s
+         * (PCIe Gen5) ≈ 30ms per level boundary. Negligible vs ~22s step.
+         *
+         * Ref: Berger & Oliger (1984), JCP 53:484.
+         * Ref: CarpetX host-orchestrated restriction pattern. */
+        meshblock_pack_t *fpk = m->level_packs[level + 1];
+        meshblock_pack_t *cpk = m->level_packs[level];
+
+        /* Sync fine pack D→H (device memory persists) */
+        if (fpk) {
+            backend_activate_pack(fpk);
+            backend_unmap_pack_sync(fpk);
+            meshblock_pack_sync_to_blocks(fpk, m->blocks);
+        }
+        /* Sync coarse pack D→H */
+        if (cpk) {
+            backend_activate_pack(cpk);
+            backend_unmap_pack_sync(cpk);
+            meshblock_pack_sync_to_blocks(cpk, m->blocks);
+        }
+
+        /* CPU restriction + ghost exchange (reads non-leaf mesh blocks) */
+        ghost_exchange(m);
+        restrict_level_to_parents(m, level + 1);
+
+        /* Sync updated coarse pack H→D */
+        if (cpk) {
+            meshblock_pack_sync_from_blocks(cpk, m->blocks);
+            if (cpk->n_refined > 0)
+                meshblock_pack_load_coarse(cpk, m->blocks);
+            backend_map_pack(cpk, p);
+            backend_unmap_pack(cpk);
+        }
+        /* Re-sync fine pack H→D (ghost_exchange may have updated fine ghosts) */
+        if (fpk) {
+            meshblock_pack_sync_from_blocks(fpk, m->blocks);
+            if (fpk->n_refined > 0)
+                meshblock_pack_load_coarse(fpk, m->blocks);
+            backend_map_pack(fpk, p);
+            backend_unmap_pack(fpk);
+        }
+    }
 }
 
 /* ========================================================================
@@ -879,10 +925,13 @@ void rk4_step_mesh(mesh_t *m, const sim_params_t *p,
         else
             classic_rk4_step_mesh_packed(m, p, dt);
     } else if (backend_is_gpu() && p->rk_method == RK_CLASSIC) {
-        /* GPU-resident AMR subcycling: zero PCIe during evolution.
-         * All level packs mapped to device once; data stays resident
-         * across all sub-steps. Single sync to host at end for output.
-         * Requires classic RK4 (not CK45 — no quartic temporal interp). */
+        /* GPU AMR subcycling with host-orchestrated restriction.
+         * Level packs stay on device during evolution (GPU compute).
+         * Post-subcycle restriction + ghost exchange done on host via
+         * D→H sync, CPU restrict_level_to_parents, H→D re-sync.
+         * Matches CarpetX/AMReX pattern (host-orchestrated restriction).
+         *
+         * Ref: Berger & Oliger (1984), JCP 53:484. */
         gpu_ensure_level_packs(m, p);
         subcycle_level_gpu(m, p, 0, dt, p->time, 0);
         /* Data stays on device — caller syncs to host only when needed
