@@ -81,6 +81,7 @@ typedef struct {
     double sigma_gauge;        /* KO sigma for gauge fields (default 0.99) */
     double sigma_phys;         /* KO sigma for physical fields (def 0.3)   */
     double cahd_coeff;         /* CAHD C coefficient (default 0.15)        */
+    double cako_floor;         /* CAKO chi floor (default 0.04)             */
     double ssl_h;              /* SSL Gaussian height h/(M) (default 0.6)  */
     double ssl_sigma_t;        /* SSL Gaussian width σ_t/(M) (default 20)  */
     double ssl_total_mass;     /* total puncture mass M (default 1.0)       */
@@ -179,6 +180,7 @@ static inline sim_params_t default_params(void)
      * standard production techniques (arXiv:2404.01137, Etienne 2024).
      * CAHD disabled by default (experimental, Phase 3). */
     p.noise.use_cako           = 1;
+    p.noise.cako_floor         = 0.04;  /* W_min = 0.2, σ_eff ≥ 20% of nominal */
     p.noise.use_cahd           = 0;
     p.noise.use_ssl            = 1;
     p.noise.use_per_field_sigma = 1;

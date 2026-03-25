@@ -43,11 +43,21 @@ void add_ko_dissipation(double ** restrict rhs,
 
     /* CAKO scaling factor: W = sqrt(chi), suppresses near punctures.
      * When disabled, W = 1 (no effect).
+     *
+     * cako_floor (default 0.04) prevents over-suppression at deep AMR
+     * levels where chi → 0 at the puncture. With floor=0.04, W_min=0.2,
+     * so σ_eff ≥ 20% of nominal. The original floor (1e-4) gave W=0.01,
+     * σ_eff = 0.3% — too weak to damp noise at dx_fine ≤ 0.125M.
+     *
+     * GRChombo/BAM use level-dependent sigma (stronger at finer levels).
+     * The CAKO floor achieves a similar effect by bounding the minimum
+     * dissipation strength.
+     *
      * Ref: arXiv:2404.01137, Eq. (20) */
     double W = 1.0;
     if (p->noise.use_cako) {
         double chi = src[FIELD_CHI][idx];
-        W = sqrt(fmax(chi, 1.0e-4));
+        W = sqrt(fmax(chi, p->noise.cako_floor));
     }
 
     /* Precompute per-field effective sigma to eliminate branches in hot loop.
