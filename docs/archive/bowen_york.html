@@ -544,13 +544,12 @@ table.test-table td:last-child {
         top-level dispatch with auto-detection of BL fast path</td>
   </tr>
   <tr>
-    <td>src/initial_data/relaxation.h</td>
-    <td>Public API: <code>relaxation_solve()</code>, <code>relaxation_solve_coupled()</code>,
-        <code>mg_level_t</code> hierarchy</td>
+    <td>src/initial_data/jfnk_solver.h</td>
+    <td>Public API: covering grid FAS multigrid solver</td>
   </tr>
   <tr>
-    <td>src/initial_data/relaxation.c</td>
-    <td>FAS multigrid constraint solver: <code>mg_level_t</code> grid hierarchy,
+    <td>src/initial_data/jfnk_solver.c</td>
+    <td>Covering grid FAS multigrid constraint solver: <code>mg_level_t</code> grid hierarchy,
         Newton-Gauss-Seidel smoother (8-color ordering), FAS V-cycles with
         tau correction, FMG outer loop, cell-centered restriction/prolongation,
         convergence monitoring via ||f&minus;L(u)||<sub>L2</sub></td>

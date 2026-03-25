@@ -72,7 +72,7 @@ All unit tests pass at small scale (2&ndash;3 levels). The divergence is specifi
 // src/backend/backend_hip.cpp:2449
 static hip_solver_ptrs_t d_solver[MAX_SOLVER_SLOTS];
 
-// src/initial_data/relaxation_amr.c:1759 — slot = level index directly
+// src/initial_data/jfnk_solver.c — slot = level index directly
 levels[L].slot = L;  // L=8,9,10 exceed array bounds</code></pre>
 
 <h3>Mechanism</h3>
@@ -167,12 +167,12 @@ Alternatively, allocate coarse_data with <code>n_sol</code> fields and use <code
 <h3>Affected Functions</h3>
 <table>
 <tr><th>Function</th><th>File</th><th>OMP Parallel?</th></tr>
-<tr><td><code>newton_gs_sweep_1field</code></td><td>relaxation.c:495</td><td>No (serial)</td></tr>
-<tr><td><code>newton_gs_sweep_4field</code></td><td>relaxation.c:549</td><td>No (serial)</td></tr>
-<tr><td><code>umg_sweep_1field</code></td><td>relaxation_amr.c:188</td><td><strong>Yes</strong></td></tr>
-<tr><td><code>umg_sweep_4field</code></td><td>relaxation_amr.c:222</td><td><strong>Yes</strong></td></tr>
-<tr><td><code>smooth_block_1field</code></td><td>relaxation_amr.c:900</td><td><strong>Yes</strong> (block-level)</td></tr>
-<tr><td><code>smooth_block_4field</code></td><td>relaxation_amr.c:936</td><td><strong>Yes</strong> (block-level)</td></tr>
+<tr><td><code>newton_gs_sweep_1field</code></td><td>jfnk_solver.c</td><td>No (serial)</td></tr>
+<tr><td><code>newton_gs_sweep_4field</code></td><td>jfnk_solver.c</td><td>No (serial)</td></tr>
+<tr><td><code>umg_sweep_1field</code></td><td>jfnk_solver.c</td><td><strong>Yes</strong></td></tr>
+<tr><td><code>umg_sweep_4field</code></td><td>jfnk_solver.c</td><td><strong>Yes</strong></td></tr>
+<tr><td><code>smooth_block_1field</code></td><td>jfnk_solver.c</td><td><strong>Yes</strong> (block-level)</td></tr>
+<tr><td><code>smooth_block_4field</code></td><td>jfnk_solver.c</td><td><strong>Yes</strong> (block-level)</td></tr>
 </table>
 
 <p>All call <code>fd_d2()</code> which is a 7-point stencil (radius 3) when <code>FD_ORDER=6</code>.
@@ -194,7 +194,7 @@ A 6th-order stencil (radius 3) requires stride &ge; 7 in each dimension.</p>
 
 <h3>Why it works at small scale</h3>
 <ul>
-  <li>The <strong>uniform-grid solver</strong> (<code>relaxation.c</code>) runs the smoother <strong>serially</strong> (no OMP pragma).
+  <li>The <strong>uniform-grid solver</strong> (<code>jfnk_solver.c</code>) runs the smoother <strong>serially</strong> (no OMP pragma).
     The stencil overlap makes it a &ldquo;Gauss-Seidel with leakage&rdquo; that converges deterministically.</li>
   <li>At <strong>low AMR levels</strong> with OMP, the corrections are small and the race impact is bounded.</li>
   <li>At <strong>11 levels</strong> with many blocks and full OMP parallelization, the races become severe.</li>
@@ -300,9 +300,8 @@ All 3 independent audit agents confirmed this. One-line fix should resolve it.</
 
 <p style="margin-top: 40px; color: #7f8c8d; font-size: 0.9em;">
 Investigation conducted March 5, 2026 by 3 parallel code audit agents examining:
-<code>relaxation.c</code>, <code>relaxation_amr.c</code>, <code>backend_hip.cpp</code>,
-<code>backend.h</code>, <code>backend_cpu.c</code>, <code>finite_diff.h</code>, <code>mesh.h</code>,
-<code>mg_smooth_point.h</code>.
+<code>jfnk_solver.c</code>, <code>backend_hip.cpp</code>,
+<code>backend.h</code>, <code>backend_cpu.c</code>, <code>finite_diff.h</code>, <code>mesh.h</code>.
 </p>
 
 </body>

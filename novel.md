@@ -37,7 +37,7 @@ For 6th-order FD (p=6) on 1/r³ curvature (α=3): β = 2^(6/10) = 2^(3/5) ≈ 1.
 
 Full derivation: [docs/amr_refinement_ratio.html](docs/amr_refinement_ratio.html)
 How it works: [docs/amr_refinement_howto.html](docs/amr_refinement_howto.html)
-Code: `src/initial_data/relaxation_amr.c`, `refine_mesh_near_punctures()`
+Code: `src/initial_data/jfnk_solver.c`, `refine_mesh_near_punctures()`
 
 ---
 
@@ -102,7 +102,7 @@ has been proposed before, we believe this is the first GPU-accelerated
 implementation for NR constraint solving on the actual evolution AMR hierarchy.
 
 Code: `src/initial_data/bowen_york.c` (set_bowen_york_mesh),
-`src/initial_data/relaxation_amr.c` (AMR composite multigrid)
+`src/initial_data/jfnk_solver.c` (covering grid FAS multigrid)
 
 ---
 
@@ -128,9 +128,7 @@ the evolution AMR mesh (#3), and (3) both Bowen-York and HiSpID (4-field
 coupled) systems. The combination enables constraint-satisfying N-body
 initial data at GPU speed on the exact mesh used for evolution.
 
-Code: `src/initial_data/relaxation.c` (base FAS solver),
-`src/initial_data/relaxation_amr.c` (AMR composite multigrid),
-`src/initial_data/mg_smooth_point.h` (GPU-annotated smoothing kernels)
+Code: `src/initial_data/jfnk_solver.c` (covering grid FAS multigrid solver)
 
 ---
 

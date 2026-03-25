@@ -602,7 +602,7 @@ for block positions/levels/field offsets. Python converter to XDMF/HDF5 for Para
 24. GPU kernel occupancy tuning -- `backend_gpu.c` (~25 LOC, needs profiling)
 25. save_k1 on device for GPU subcycling -- `rk4.c:754` (~30 LOC)
 26. IMEX for constraint damping -- `rk4.c`, `ccz4_rhs.c` (~300 LOC)
-27. Hyperbolic relaxation for initial data -- `relaxation.c` (~500 LOC)
+27. Hyperbolic relaxation for initial data -- `jfnk_solver.c` (~500 LOC)
 
 ### Tier 4: Future
 28. AMR-enabled constraint solver (GRTresna approach)

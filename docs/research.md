@@ -11,8 +11,8 @@ math, simplest implementation path, estimated effort, and key references.
 |------|--------|-------|------------|--------|-----------------|
 | **Psi4 extraction** | Done | ~740 | Medium | CCE | Table stakes — every NR code has this |
 | **CCE worldtube** | Done | ~430 | Medium | Needs HDF5 | Matches GR-Athena++, SpECTRE interop |
-| **HIP backend** | 1-2 weeks | ~900 | Medium | — | **AMD + NVIDIA from one source** — only AthenaK does this (via Kokkos) |
-| **Constraint-preserving BC** | 2-3 weeks | ~500 | Hard | — | Matches BAM; most CCZ4 codes lack this |
+| **HIP backend** | Done | ~900 | Medium | — | **AMD + NVIDIA from one source** — only AthenaK does this (via Kokkos) |
+| **Constraint-preserving BC** | Done | ~500 | Hard | — | Matches BAM; most CCZ4 codes lack this |
 | **Larger domain (AMR)** | 0 days | 0 | Trivial | — | Already possible, just use `--L 4000` |
 
 **Waveform pipeline complete:** Psi4 (done) + CCE worldtube (done) → SpECTRE
@@ -25,12 +25,12 @@ CCE → gauge-invariant strain at scri+.
 | Spatial FD order | 6th | 6th | 4th | Spectral | 6th | 4th-8th |
 | Off-grid interpolation | 6th | 6th | 4th | Spectral | 4th | 4th |
 | Waveform extraction | Psi4 + CCE | Psi4 + CCE | Psi4 only | Full CCE | CCE | Psi4 + CCE |
-| GPU backend | OpenMP target | OpenMP + HIP | None | Charm++ | Kokkos | None |
-| AMD GPU support | No | **Yes (HIP)** | No | No | Yes (Kokkos) | No |
+| GPU backend | HIP | HIP | None | Charm++ | Kokkos | None |
+| AMD GPU support | **Yes (HIP)** | **Yes (HIP)** | No | No | Yes (Kokkos) | No |
 | N-body (N>2) | Yes (32) | Yes (32) | No | No | No | Yes |
 | Einstein-Maxwell | Yes | Yes | No | No | No | Yes |
 | High-spin initial data | Yes (HiSpID) | Yes | Yes | Yes | No | Yes |
-| Boundary conditions | Sommerfeld | CP-Sommerfeld | Sommerfeld | CP + Bjorhus | Sommerfeld | Sommerfeld |
+| Boundary conditions | CP-Sommerfeld | CP-Sommerfeld | Sommerfeld | CP + Bjorhus | Sommerfeld | Sommerfeld |
 | AMR | Yes (block) | Yes | Yes (Chombo) | Yes (AMR) | Yes (block) | Yes (Carpet) |
 | Formulation | CCZ4 | CCZ4 | CCZ4 | Gen. Harmonic | Z4c | BSSN |
 
@@ -274,8 +274,8 @@ lines) reads raw binary and writes HDF5 via h5py. Avoids C dependency.
 
 ## 3. HIP Backend
 
-**Status:** Not implemented.
-**Effort:** 1-2 weeks, ~900 lines in `backend_hip.cpp` + Makefile.
+**Status:** Implemented. `src/backend/backend_hip.cpp` with full GPU kernel suite.
+AMD (MI250X/MI300X) and NVIDIA (V100/A100/H100) via HIP. `make BACKEND=gpu`.
 **Dependencies:** None (independent of other work).
 
 ### 3.1 What HIP Is
@@ -373,8 +373,9 @@ endif
 
 ## 4. HOBC
 
-**Status:** Not implemented. Current Sommerfeld is the "weakest link."
-**Effort:** Depends on approach (0 to 3 weeks).
+**Status:** Constraint-preserving BCs implemented (Path B, 30/30 tests pass).
+Full HOBC (Path C) not implemented.
+**Effort:** Path C depends on need (2-3 months, research project).
 
 ### 4.1 Three Paths (Pick One)
 
@@ -446,10 +447,10 @@ Not recommended unless needed for sub-dominant mode accuracy.
 ```
 Psi4 (DONE) ──→ CCE worldtube (DONE) ──→ SpECTRE CCE → strain at scri+
 
-HIP backend (1-2 weeks) ─── independent, no blockers
+HIP backend (DONE) ─── AMD + NVIDIA GPU support
 
 Larger domain (0 days) ─── just change --L flag
-CP-Sommerfeld (2-3 weeks) ─── independent, nice-to-have
+CP-Sommerfeld (DONE) ─── 30/30 tests pass
 ```
 
 ### Recommended Order
@@ -458,6 +459,6 @@ CP-Sommerfeld (2-3 weeks) ─── independent, nice-to-have
 |---|------|--------|------|
 | 1 | **Psi4 extraction** | Done | Table stakes |
 | 2 | **CCE worldtube** | Done | Gold-standard waveforms via SpECTRE |
-| 3 | **HIP backend** | 1-2 weeks | AMD + NVIDIA GPU support |
+| 3 | **HIP backend** | Done | AMD + NVIDIA GPU support |
 | 4 | **Larger domain** | 0 days | Just use `--L 4000` |
-| 5 | **CP-Sommerfeld** | 2-3 weeks | Nice-to-have for very long runs |
+| 5 | **CP-Sommerfeld** | Done | 30/30 tests pass |

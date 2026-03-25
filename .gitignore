@@ -7,9 +7,15 @@ lattice
 # Reference repository (read-only, not part of our codebase)
 grchombo-ref/
 
+# Simulation logs
+*.log
+
 # Editor/IDE
 .vscode/
 *.swp
 *.swo
 *~
 .DS_Store
+
+# AI assistant config
+.claude/

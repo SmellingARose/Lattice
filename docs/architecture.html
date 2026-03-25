@@ -172,7 +172,7 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 
 <div class="banner">
   <strong>Living document.</strong> This is the single architecture reference for the Lattice codebase. Updated whenever structure changes &mdash; see CLAUDE.md.<br>
-  <strong>Last updated:</strong> 2026-03-05 &nbsp;|&nbsp; <strong>Status:</strong> Phase 2 complete, Phase 3 in progress (Tier 1+2+3 optimizations, N-body validated, persistent packs, D10 benchmark validated, equidistribution-optimal AMR refinement).
+  <strong>Last updated:</strong> 2026-03-25 &nbsp;|&nbsp; <strong>Status:</strong> Phase 2 complete, Phase 3 in progress (Tier 1&ndash;5 GPU optimizations complete, zero-PCIe GPU-resident evolution, QNM ringdown validated, N-body tracker, covering grid FAS solver, equidistribution-optimal AMR refinement).
 </div>
 
 <!-- ========================================== -->
@@ -330,14 +330,13 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 <!-- ========================================== -->
 <h2 id="mod-initial-data">Module: initial_data/</h2>
 
-<p>Sets up the spacetime before evolution begins. Supports a hierarchy of increasing physical complexity: simple Brill-Lindquist (analytic, at rest), Bowen-York (momentum + spin, requires constraint solving), and HiSpID (high-spin via quasi-isotropic Kerr, requires coupled 4-field relaxation). All include Einstein-Maxwell extensions for charged punctures.</p>
+<p>Sets up the spacetime before evolution begins. Supports a hierarchy of increasing physical complexity: simple Brill-Lindquist (analytic, at rest), Bowen-York (momentum + spin, requires constraint solving), and HiSpID (high-spin via quasi-isotropic Kerr, requires coupled 4-field solver). All include Einstein-Maxwell extensions for charged punctures.</p>
 
 <table class="file-table">
 <tr><th>File</th><th>Purpose</th></tr>
 <tr><td><code>puncture.h/c</code></td><td>Brill-Lindquist multi-puncture (up to 32 BHs at rest). Block-aware variant for AMR.</td></tr>
 <tr><td><code>bowen_york.h/c</code></td><td>Bowen-York extrinsic curvature A_ij for linear momentum + spin. CCZ4 field conversion pipeline. Mesh-level API (<code>set_bowen_york_mesh</code>) solves directly on evolution blocks. After leaf-block CCZ4 conversion, restricts data from fine to coarse (max_level down to 1) so non-leaf parent blocks have valid CCZ4 fields &mdash; required because <code>ghost_fill_from_coarser()</code> reads non-leaf data during subcycled evolution.</td></tr>
-<tr><td><code>relaxation.h/c</code></td><td>FAS multigrid constraint solver. 1-field (BY) and 4-field coupled (HiSpID). Full Multigrid cycle + Newton-Gauss-Seidel smoothing, 8-color GPU-compatible. O(N^3) to discretization accuracy.</td></tr>
-<tr><td><code>relaxation_amr.h/c</code></td><td>AMR composite multigrid: FAS V-cycles on AMR block levels + uniform MG hierarchy below level 0. Always runs on CPU (GPU solver removed). <code>refine_mesh_near_punctures()</code> uses equidistribution-optimal refinement radius r<sub>k</sub> = C&middot;M<sub>p</sub>&middot;&beta;<sup>k</sup> with &beta; = 2<sup>3/5</sup> &asymp; 1.516 (see <a href="amr_refinement_ratio.html">derivation</a>). Composite V-cycle zeros rhs on childless blocks before tau correction to prevent stale accumulation. Mesh-level solvers borrow the evolution mesh (no copy).</td></tr>
+<tr><td><code>jfnk_solver.h/c</code></td><td>Covering grid FAS multigrid constraint solver. 1-field (BY Hamiltonian) and 4-field coupled (HiSpID). FMG + FAS V-cycles + 8-color Newton-Gauss-Seidel smoothing. Each AMR level solved on a single temporary uniform grid (covering grid) &mdash; no inter-block ghost exchange during MG, eliminating the cross-level corruption bug of the old composite approach. FMG converges in 1 pass per level. <code>refine_mesh_near_punctures()</code> uses equidistribution-optimal refinement radius r<sub>k</sub> = C&middot;M<sub>p</sub>&middot;&beta;<sup>k</sup> with &beta; = 2<sup>3/5</sup> &asymp; 1.516 (see <a href="amr_refinement_ratio.html">derivation</a>). Solver runs once at t=0 on CPU; evolution uses GPU for time-stepping.</td></tr>
 <tr><td><code>kerr_quasi_isotropic.h/c</code></td><td>Quasi-isotropic Kerr metric for HiSpID high-spin initial data. Conformal factor and conformal metric from analytic Kerr solution.</td></tr>
 </table>
 
@@ -377,7 +376,7 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 <tr><th>File</th><th>Purpose</th></tr>
 <tr><td><code>block.h/c</code></td><td><code>block_t</code>: grid_t + coarse_buf + logical location + 26 neighbors + tree links. <code>block_alloc()</code> takes <code>n_fields</code> for conditional allocation.</td></tr>
 <tr><td><code>mesh.h/c</code></td><td><code>mesh_t</code> with <code>int n_fields</code>: block collection, Morton sort, persistent <code>block_hash_t</code> (open-addressing hash table, rebuilt on regrid) for O(1) block lookup by logical coords and O(max_level) point-to-block lookup by physical (x,y,z) coords. <code>mesh_find_block_at()</code> converts coordinates to logical indices at each level (finest→coarsest) with hash probe. Pre-allocated <code>ghost_scratch</code> buffer for temporal interpolation. Persistent pack cache: <code>leaf_pack</code>, <code>level_packs[MAX_AMR_LEVELS]</code>, <code>packs_dirty</code> flag. Single root block (hardcoded); all multi-block topology from AMR refinement. <code>mesh_create_ex(N_block, L, method, n_fields)</code>; <code>mesh_create(N_block, L, method)</code> wrapper defaults to <code>NUM_FIELDS</code>.</td></tr>
-<tr><td><code>ghost_exchange.h/c</code></td><td>5-phase coarse-buffer multilevel ghost exchange (AthenaK pattern). Also provides <code>ghost_exchange_all_blocks()</code> which includes non-leaf blocks in the same-level 26-neighbor exchange &mdash; required by the composite multigrid solver where V-cycles operate on all blocks, not just leaves.</td></tr>
+<tr><td><code>ghost_exchange.h/c</code></td><td>5-phase coarse-buffer multilevel ghost exchange (AthenaK pattern). Also provides <code>ghost_exchange_all_blocks()</code> which includes non-leaf blocks in the same-level 26-neighbor exchange &mdash; needed when non-leaf blocks require valid ghost data (e.g., restriction passes, <code>ghost_fill_from_coarser()</code>).</td></tr>
 <tr><td><code>prolongation.h/c</code></td><td>6th-order cell-centered Lagrange interpolation (coarse to fine). 7-point 1D stencil, 3D tensor product. Pre-computed <code>prolong_wkj[4][7][7]</code> weight products for 4 octant combos.</td></tr>
 <tr><td><code>restriction.h/c</code></td><td>6th-order Lagrange cell-average restriction (fine to coarse). 6-point symmetric stencil: w = {-17/11520, 97/3840, 2743/5760, ...}. Pre-computed <code>restrict_wkj[6][6]</code> weight products.</td></tr>
 <tr><td><code>criterion.h/c</code></td><td>Chi-gradient refinement criterion with hysteresis: (dx/chi^2)|grad(chi)|.</td></tr>
@@ -452,7 +451,7 @@ Grid indexing:  IDX(g, i, j, k) = k * Ntotal^2 + j * Ntotal + i
 <p>Black holes need very fine resolution (dx ~ M/50) while gravitational waves propagate through regions where coarse resolution (dx ~ 2M) suffices. Oct-tree AMR with fixed 16^3 blocks provides: (1) uniform GPU batching since all blocks are identical in shape, (2) O(N) scaling with the number of black holes since each BH gets its own nested refinement, (3) trivial load balancing since all work units are the same size. The tradeoff is higher ghost overhead (70% per block) compared to variable-size boxes, but this is bounded and the GPU benefits dominate.</p>
 
 <h3>Single root block</h3>
-<p>The mesh starts with a single root block covering the entire domain. All multi-block topology comes exclusively from AMR refinement (oct-tree splitting). This design is required by the composite multigrid constraint solver, which needs whole-domain visibility at the coarsest level &mdash; multi-root meshes broke cross-block coupling, causing V-cycle divergence. With a single root, the solver achieves a convergence factor of ~0.13/cycle (textbook multigrid). Higher <code>--max-level</code> compensates for the coarser base grid. <code>mesh_create(N_block, L, method)</code> creates one root block; there is no N_root parameter.</p>
+<p>The mesh starts with a single root block covering the entire domain. All multi-block topology comes exclusively from AMR refinement (oct-tree splitting). This design is required by the covering grid FAS multigrid solver (<code>jfnk_solver.c</code>), which needs whole-domain visibility at the coarsest level &mdash; multi-root meshes broke cross-block coupling, causing V-cycle divergence. With a single root, the solver achieves a convergence factor of ~0.13/cycle (textbook multigrid). Higher <code>--max-level</code> compensates for the coarser base grid. <code>mesh_create(N_block, L, method)</code> creates one root block; there is no N_root parameter.</p>
 
 <h3>Block structure</h3>
 <p>Each <code>block_t</code> wraps a <code>grid_t</code> (N_block^3 interior + 4 ghost cells per side) with: logical location in the oct-tree, 26-neighbor IDs, <code>nblevel[3][3][3]</code> neighbor level table, parent/child tree links, boundary flags, and a <code>coarse_buf</code> (half-resolution grid_t for multilevel ghost fill, allocated for level > 0).</p>
@@ -680,15 +679,9 @@ Level 0: everywhere (dx ~ M/2)     — outer domain + boundary</code></pre>
 
 <p><strong>Cross-level ghost fill (<code>ghost_fill_from_coarser</code>):</strong> Used during subcycling to fill fine-level ghost zones from time-interpolated coarser data. Split into two passes to avoid ordering bugs: Pass 1 restricts <em>all</em> fine blocks into their coarse_bufs; Pass 2 exchanges coarse_buf ghosts, extrapolates boundaries, and prolongates. This ensures same-level neighbor coarse_bufs are always valid when read. Note: this function reads non-leaf parent block data, so all non-leaf blocks must have valid field values (see <code>set_bowen_york_mesh</code> restriction step).</p>
 
-<p><strong>All-blocks variant (<code>ghost_exchange_all_blocks</code>):</strong> Like <code>ghost_exchange()</code> but includes non-leaf blocks in the same-level 26-neighbor exchange. Required by the composite multigrid solver (<code>relaxation_amr.c</code>), where the FAS V-cycle operates on all blocks at each level &mdash; not just leaves. Without this, non-leaf ghost zones contain stale data, corrupting FD operator evaluations and tau corrections.</p>
+<p><strong>All-blocks variant (<code>ghost_exchange_all_blocks</code>):</strong> Like <code>ghost_exchange()</code> but includes non-leaf blocks in the same-level 26-neighbor exchange. Needed when non-leaf blocks require valid ghost data (e.g., restriction passes, non-leaf field reads during <code>ghost_fill_from_coarser()</code>).</p>
 
-<p><strong>Solver-specific ghost exchange (AMReX/Chombo pattern):</strong> The composite multigrid solver uses three specialized exchange modes instead of a single full multilevel exchange:</p>
-<ul>
-  <li><code>ghost_exchange_same_level_all(m, level)</code> &mdash; Same-level 26-neighbor exchange for ALL blocks at a given level. No cross-level interpolation. Used <em>between Gauss-Seidel colors</em> in the smoother.</li>
-  <li><code>ghost_fill_cf_boundary(m, level)</code> &mdash; Fills coarse-fine boundary ghost zones by interpolation from level-1 data (coarse-buffer protocol: restrict &rarr; fill coarse_buf ghosts &rarr; extrapolate &rarr; prolongate). Called ONCE before smoothing begins at a level. CF ghosts are held fixed as Dirichlet BCs during all 8 GS colors.</li>
-  <li><code>ghost_exchange_multilevel_all(m)</code> &mdash; Full coarse-buffer protocol for ALL blocks (not just leaves). Used for setup and residual computation.</li>
-</ul>
-<p>This pattern follows AMReX MLMG, Chombo AMRMultiGrid, and Athena++ MG (Tomida &amp; Stone 2023): CF boundaries are fixed Dirichlet from the coarse level, not re-interpolated between smoother sweeps.</p>
+<p><strong>Note on solver ghost exchange:</strong> The covering grid FAS solver (<code>jfnk_solver.c</code>) does <em>not</em> use inter-block ghost exchange during multigrid &mdash; each AMR level is solved on a single temporary uniform grid, so all ghost data is local. This eliminates the cross-level corruption that plagued the old composite FAS approach.</p>
 
 <h3>Subcycling</h3>
 <p>Berger-Oliger subcycling: fine levels take 2x more timesteps at half the dt of their parent level. After the fine level completes its sub-steps, data is restricted back to the coarse level. This respects the CFL condition at each level without wasting work on coarse regions.</p>
@@ -747,7 +740,7 @@ Level 0: everywhere (dx ~ M/2)     — outer domain + boundary</code></pre>
 <details>
 <summary>Why FAS multigrid for initial data?</summary>
 <div class="detail-body">
-<p>The Hamiltonian constraint for puncture initial data is a nonlinear elliptic PDE. FAS (Full Approximation Storage) multigrid solves it in O(N^3) work, reaching discretization accuracy in a single Full Multigrid pass (~1.14 V-cycles). This is built-in rather than calling an external solver (like TwoPunctures), and extends naturally to N punctures with arbitrary mass, spin, and charge. The 8-color Gauss-Seidel relaxation is GPU-compatible.</p>
+<p>The Hamiltonian constraint for puncture initial data is a nonlinear elliptic PDE. The covering grid FAS multigrid solver (<code>jfnk_solver.c</code>) solves it in O(N^3) work, reaching discretization accuracy in a single Full Multigrid pass (~1.14 V-cycles). Each AMR level is solved on a single temporary uniform grid (covering grid), so there is no inter-block ghost exchange during MG &mdash; eliminating the cross-level corruption of composite approaches. This is built-in rather than calling an external solver (like TwoPunctures), and extends naturally to N punctures with arbitrary mass, spin, and charge. Both 1-field (BY Hamiltonian) and 4-field (HiSpID coupled) modes are supported with 8-color Newton-Gauss-Seidel smoothing.</p>
 </div>
 </details>
 
@@ -833,7 +826,9 @@ make clean              # rm -rf build/</code></pre>
 <tr><td><code>make test-pack-evolve</code></td><td>Packed batch kernel validation (8 tests)</td><td><span class="badge badge-green">Passing</span></td></tr>
 <tr><td><code>make test-subcycle</code></td><td>Berger-Oliger subcycling validation</td><td><span class="badge badge-green">Passing</span></td></tr>
 <tr><td><code>make test-bowen-york</code></td><td>Bowen-York A_ij, multigrid solver, evolution, N-body (33 tests)</td><td><span class="badge badge-green">Passing</span></td></tr>
-<tr><td><code>make test-relaxation-amr</code></td><td>AMR composite multigrid solver (14 tests)</td><td><span class="badge badge-green">Passing</span></td></tr>
+<tr><td><code>make test-jfnk</code></td><td>Covering grid FAS multigrid solver tests</td><td><span class="badge badge-green">Passing</span></td></tr>
+<tr><td><code>make test-inspiral-solver</code></td><td>Inspiral solver smoke: 7-level D10 binary + 6-level 4-BH square (4 tests)</td><td><span class="badge badge-green">Passing</span></td></tr>
+<tr><td><code>make test-nbody-track</code></td><td>N-body BH tracker: init, position, AH, merger, CSV (40 tests)</td><td><span class="badge badge-green">Passing</span></td></tr>
 <tr><td><code>make test-hispid</code></td><td>HiSpID high-spin initial data, coupled solver (26 tests)</td><td><span class="badge badge-green">Passing</span></td></tr>
 <tr><td><code>make test-ah</code></td><td>Apparent horizon finder: interpolation, Schwarzschild, diagnostics (13 tests)</td><td><span class="badge badge-green">Passing</span></td></tr>
 <tr><td><code>make test-maxwell</code></td><td>Einstein-Maxwell: flat EM, plane wave, charged BH, constraints (15 tests)</td><td><span class="badge badge-green">Passing</span></td></tr>
@@ -845,8 +840,8 @@ make clean              # rm -rf build/</code></pre>
 <tr><td><code>make test-checkpoint</code></td><td>Checkpoint/restart: uniform + AMR, bitwise-identical evolution after restart (14 tests)</td><td><span class="badge badge-green">Passing</span></td></tr>
 <tr><td><code>make test-gpu-tracker</code></td><td>GPU vs CPU BH tracker: single BH, two-BH exclusion, boosted BH motion tracking (9 tests)</td><td><span class="badge badge-green">Passing</span></td></tr>
 <tr><td><code>make test-gpu-debug</code></td><td>GPU kernel isolation test with per-kernel sync barriers (requires BACKEND=gpu)</td><td><span class="badge badge-green">Passing</span></td></tr>
-<tr><td><code>make test-qnm</code></td><td>Schwarzschild QNM ringdown: AMR dx=0.5M, Psi4(2,0) frequency+damping vs Leaver (~1 hr CPU)</td><td><span class="badge badge-yellow">Pending</span></td></tr>
-<tr><td><code>make test-qnm-pub</code></td><td>Publication QNM: dx=M/8, 2-radius Psi4, (2,0)+(2,2) modes, AH mass, 13 checks (GPU, ~10 min H100)</td><td><span class="badge badge-yellow">Pending</span></td></tr>
+<tr><td><code>make test-qnm</code></td><td>Schwarzschild QNM ringdown: AMR dx=0.5M, Psi4(2,0) frequency+damping vs Leaver (~1 hr CPU)</td><td><span class="badge badge-green">Passing</span></td></tr>
+<tr><td><code>make test-qnm-pub</code></td><td>Publication QNM: dx=M/8, 2-radius Psi4, (2,0)+(2,2) modes, AH mass, 13 checks (GPU, ~10 min H100)</td><td><span class="badge badge-green">Passing</span></td></tr>
 </table>
 
 <!-- ========================================== -->
