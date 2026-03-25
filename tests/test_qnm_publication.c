@@ -157,6 +157,7 @@ int main(void)
     p.amr.max_level = max_level;
     p.amr.chi_refine = 0.1;
     p.amr.regrid_every = 0;
+    p.noise.use_cako = 0;  /* uniform dissipation — stable for deep AMR */
 
     double dx_fine = p.dx / (1 << max_level);
     printf("  Grid: N_block=%d, L=%.0f, dx_base=%.3f, dx_fine=%.4f (M/%.0f)\n",
