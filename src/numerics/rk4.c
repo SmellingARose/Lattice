@@ -770,9 +770,14 @@ static void step_level_gpu(mesh_t *m, const sim_params_t *p,
     /* Set global d_ptrs from this pack's device handle (no memcpy) */
     backend_activate_pack(pack);
 
-    /* Classic RK4 — identical kernel sequence as existing step_level */
+    /* Classic RK4 — identical kernel sequence as existing step_level.
+     * Zero RHS buffer: compute_rhs only writes interior cells [ghost,ghost+N).
+     * Ghost zone RHS would be garbage (from previous step/level), corrupting
+     * ghost data via rk4_stage: data = scratch + c*dt*garbage_rhs.
+     * Ref: AthenaK zeros scratch arrays before each kernel phase. */
     backend_copy_packed(pack, PACK_BUF_SCRATCH, PACK_BUF_DATA);
     backend_zero_packed(pack, PACK_BUF_ACCUM);
+    backend_zero_packed(pack, PACK_BUF_RHS);
 
     /* Stage 1 */
     backend_enforce_algebraic_packed(pack);
