@@ -383,6 +383,10 @@ test-gpu-debug: $(BUILD)/test_gpu_debug
 	@echo "=== Running GPU kernel debug test ==="
 	$(BUILD)/test_gpu_debug
 
+test-deep-amr-nan: $(BUILD)/test_deep_amr_nan
+	@echo "=== Running deep AMR NaN isolation test ==="
+	$(BUILD)/test_deep_amr_nan
+
 test-nbody-track: $(BUILD)/test_nbody_track
 	@echo "=== Running N-body BH tracker test ==="
 	$(BUILD)/test_nbody_track
