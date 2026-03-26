@@ -773,7 +773,6 @@ static void step_level_gpu(mesh_t *m, const sim_params_t *p,
     /* Classic RK4 — identical kernel sequence as existing step_level */
     backend_copy_packed(pack, PACK_BUF_SCRATCH, PACK_BUF_DATA);
     backend_zero_packed(pack, PACK_BUF_ACCUM);
-    backend_zero_packed(pack, PACK_BUF_RHS);  /* prevent stale ghost RHS */
 
     /* Stage 1 */
     backend_enforce_algebraic_packed(pack);

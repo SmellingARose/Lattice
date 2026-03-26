@@ -234,34 +234,6 @@ int main(void)
         rk4_step_mesh(m, &p, ccz4_rhs_point, p.dt);
         p.time += p.dt;
 
-        /* Quick NaN check every step — sync + scan for first NaN */
-        {
-            if (is_gpu) gpu_sync_all_to_host(m);
-            int nan_found = 0;
-            for (int bid = 0; bid < m->num_blocks && !nan_found; bid++) {
-                block_t *blk = m->blocks[bid];
-                if (!blk || !blk->is_leaf) continue;
-                grid_t *g = blk->grid;
-                int lo = g->ghost, hi = g->ghost + g->N;
-                for (int k = lo; k < hi && !nan_found; k++)
-                    for (int j = lo; j < hi && !nan_found; j++)
-                        for (int i = lo; i < hi && !nan_found; i++) {
-                            int idx = i + j*g->Ntotal + k*g->Ntotal*g->Ntotal;
-                            double chi = g->fields[FIELD_CHI][idx];
-                            double alpha = g->fields[FIELD_LAPSE][idx];
-                            if (!isfinite(chi) || !isfinite(alpha)) {
-                                printf("  *** NaN at step %d t=%.2fM: "
-                                       "block %d (level %d), cell (%d,%d,%d), "
-                                       "chi=%.4e, lapse=%.4e\n",
-                                       step, p.time, bid, blk->loc.level,
-                                       i-lo, j-lo, k-lo, chi, alpha);
-                                nan_found = 1;
-                            }
-                        }
-            }
-            if (nan_found) break;
-        }
-
         int do_psi4 = (step % psi4_every == 0);
         int do_diag = (step % diag_every == 0 || step == total_steps);
 
