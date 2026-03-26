@@ -594,7 +594,23 @@ static void subcycle_level(mesh_t *m, const sim_params_t *p,
      * Ref: Berger & Oliger (1984) — restrict after subcycling at level boundary.
      * Ref: Athena++ MeshRefinement::RestrictCellCenteredValues() post-exchange. */
     if (level < m->max_level) {
+        /* Post-subcycle restriction: fine → coarse parents.
+         *
+         * ghost_exchange: fill same-level ghost zones (stale after RK4).
+         * ghost_fill_from_coarser: fill CROSS-LEVEL ghost zones for fine
+         *   blocks at AMR boundaries (facing coarser-level blocks). These
+         *   were filled at the START of step_level but are stale after RK4
+         *   stages overwrote them. The 6th-order restriction stencil reads
+         *   2 cells into ghost zones — if cross-level ghosts are stale,
+         *   restriction produces garbage → NaN.
+         * restrict_level_to_parents: restrict with valid ghosts.
+         *
+         * frac=1.0: use coarse post-step data (coarse level already stepped).
+         *
+         * Ref: Berger & Oliger (1984) — restrict at level boundary.
+         * Ref: Athena++ MeshRefinement::RestrictCellCenteredValues. */
         ghost_exchange(m);
+        ghost_fill_from_coarser(m, level + 1, 1.0);
         restrict_level_to_parents(m, level + 1);
     }
 
@@ -880,8 +896,11 @@ static void subcycle_level_gpu(mesh_t *m, const sim_params_t *p,
             meshblock_pack_sync_to_blocks(cpk, m->blocks);
         }
 
-        /* CPU restriction + ghost exchange (reads non-leaf mesh blocks) */
+        /* CPU restriction + ghost exchange (reads non-leaf mesh blocks).
+         * ghost_fill_from_coarser fills cross-level ghosts (stale after RK4)
+         * so restriction stencil reads valid data. See CPU subcycle_level. */
         ghost_exchange(m);
+        ghost_fill_from_coarser(m, level + 1, 1.0);
         restrict_level_to_parents(m, level + 1);
 
         /* Sync updated coarse pack H→D */
