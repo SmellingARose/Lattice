@@ -631,7 +631,7 @@ static void packed_restrict_to_coarse(meshblock_pack_t *pack)
     int nb = pack->n_blocks;
     int ghost_f = pack->ghost;
     int Nt_f = pack->Ntotal;
-    int ghost_c = pack->ghost;
+    int ghost_c = (pack->coarse_Ntotal - pack->coarse_N) / 2;
     int N_c = pack->coarse_N;
     int Nt_c = pack->coarse_Ntotal;
     size_t npts = pack->npts;
@@ -819,14 +819,14 @@ static void packed_fill_coarse_boundary(meshblock_pack_t *pack)
     if (pack->n_refined == 0) return;
 
     int nb = pack->n_blocks;
-    int gh = pack->ghost;
+    int gh = (pack->coarse_Ntotal - pack->coarse_N) / 2;
     int N_c = pack->coarse_N;
     int Nt_c = pack->coarse_Ntotal;
     size_t cnpts = pack->coarse_npts;
 
     /* 3-point Lagrange extrapolation coefficients */
-    double c[4][3];
-    for (int d = 0; d < gh && d < 4; d++) {
+    double c[COARSE_BUF_GHOST][3];
+    for (int d = 0; d < gh; d++) {
         double t = -(d + 1);
         c[d][0] = (t - 1.0) * (t - 2.0) / 2.0;
         c[d][1] = -t * (t - 2.0);
@@ -942,7 +942,7 @@ static void packed_prolongate_fine_ghosts(meshblock_pack_t *pack)
     int ghost_f = pack->ghost;
     int N_f = pack->N;
     int Nt_f = pack->Ntotal;
-    int ghost_c = pack->ghost;
+    int ghost_c = (pack->coarse_Ntotal - pack->coarse_N) / 2;
     int Nt_c = pack->coarse_Ntotal;
     size_t npts = pack->npts;
     size_t cnpts = pack->coarse_npts;

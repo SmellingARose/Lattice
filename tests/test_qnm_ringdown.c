@@ -91,11 +91,11 @@ int main(void)
     double M_bh = 1.0;
     int max_level = 3;
 
-    mesh_t *m = mesh_create_ex(N_block, L, RK_CK45, NUM_CCZ4_FIELDS);
+    mesh_t *m = mesh_create_ex(N_block, L, RK_CLASSIC, NUM_CCZ4_FIELDS);
     mesh_rebuild_neighbors(m);
 
     sim_params_t p = default_params();
-    p.rk_method = RK_CK45;
+    p.rk_method = RK_CLASSIC;
     p.N = N_block;
     p.L = L;
     p.dx = m->dx_base;

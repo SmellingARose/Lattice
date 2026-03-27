@@ -23,7 +23,7 @@
  */
 
 #include "ghost_exchange.h"
-#include "prolongation.h"
+#include "prolongation.h"  /* PROLONG_STENCIL, COARSE_BUF_GHOST, prolong_w */
 #include "restriction.h"
 #include "../core/fields.h"
 #include <stdio.h>
@@ -330,8 +330,9 @@ static void fill_coarse_buf_boundary(block_t *b)
     /* 3-point extrapolation coefficients for distance d from boundary.
      * extrap(d) = sum_j coeff[d][j] * f(interior_start + j)
      * Derived from Lagrange basis through points {0, 1, 2} evaluated at -d.
-     * d=1: L(-1) = {3, -3, 1},  d=2: L(-2) = {6, -8, 3}, etc. */
-    double c[4][3];
+     * d=1: L(-1) = {3, -3, 1},  d=2: L(-2) = {6, -8, 3}, etc.
+     * Array sized for COARSE_BUF_GHOST (currently 5). */
+    double c[COARSE_BUF_GHOST][3];
     for (int d = 0; d < (int)gh; d++) {
         double t = -(d + 1);  /* evaluate at distance -(d+1) from first interior */
         c[d][0] = (t - 1.0) * (t - 2.0) / 2.0;

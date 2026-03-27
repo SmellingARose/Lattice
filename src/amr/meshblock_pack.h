@@ -86,7 +86,7 @@ typedef struct {
     double  *coarse_data;   /* [n_refined * n_fields * coarse_npts]          */
     int      n_refined;     /* count of level > 0 blocks (have coarse_bufs) */
     size_t   coarse_npts;   /* points per coarse_buf = coarse_Ntotal^3       */
-    int      coarse_Ntotal; /* N/2 + 2*ghost                                */
+    int      coarse_Ntotal; /* N/2 + 2*COARSE_BUF_GHOST                     */
     int      coarse_N;      /* N/2 (half the fine block interior)            */
     int     *refined_map;   /* [n_blocks] — pack index → coarse_data index   */
                             /* -1 if level == 0 (no coarse_buf for this blk) */

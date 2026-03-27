@@ -7,6 +7,7 @@
  */
 
 #include "block.h"
+#include "prolongation.h"
 #include "../core/fields.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -30,9 +31,15 @@ static grid_t *coarse_buf_alloc(int N, double dx, int n_fields)
         exit(1);
     }
 
+    /* Use COARSE_BUF_GHOST (= 5 with current stencil parameters) instead of
+     * GHOST_WIDTH (= 4). The wider ghost zone ensures the 7-point prolongation
+     * stencil can fill ALL fine ghost cells including the outermost (fi=0).
+     * Without this, the outermost 2 fine ghost cells at coarse-fine boundaries
+     * are skipped by prolongation, leaving stale/zero data that the KO
+     * dissipation stencil reads — causing NaN from chi=0 division. */
     g->N      = N;
-    g->ghost  = GHOST_WIDTH;
-    g->Ntotal = N + 2 * GHOST_WIDTH;
+    g->ghost  = COARSE_BUF_GHOST;
+    g->Ntotal = N + 2 * COARSE_BUF_GHOST;
     g->L      = N * dx;
     g->dx     = dx;
     g->inv_dx = 1.0 / dx;

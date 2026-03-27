@@ -32,6 +32,13 @@ EXTERN_C_BEGIN
  */
 #define PROLONG_STENCIL 7
 
+/* Ghost width for the coarse buffer: ensures the 7-point prolongation stencil
+ * can fill ALL fine ghost cells, including the outermost (fi=0).
+ * Derived from: ghost_c >= PROLONG_STENCIL/2 + ceil(GHOST_WIDTH/2).
+ * With GHOST_WIDTH=4, PROLONG_STENCIL=7: ghost_c >= 3 + 2 = 5.
+ * Ref: AthenaK coarse-buffer ghost width (must exceed fine ghost / ratio + stencil half). */
+#define COARSE_BUF_GHOST (PROLONG_STENCIL / 2 + (GHOST_WIDTH + 1) / 2)
+
 extern const double prolong_w[PROLONG_STENCIL];
 extern const double prolong_wkj[4][PROLONG_STENCIL][PROLONG_STENCIL];
 

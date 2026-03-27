@@ -60,16 +60,17 @@ __constant__ double d_restrict_w[6];                     /* 48 B   */
 __constant__ double d_restrict_wkj[6][6];                /* 288 B  */
 __constant__ double d_prolong_w[7];                      /* 56 B   */
 __constant__ double d_prolong_wkj[4][7][7];              /* 1568 B */
-__constant__ double d_extrap_c[4][3];                    /* 96 B   */
+__constant__ double d_extrap_c[COARSE_BUF_GHOST][3];
 
 /* Extrapolation coefficients for ghost boundary fill (Phase 3.5).
  * Quadratic extrapolation: p(x) through 3 interior points at x=0,1,2,
- * evaluated at x=-(d+1) for ghost depth d=0..3. */
-static const double h_extrap_c[4][3] = {
+ * evaluated at x=-(d+1) for ghost depth d=0..COARSE_BUF_GHOST-1. */
+static const double h_extrap_c[COARSE_BUF_GHOST][3] = {
     {  3.0,  -3.0,  1.0 },
     {  6.0,  -8.0,  3.0 },
     { 10.0, -15.0,  6.0 },
     { 15.0, -24.0, 10.0 },
+    { 21.0, -35.0, 15.0 },
 };
 
 /* ========================================================================
@@ -408,7 +409,7 @@ void backend_cross_level_ghost_fill_packed(
     int Nt_f = fine_pack->Ntotal;
     size_t npts = fine_pack->npts;
     int nf = fine_pack->n_fields;
-    int ghost_c = fine_pack->ghost;
+    int ghost_c = (fine_pack->coarse_Ntotal - fine_pack->coarse_N) / 2;
     int N_c = fine_pack->coarse_N;
     int Nt_c = fine_pack->coarse_Ntotal;
     size_t cnpts = fine_pack->coarse_npts;
@@ -1499,7 +1500,7 @@ void backend_ghost_exchange_packed(meshblock_pack_t *pack)
 
     if (pack->n_refined == 0) return;
 
-    int ghost_c = pack->ghost;
+    int ghost_c = (pack->coarse_Ntotal - pack->coarse_N) / 2;
     int N_c = pack->coarse_N;
     int Nt_c = pack->coarse_Ntotal;
     size_t cnpts = pack->coarse_npts;
@@ -1540,7 +1541,7 @@ void backend_ghost_exchange_packed(meshblock_pack_t *pack)
             hipLaunchKernelGGL(hip_ghost_extrap, gs, bs, 0, gpu_stream,
                                d_ptrs.coarse_data, d_ptrs.refined_map,
                                d_ptrs.nblevel_table,
-                               nb, ghost, N_c, Nt_c, cnpts, nf, dim);
+                               nb, ghost_c, N_c, Nt_c, cnpts, nf, dim);
         }
     }
 
