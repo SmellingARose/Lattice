@@ -180,12 +180,9 @@ void backend_map_pack(meshblock_pack_t *pack, const sim_params_t *p)
     hip_device_ptrs_t *dp = (hip_device_ptrs_t *)pack->device_handle;
 
     if (dp) {
-        /* Re-map: device memory persists. Sync leaf data only — buffer
-         * block data (at [n_evolve, n_blocks)) is device-resident from
-         * restriction and must not be overwritten with stale host data. */
-        size_t leaf_bytes = (size_t)pack->n_fields * pack->n_evolve
-                          * pack->npts * sizeof(double);
-        HIP_CHECK(hipMemcpyAsync(dp->data, pack->data, leaf_bytes,
+        /* Re-map: upload full buffer — field-major layout interleaves
+         * leaf and buffer blocks, so partial upload corrupts indexing. */
+        HIP_CHECK(hipMemcpyAsync(dp->data, pack->data, total_bytes,
                                   hipMemcpyHostToDevice, gpu_stream));
         if (dp->coarse_data && pack->coarse_data) {
             HIP_CHECK(hipMemcpyAsync(dp->coarse_data, pack->coarse_data,
@@ -671,11 +668,11 @@ void backend_unmap_pack_sync(meshblock_pack_t *pack)
 
     HIP_CHECK(hipStreamSynchronize(gpu_stream));
 
-    /* Sync only leaf data back to host — buffer blocks are device-only */
-    size_t leaf_bytes = (size_t)pack->n_fields * pack->n_evolve
-                      * pack->npts * sizeof(double);
+    /* Download full buffer — field-major layout interleaves leaf and
+     * buffer blocks, so partial download corrupts indexing. */
+    size_t total_bytes = d_ptrs.total * sizeof(double);
 
-    HIP_CHECK(hipMemcpy(pack->data, d_ptrs.data, leaf_bytes,
+    HIP_CHECK(hipMemcpy(pack->data, d_ptrs.data, total_bytes,
               hipMemcpyDeviceToHost));
 
     /* Sync coarse data */
@@ -784,8 +781,8 @@ void backend_compute_rhs_packed(meshblock_pack_t *pack, const sim_params_t *p)
 {
     int lo = pack->ghost;
     int inner = pack->N;
-    int nb = pack->n_evolve;  /* skip buffer blocks */
-    int total_threads = nb * inner * inner * inner;
+    int nb = pack->n_blocks;  /* stride for field-major layout */
+    int total_threads = pack->n_evolve * inner * inner * inner;  /* skip buffers */
 
     int block_size = 64;  /* Smaller block for high-register RHS kernel */
     int grid_size = (total_threads + block_size - 1) / block_size;
@@ -1075,7 +1072,7 @@ void backend_rk4_stage_packed(meshblock_pack_t *pack,
 {
     if (!d_ptrs.accum) return;
 
-    size_t total = (size_t)pack->n_fields * pack->n_evolve * pack->npts;
+    size_t total = (size_t)pack->n_fields * pack->n_blocks * pack->npts;
     double w_dt = weight * dt;
     double a_dt = alpha * dt;
 
@@ -1106,7 +1103,7 @@ void backend_rk4_final_packed(meshblock_pack_t *pack, double weight, double dt)
 {
     if (!d_ptrs.accum) return;
 
-    size_t total = (size_t)pack->n_fields * pack->n_evolve * pack->npts;
+    size_t total = (size_t)pack->n_fields * pack->n_blocks * pack->npts;
     double w_dt = weight * dt;
 
     int block_size = 256;
@@ -1764,9 +1761,9 @@ extern "C"
 void backend_enforce_algebraic_packed(meshblock_pack_t *pack)
 {
     int Nt = pack->Ntotal;
-    int nb = pack->n_evolve;  /* skip buffer blocks */
+    int nb = pack->n_blocks;  /* stride for field-major layout */
     size_t npts = pack->npts;
-    int total_threads = nb * Nt * Nt * Nt;
+    int total_threads = pack->n_evolve * Nt * Nt * Nt;  /* skip buffers */
 
     int block_size = 256;
     int grid_size = (total_threads + block_size - 1) / block_size;
