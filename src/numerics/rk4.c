@@ -866,59 +866,25 @@ static void subcycle_level_gpu(mesh_t *m, const sim_params_t *p,
         subcycle_level_gpu(m, p, level + 1, dt_level / 2.0,
                            t_start + dt_level / 2.0, 1);
 
-        /* Post-subcycle restriction: sync to host, restrict fine→coarse
-         * non-leaf parents, ghost exchange to propagate to leaf ghost zones,
-         * sync updated coarse pack back to device.
+        /* Post-subcycle restriction: NOT needed on GPU path.
          *
-         * This is the standard Berger-Oliger post-subcycle synchronization.
-         * All major AMR codes do this: GRChombo (coarseAverage + fillAllGhosts),
-         * Athena++ (RestrictCellCenteredValues + FillSameRank),
-         * CarpetX (average_down + fillPatch), BAM.
+         * CPU path does restrict_level_to_parents to keep non-leaf parent
+         * block data synchronized. This is needed because CPU cross-level
+         * ghost fill (ghost_fill_from_coarser) reads from non-leaf parent
+         * blocks via block_time_interp.
          *
-         * Host round-trip cost: ~1 GB per level × 2 directions ÷ 60 GB/s
-         * (PCIe Gen5) ≈ 30ms per level boundary. Negligible vs ~22s step.
+         * GPU path is different: backend_cross_level_ghost_fill_packed
+         * reads directly from the coarse level PACK (leaf blocks only,
+         * device-resident). The coarse pack data is already up-to-date
+         * from step_level_gpu. Non-leaf parent blocks are never read
+         * on the GPU path, so restricting into them is wasted work.
+         *
+         * The next step_level_gpu at any level will call
+         * backend_cross_level_ghost_fill_packed which does its own
+         * restrict + exchange + prolongate on device.
          *
          * Ref: Berger & Oliger (1984), JCP 53:484.
-         * Ref: CarpetX host-orchestrated restriction pattern. */
-        meshblock_pack_t *fpk = m->level_packs[level + 1];
-        meshblock_pack_t *cpk = m->level_packs[level];
-
-        /* Sync fine pack D→H (device memory persists) */
-        if (fpk) {
-            backend_activate_pack(fpk);
-            backend_unmap_pack_sync(fpk);
-            meshblock_pack_sync_to_blocks(fpk, m->blocks);
-        }
-        /* Sync coarse pack D→H */
-        if (cpk) {
-            backend_activate_pack(cpk);
-            backend_unmap_pack_sync(cpk);
-            meshblock_pack_sync_to_blocks(cpk, m->blocks);
-        }
-
-        /* CPU restriction + ghost exchange (reads non-leaf mesh blocks).
-         * ghost_fill_from_coarser fills cross-level ghosts (stale after RK4)
-         * so restriction stencil reads valid data. See CPU subcycle_level. */
-        ghost_exchange(m);
-        ghost_fill_from_coarser(m, level + 1, 1.0);
-        restrict_level_to_parents(m, level + 1);
-
-        /* Sync updated coarse pack H→D */
-        if (cpk) {
-            meshblock_pack_sync_from_blocks(cpk, m->blocks);
-            if (cpk->n_refined > 0)
-                meshblock_pack_load_coarse(cpk, m->blocks);
-            backend_map_pack(cpk, p);
-            backend_unmap_pack(cpk);
-        }
-        /* Re-sync fine pack H→D (ghost_exchange may have updated fine ghosts) */
-        if (fpk) {
-            meshblock_pack_sync_from_blocks(fpk, m->blocks);
-            if (fpk->n_refined > 0)
-                meshblock_pack_load_coarse(fpk, m->blocks);
-            backend_map_pack(fpk, p);
-            backend_unmap_pack(fpk);
-        }
+         * Ref: AthenaK device-resident subcycling (no host restriction). */
     }
 }
 
