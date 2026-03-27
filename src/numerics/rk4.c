@@ -360,53 +360,45 @@ static void save_k1_from_pack(const meshblock_pack_t *pack, block_t **blocks)
  * Ref: AthenaK MeshBlockPack per-level construction.
  */
 static meshblock_pack_t *mesh_build_level_pack(mesh_t *m, int level,
-                                                rk_method_t rk_method,
-                                                int with_buffers)
+                                                rk_method_t rk_method)
 {
-    /* Count leaf blocks (evolved) and non-leaf buffer blocks at this level.
-     * Buffer blocks (AthenaK pattern): non-leaf parents stay in the pack
-     * as data sources for ghost exchange. RK4 kernels skip them.
-     * Ref: AthenaK src/mesh/meshblock_pack.hpp */
-    int n_leaves = 0, n_buffers = 0;
+    /* Count leaves at this level */
+    int n_leaves = 0;
     for (int bid = 0; bid < m->num_blocks; bid++) {
         block_t *b = m->blocks[bid];
-        if (!b || b->loc.level != level) continue;
-        if (b->is_leaf) n_leaves++;
-        else if (with_buffers && b->grid) n_buffers++;
+        if (b && b->is_leaf && b->loc.level == level)
+            n_leaves++;
     }
 
     if (n_leaves == 0) return NULL;
 
-    int n_total = n_leaves + n_buffers;
-    int *ids = malloc(n_total * sizeof(int));
+    int *ids = malloc(n_leaves * sizeof(int));
     if (!ids) {
         fprintf(stderr, "mesh_build_level_pack: malloc failed\n");
         exit(1);
     }
 
-    /* Leaf blocks first [0, n_leaves), buffers after [n_leaves, n_total) */
     int idx = 0;
     for (int bid = 0; bid < m->num_blocks; bid++) {
         block_t *b = m->blocks[bid];
         if (b && b->is_leaf && b->loc.level == level)
             ids[idx++] = bid;
     }
-    for (int bid = 0; bid < m->num_blocks; bid++) {
-        block_t *b = m->blocks[bid];
-        if (b && !b->is_leaf && b->loc.level == level && b->grid)
-            ids[idx++] = bid;
-    }
 
     size_t npts = m->blocks[ids[0]]->grid->npoints;
 
     meshblock_pack_t *pack = meshblock_pack_create(
-        n_total, npts, ids, level, rk_method, m->n_fields);
-    pack->n_evolve = n_leaves;
+        n_leaves, npts, ids, level, rk_method, m->n_fields);
 
     meshblock_pack_load(pack, m->blocks);
     meshblock_pack_load_meta(pack, m->blocks);
     meshblock_pack_build_neighbors(pack, m->blocks);
 
+    /* Per-level packs at level > 0 may have coarse_bufs, but cross-level
+     * ghost fill is done BEFORE packing (via ghost_fill_from_coarser),
+     * so we don't need coarse_data in the pack. The pack's ghost exchange
+     * only handles same-level neighbors. For blocks that do have coarse_bufs,
+     * load coarse data so pack phases 2-4 can run if n_refined > 0. */
     if (pack->n_refined > 0)
         meshblock_pack_load_coarse(pack, m->blocks);
 
@@ -466,7 +458,7 @@ static void step_level(mesh_t *m, const sim_params_t *p,
         /* Build fresh level pack */
         if (level < MAX_AMR_LEVELS && m->level_packs[level])
             meshblock_pack_free(m->level_packs[level]);
-        meshblock_pack_t *new_pack = mesh_build_level_pack(m, level, p->rk_method, 0);
+        meshblock_pack_t *new_pack = mesh_build_level_pack(m, level, p->rk_method);
         if (!new_pack) return;  /* no blocks at this level */
         if (level < MAX_AMR_LEVELS)
             m->level_packs[level] = new_pack;
@@ -720,7 +712,7 @@ static void gpu_ensure_level_packs(mesh_t *m, const sim_params_t *p)
         if (!m->level_packs[L] || m->packs_dirty) {
             if (m->level_packs[L])
                 meshblock_pack_free(m->level_packs[L]);
-            m->level_packs[L] = mesh_build_level_pack(m, L, p->rk_method, 1);
+            m->level_packs[L] = mesh_build_level_pack(m, L, p->rk_method);
             if (!m->level_packs[L]) continue;
 
             /* Map to device (first map: allocates everything) */
@@ -749,45 +741,6 @@ static void gpu_ensure_level_packs(mesh_t *m, const sim_params_t *p)
             m->level_packs[L]->n_refined > 0) {
             build_cross_level_map(m, m->level_packs[L], m->level_packs[L-1]);
         }
-    }
-
-    /* Build restriction maps: for each coarse pack with buffer blocks,
-     * map each buffer block's 8 children to fine pack block indices.
-     * Used by backend_restrict_to_buffers_packed. */
-    for (int L = 0; L < m->max_level; L++) {
-        meshblock_pack_t *cpk = m->level_packs[L];
-        meshblock_pack_t *fpk = m->level_packs[L + 1];
-        if (!cpk || !fpk) continue;
-        int n_buf = cpk->n_blocks - cpk->n_evolve;
-        if (n_buf == 0) continue;
-
-        /* Build reverse lookup: mesh block ID → fine pack index */
-        int max_id = 0;
-        for (int b = 0; b < fpk->n_blocks; b++)
-            if (fpk->block_ids[b] > max_id) max_id = fpk->block_ids[b];
-        int *fine_rev = calloc(max_id + 1, sizeof(int));
-        for (int i = 0; i <= max_id; i++) fine_rev[i] = -1;
-        for (int b = 0; b < fpk->n_blocks; b++)
-            fine_rev[fpk->block_ids[b]] = b;
-
-        int *rmap = malloc(n_buf * 8 * sizeof(int));
-        for (int i = 0; i < n_buf * 8; i++) rmap[i] = -1;
-
-        for (int bi = 0; bi < n_buf; bi++) {
-            int buf_pack_idx = cpk->n_evolve + bi;
-            int mesh_id = cpk->block_ids[buf_pack_idx];
-            block_t *parent = m->blocks[mesh_id];
-            if (!parent) continue;
-            for (int c = 0; c < 8; c++) {
-                int child_id = parent->child_ids[c];
-                if (child_id >= 0 && child_id <= max_id)
-                    rmap[bi * 8 + c] = fine_rev[child_id];
-            }
-        }
-
-        backend_upload_restrict_map(cpk, rmap, n_buf);
-        free(rmap);
-        free(fine_rev);
     }
 }
 
@@ -913,35 +866,52 @@ static void subcycle_level_gpu(mesh_t *m, const sim_params_t *p,
         subcycle_level_gpu(m, p, level + 1, dt_level / 2.0,
                            t_start + dt_level / 2.0, 1);
 
-        /* Post-subcycle restriction: GPU-native, zero PCIe.
-         *
+        /* Post-subcycle restriction via host round-trip.
          * Every production AMR code restricts after fine subcycling:
          * GRChombo (coarseAverage), Athena++ (RestrictCellCenteredValues),
          * CarpetX (average_down), AthenaK, BAM. No exceptions.
          *
-         * GPU sequence (3 kernel launches, no host transfer):
-         * 1. ghost_exchange on fine pack — valid same-level ghosts
-         * 2. cross_level_ghost_fill — valid cross-level ghosts from coarse
-         * 3. restrict fine interior+ghost → buffer blocks in coarse pack
+         * Sequence: sync D→H, ghost_fill + restrict on host, sync H→D.
+         * ghost_fill_from_coarser refreshes cross-level ghosts (stale
+         * after RK4) so the 6th-order restriction stencil reads valid data.
          *
-         * Buffer blocks (AthenaK pattern) are non-leaf parents packed at
-         * [n_evolve, n_blocks). Ghost exchange reads their interiors to
-         * fill leaf ghost zones at refined boundaries.
-         *
-         * Ref: Berger & Oliger (1984), JCP 53:484.
-         * Ref: AthenaK device-resident restriction. */
+         * Ref: Berger & Oliger (1984), JCP 53:484. */
         meshblock_pack_t *fpk = m->level_packs[level + 1];
         meshblock_pack_t *cpk = m->level_packs[level];
 
-        if (fpk && cpk && cpk->n_evolve < cpk->n_blocks) {
-            /* 1. Fill fine ghost zones (needed by 6th-order restriction stencil) */
+        /* Sync fine pack D→H (device memory persists) */
+        if (fpk) {
             backend_activate_pack(fpk);
-            backend_ghost_exchange_packed(fpk);
-            if (m->level_packs[level])
-                backend_cross_level_ghost_fill_packed(fpk, cpk, 1.0);
+            backend_unmap_pack_sync(fpk);
+            meshblock_pack_sync_to_blocks(fpk, m->blocks);
+        }
+        /* Sync coarse pack D→H */
+        if (cpk) {
+            backend_activate_pack(cpk);
+            backend_unmap_pack_sync(cpk);
+            meshblock_pack_sync_to_blocks(cpk, m->blocks);
+        }
 
-            /* 2. 6th-order restrict: fine pack → buffer blocks in coarse pack */
-            backend_restrict_to_buffers_packed(fpk, cpk);
+        /* CPU restriction + ghost exchange */
+        ghost_exchange(m);
+        ghost_fill_from_coarser(m, level + 1, 1.0);
+        restrict_level_to_parents(m, level + 1);
+
+        /* Sync updated coarse pack H→D */
+        if (cpk) {
+            meshblock_pack_sync_from_blocks(cpk, m->blocks);
+            if (cpk->n_refined > 0)
+                meshblock_pack_load_coarse(cpk, m->blocks);
+            backend_map_pack(cpk, p);
+            backend_unmap_pack(cpk);
+        }
+        /* Re-sync fine pack H→D */
+        if (fpk) {
+            meshblock_pack_sync_from_blocks(fpk, m->blocks);
+            if (fpk->n_refined > 0)
+                meshblock_pack_load_coarse(fpk, m->blocks);
+            backend_map_pack(fpk, p);
+            backend_unmap_pack(fpk);
         }
     }
 }

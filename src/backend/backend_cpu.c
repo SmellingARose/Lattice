@@ -121,7 +121,7 @@ void backend_compute_rhs_packed(meshblock_pack_t *pack, const sim_params_t *p)
 {
     int lo = pack->ghost;
     int hi = pack->ghost + pack->N;
-    int nb = pack->n_evolve;  /* skip buffer blocks */
+    int nb = pack->n_blocks;
     size_t npts = pack->npts;
     int n_kj = (hi - lo) * (hi - lo);
     int total_work = nb * n_kj;
@@ -269,7 +269,7 @@ void backend_sommerfeld_packed(meshblock_pack_t *pack, const sim_params_t *p)
     int lo = pack->ghost;
     int hi = pack->ghost + pack->N;
     int Nt = pack->Ntotal;
-    int nb = pack->n_evolve;  /* skip buffer blocks */
+    int nb = pack->n_blocks;
     size_t npts = pack->npts;
     bc_type_t bc_type = p->bc_type;
 
@@ -485,7 +485,7 @@ void backend_rk4_stage_packed(meshblock_pack_t *pack,
 {
     if (!pack->accum) return;
 
-    size_t total = (size_t)pack->n_fields * pack->n_evolve * pack->npts;
+    size_t total = (size_t)pack->n_fields * pack->n_blocks * pack->npts;
     double *data    = pack->data;
     double *accum   = pack->accum;
     const double *scratch = pack->scratch;
@@ -510,7 +510,7 @@ void backend_rk4_final_packed(meshblock_pack_t *pack, double weight, double dt)
 {
     if (!pack->accum) return;
 
-    size_t total = (size_t)pack->n_fields * pack->n_evolve * pack->npts;
+    size_t total = (size_t)pack->n_fields * pack->n_blocks * pack->npts;
     double *data    = pack->data;
     const double *accum   = pack->accum;
     const double *scratch = pack->scratch;
@@ -1071,7 +1071,7 @@ void backend_ghost_exchange_packed(meshblock_pack_t *pack)
 void backend_enforce_algebraic_packed(meshblock_pack_t *pack)
 {
     int Nt = pack->Ntotal;
-    int nb = pack->n_evolve;  /* skip buffer blocks */
+    int nb = pack->n_blocks;
     size_t npts = pack->npts;
     int n_kj = Nt * Nt;
     int total_work = nb * n_kj;
@@ -1175,18 +1175,6 @@ void backend_upload_cross_level_map(meshblock_pack_t *pack,
                                      const int *map, int count)
 {
     (void)pack; (void)map; (void)count;
-}
-
-void backend_restrict_to_buffers_packed(meshblock_pack_t *fine_pack,
-                                         meshblock_pack_t *coarse_pack)
-{
-    (void)fine_pack; (void)coarse_pack;
-}
-
-void backend_upload_restrict_map(meshblock_pack_t *coarse_pack,
-                                   const int *map, int n_buffers)
-{
-    (void)coarse_pack; (void)map; (void)n_buffers;
 }
 
 /* ========================================================================

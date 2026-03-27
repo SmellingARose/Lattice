@@ -523,9 +523,7 @@ void meshblock_pack_store_coarse(const meshblock_pack_t *pack, block_t **blocks)
  */
 void meshblock_pack_sync_to_blocks(const meshblock_pack_t *pack, block_t **blocks)
 {
-    /* Only sync leaf blocks [0, n_evolve). Buffer block data is device-only. */
-    int n_sync = pack->n_evolve;
-    for (int b = 0; b < n_sync; b++) {
+    for (int b = 0; b < pack->n_blocks; b++) {
         block_t *blk = blocks[pack->block_ids[b]];
         size_t npts = pack->npts;
 
@@ -545,10 +543,7 @@ void meshblock_pack_sync_to_blocks(const meshblock_pack_t *pack, block_t **block
  */
 void meshblock_pack_sync_from_blocks(meshblock_pack_t *pack, block_t **blocks)
 {
-    /* Only sync leaf blocks [0, n_evolve). Buffer blocks at [n_evolve, n_blocks)
-     * hold device-side restricted data — don't overwrite with stale host data. */
-    int n_sync = pack->n_evolve;
-    for (int b = 0; b < n_sync; b++) {
+    for (int b = 0; b < pack->n_blocks; b++) {
         block_t *blk = blocks[pack->block_ids[b]];
         size_t npts = pack->npts;
 
