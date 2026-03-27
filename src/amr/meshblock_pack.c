@@ -402,7 +402,16 @@ void meshblock_pack_build_neighbors(meshblock_pack_t *pack, block_t **blocks)
         reverse[pack->block_ids[b]] = b;
 
     /* Build main neighbor table: pack-local indices for 26 directions.
-     * neighbor_table[b * 26 + n] = pack index of neighbor, or -1. */
+     * neighbor_table[b * 26 + n] = pack index of neighbor, or -1.
+     *
+     * Only map to LEAF blocks [0, n_evolve). Buffer blocks [n_evolve, n_blocks)
+     * must NOT appear in the neighbor table — they hold restricted data but
+     * should not participate in the same-level ghost exchange. Leaf blocks
+     * at the coarse-fine boundary need prolongated data from their coarse_buf
+     * (phase 5), not direct copies from buffer block interiors.
+     *
+     * Buffer blocks ARE in the pack for the restriction kernel to write to.
+     * The ghost exchange is leaf-only; restriction is buffer-only. */
     for (int b = 0; b < pack->n_blocks; b++) {
         block_t *blk = blocks[pack->block_ids[b]];
 
@@ -410,11 +419,13 @@ void meshblock_pack_build_neighbors(meshblock_pack_t *pack, block_t **blocks)
             int mesh_nbr_id = blk->neighbor_ids[n];
 
             if (mesh_nbr_id < 0 || mesh_nbr_id > max_id) {
-                /* No neighbor (domain boundary) */
                 pack->neighbor_table[b * NUM_NEIGHBORS + n] = -1;
             } else {
-                /* Map mesh-level neighbor ID to pack-local index */
-                pack->neighbor_table[b * NUM_NEIGHBORS + n] = reverse[mesh_nbr_id];
+                int pack_idx = reverse[mesh_nbr_id];
+                /* Exclude buffer blocks from ghost exchange */
+                if (pack_idx >= pack->n_evolve)
+                    pack_idx = -1;
+                pack->neighbor_table[b * NUM_NEIGHBORS + n] = pack_idx;
             }
         }
     }
