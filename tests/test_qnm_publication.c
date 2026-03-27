@@ -235,7 +235,9 @@ int main(void)
         p.time += p.dt;
 
         int do_psi4 = (step % psi4_every == 0);
-        int do_diag = (step % diag_every == 0 || step == total_steps);
+        /* Print every step near crash zone (step 40-55) for debugging */
+        int do_diag = (step % diag_every == 0 || step == total_steps
+                       || (step >= 40 && step <= 55));
 
         /* Psi4 extraction: CPU psi4_extract uses mesh_find_block_at to
          * find the finest block at each angular point. GPU-resident data
@@ -295,8 +297,23 @@ int main(void)
             double amp20 = (n_psi4 > 0) ?
                 sqrt(r1_re20[n_psi4-1]*r1_re20[n_psi4-1] +
                      r1_im20[n_psi4-1]*r1_im20[n_psi4-1]) : 0;
-            printf("  step %4d  t=%6.1fM  Ham=%.3e  Mom=%.3e  lapse=%.4f",
-                   step, p.time, ham, mom, ml);
+            /* chi_min from host blocks (already synced for Psi4) */
+            double chi_min = 1e30;
+            for (int bid = 0; bid < m->num_blocks; bid++) {
+                block_t *blk = m->blocks[bid];
+                if (!blk || !blk->is_leaf) continue;
+                grid_t *g = blk->grid;
+                int lo = g->ghost, hi = g->ghost + g->N;
+                for (int k = lo; k < hi; k++)
+                    for (int j = lo; j < hi; j++)
+                        for (int i = lo; i < hi; i++) {
+                            double c = g->fields[FIELD_CHI][IDX(g,i,j,k)];
+                            if (c < chi_min) chi_min = c;
+                        }
+            }
+
+            printf("  step %4d  t=%6.1fM  Ham=%.3e  Mom=%.3e  lapse=%.4f  chi=%.4e",
+                   step, p.time, ham, mom, ml, chi_min);
             if (amp20 > 0) printf("  |Psi4|=%.3e", amp20);
             double elapsed = wtime() - t_wall_start;
             double dt_wall = wtime() - t_step_start;
@@ -318,8 +335,21 @@ int main(void)
             double amp20 = (n_psi4 > 0) ?
                 sqrt(r1_re20[n_psi4-1]*r1_re20[n_psi4-1] +
                      r1_im20[n_psi4-1]*r1_im20[n_psi4-1]) : 0;
-            printf("  step %4d  t=%6.1fM  Ham=%.3e  Mom=%.3e  lapse=%.4f",
-                   step, p.time, ham, mom, ml);
+            double chi_min = 1e30;
+            for (int bid = 0; bid < m->num_blocks; bid++) {
+                block_t *blk = m->blocks[bid];
+                if (!blk || !blk->is_leaf) continue;
+                grid_t *g = blk->grid;
+                int lo = g->ghost, hi = g->ghost + g->N;
+                for (int k = lo; k < hi; k++)
+                    for (int j = lo; j < hi; j++)
+                        for (int i = lo; i < hi; i++) {
+                            double c = g->fields[FIELD_CHI][IDX(g,i,j,k)];
+                            if (c < chi_min) chi_min = c;
+                        }
+            }
+            printf("  step %4d  t=%6.1fM  Ham=%.3e  Mom=%.3e  lapse=%.4f  chi=%.4e",
+                   step, p.time, ham, mom, ml, chi_min);
             if (amp20 > 0) printf("  |Psi4|=%.3e", amp20);
             double elapsed = wtime() - t_wall_start;
             double dt_wall = wtime() - t_step_start;
