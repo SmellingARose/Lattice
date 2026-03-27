@@ -105,6 +105,10 @@ typedef struct {
     double *fields_old;          /* [total] pre-step data for temporal interp  */
     int *cross_level_map;        /* [n_cross * 3] (fine_blk, dir, coarse_blk) */
     int n_cross_entries;
+    /* Buffer block restriction map: fine children → buffer parents */
+    int *restrict_map;           /* [n_buffers * 8] fine pack indices per buffer */
+    int n_buffers;               /* = n_blocks - n_evolve */
+    int n_evolve;                /* leaf blocks (for partial D↔H sync)           */
 } hip_device_ptrs_t;
 
 static hip_device_ptrs_t d_ptrs;
@@ -176,8 +180,12 @@ void backend_map_pack(meshblock_pack_t *pack, const sim_params_t *p)
     hip_device_ptrs_t *dp = (hip_device_ptrs_t *)pack->device_handle;
 
     if (dp) {
-        /* Re-map: device memory persists. Sync data + coarse_data only. */
-        HIP_CHECK(hipMemcpyAsync(dp->data, pack->data, total_bytes,
+        /* Re-map: device memory persists. Sync leaf data only — buffer
+         * block data (at [n_evolve, n_blocks)) is device-resident from
+         * restriction and must not be overwritten with stale host data. */
+        size_t leaf_bytes = (size_t)pack->n_fields * pack->n_evolve
+                          * pack->npts * sizeof(double);
+        HIP_CHECK(hipMemcpyAsync(dp->data, pack->data, leaf_bytes,
                                   hipMemcpyHostToDevice, gpu_stream));
         if (dp->coarse_data && pack->coarse_data) {
             HIP_CHECK(hipMemcpyAsync(dp->coarse_data, pack->coarse_data,
@@ -243,11 +251,13 @@ void backend_map_pack(meshblock_pack_t *pack, const sim_params_t *p)
     dp->params = (sim_params_t *)hip_alloc_copy(p, sizeof(sim_params_t));
 
     /* Build compact boundary block ID list (2A optimization).
-     * Only blocks with at least one on_boundary face need Sommerfeld. */
+     * Only LEAF blocks with at least one on_boundary face need Sommerfeld.
+     * Buffer blocks (n_evolve..n_blocks) are excluded. */
     {
-        int *h_bids = (int *)malloc(nb * sizeof(int));
+        int ne = pack->n_evolve;
+        int *h_bids = (int *)malloc(ne * sizeof(int));
         int n_bdy = 0;
-        for (int b = 0; b < nb; b++) {
+        for (int b = 0; b < ne; b++) {
             int has = 0;
             for (int face = 0; face < 6; face++)
                 has |= pack->on_boundary[b * 6 + face];
@@ -265,6 +275,11 @@ void backend_map_pack(meshblock_pack_t *pack, const sim_params_t *p)
     /* Cross-level map: not yet built (Part B builds it separately) */
     dp->cross_level_map = NULL;
     dp->n_cross_entries = 0;
+
+    /* Restrict map: built separately by backend_upload_restrict_map */
+    dp->restrict_map = NULL;
+    dp->n_buffers = pack->n_blocks - pack->n_evolve;
+    dp->n_evolve = pack->n_evolve;
 
     /* Save handle to pack for persistence */
     pack->device_handle = dp;
@@ -293,6 +308,7 @@ static void hip_free_device_ptrs_struct(hip_device_ptrs_t *dp)
     if (dp->boundary_block_ids) (void)hipFree(dp->boundary_block_ids);
     (void)hipFree(dp->params);
     if (dp->cross_level_map) (void)hipFree(dp->cross_level_map);
+    if (dp->restrict_map) (void)hipFree(dp->restrict_map);
 }
 
 /*
@@ -535,6 +551,110 @@ void backend_upload_cross_level_map(meshblock_pack_t *pack,
 }
 
 extern "C"
+void backend_upload_restrict_map(meshblock_pack_t *coarse_pack,
+                                   const int *map, int n_buffers)
+{
+    hip_device_ptrs_t *dp = (hip_device_ptrs_t *)coarse_pack->device_handle;
+    if (!dp) return;
+    if (dp->restrict_map) {
+        (void)hipFree(dp->restrict_map);
+        dp->restrict_map = NULL;
+    }
+    dp->n_buffers = n_buffers;
+    if (n_buffers > 0) {
+        dp->restrict_map = (int *)hip_alloc_copy(map, n_buffers * 8 * sizeof(int));
+    }
+}
+
+/* 6th-order restriction kernel: fine pack → buffer blocks in coarse pack.
+ * Each thread handles one coarse interior cell in a buffer block.
+ * Reads 6³=216 fine cells via tensor product of restrict_w weights.
+ * Ref: restriction.h restrict_cell inline function (identical math). */
+__global__ void hip_restrict_to_buffers(
+    double *coarse_data,              /* coarse pack data (write to buffers) */
+    const double *fine_data,          /* fine pack data (read) */
+    const int *restrict_map,          /* [n_buffers * 8] fine pack indices */
+    int n_evolve,                     /* buffer blocks start at n_evolve */
+    int n_buffers,
+    int nb_c, size_t npts_c,          /* coarse pack dims */
+    int nb_f, size_t npts_f,          /* fine pack dims */
+    int N, int ghost, int Nt,         /* grid dims (same for both packs) */
+    int nf,                           /* field count */
+    int total_threads)
+{
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (tid >= total_threads) return;
+
+    int N3 = N * N * N;
+    int buf_local = tid / N3;         /* which buffer block (0-based) */
+    int cell = tid % N3;              /* which interior cell */
+    int ci = ghost + cell % N;
+    int cj = ghost + (cell / N) % N;
+    int ck = ghost + cell / (N * N);
+
+    int buf_idx = n_evolve + buf_local;  /* pack index of buffer block */
+
+    /* Which octant and fine block? */
+    int half = N / 2;
+    int ox = (ci - ghost) / half;
+    int oy = (cj - ghost) / half;
+    int oz = (ck - ghost) / half;
+    int oct = ox + 2 * oy + 4 * oz;
+    int fine_blk = restrict_map[buf_local * 8 + oct];
+    if (fine_blk < 0) return;
+
+    /* Fine cell base: map coarse interior position to fine interior */
+    int fi_base = ghost + 2 * ((ci - ghost) - ox * half);
+    int fj_base = ghost + 2 * ((cj - ghost) - oy * half);
+    int fk_base = ghost + 2 * ((ck - ghost) - oz * half);
+
+    /* 6th-order restriction: tensor product of restrict_w[6] */
+    for (int f = 0; f < nf; f++) {
+        double val = 0.0;
+        for (int sk = 0; sk < 6; sk++) {
+            int fk = fk_base - 2 + sk;
+            for (int sj = 0; sj < 6; sj++) {
+                double wkj = d_restrict_wkj[sk][sj];
+                int fj = fj_base - 2 + sj;
+                for (int si = 0; si < 6; si++) {
+                    int fi = fi_base - 2 + si;
+                    size_t fidx = (size_t)f * nb_f * npts_f
+                                + (size_t)fine_blk * npts_f
+                                + (size_t)(fi + fj * Nt + fk * Nt * Nt);
+                    val += wkj * d_restrict_w[si] * fine_data[fidx];
+                }
+            }
+        }
+        size_t cidx = (size_t)f * nb_c * npts_c
+                    + (size_t)buf_idx * npts_c
+                    + (size_t)(ci + cj * Nt + ck * Nt * Nt);
+        coarse_data[cidx] = val;
+    }
+}
+
+extern "C"
+void backend_restrict_to_buffers_packed(meshblock_pack_t *fine_pack,
+                                         meshblock_pack_t *coarse_pack)
+{
+    hip_device_ptrs_t *cdp = (hip_device_ptrs_t *)coarse_pack->device_handle;
+    hip_device_ptrs_t *fdp = (hip_device_ptrs_t *)fine_pack->device_handle;
+    if (!cdp || !fdp || !cdp->restrict_map || cdp->n_buffers == 0) return;
+
+    int N = coarse_pack->N;
+    int total_threads = cdp->n_buffers * N * N * N;
+    int block_size = 64;
+    int grid_size = (total_threads + block_size - 1) / block_size;
+
+    hipLaunchKernelGGL(hip_restrict_to_buffers, grid_size, block_size, 0, gpu_stream,
+                       cdp->data, fdp->data, cdp->restrict_map,
+                       cdp->n_evolve, cdp->n_buffers,
+                       coarse_pack->n_blocks, coarse_pack->npts,
+                       fine_pack->n_blocks, fine_pack->npts,
+                       N, coarse_pack->ghost, coarse_pack->Ntotal,
+                       coarse_pack->n_fields, total_threads);
+}
+
+extern "C"
 void backend_unmap_pack(meshblock_pack_t *pack)
 {
     (void)pack;
@@ -551,10 +671,11 @@ void backend_unmap_pack_sync(meshblock_pack_t *pack)
 
     HIP_CHECK(hipStreamSynchronize(gpu_stream));
 
-    size_t total_bytes = d_ptrs.total * sizeof(double);
+    /* Sync only leaf data back to host — buffer blocks are device-only */
+    size_t leaf_bytes = (size_t)pack->n_fields * pack->n_evolve
+                      * pack->npts * sizeof(double);
 
-    /* Sync data back to host (not rhs/scratch/accum — temporary) */
-    HIP_CHECK(hipMemcpy(pack->data, d_ptrs.data, total_bytes,
+    HIP_CHECK(hipMemcpy(pack->data, d_ptrs.data, leaf_bytes,
               hipMemcpyDeviceToHost));
 
     /* Sync coarse data */
@@ -663,7 +784,7 @@ void backend_compute_rhs_packed(meshblock_pack_t *pack, const sim_params_t *p)
 {
     int lo = pack->ghost;
     int inner = pack->N;
-    int nb = pack->n_blocks;
+    int nb = pack->n_evolve;  /* skip buffer blocks */
     int total_threads = nb * inner * inner * inner;
 
     int block_size = 64;  /* Smaller block for high-register RHS kernel */
@@ -954,7 +1075,7 @@ void backend_rk4_stage_packed(meshblock_pack_t *pack,
 {
     if (!d_ptrs.accum) return;
 
-    size_t total = (size_t)pack->n_fields * pack->n_blocks * pack->npts;
+    size_t total = (size_t)pack->n_fields * pack->n_evolve * pack->npts;
     double w_dt = weight * dt;
     double a_dt = alpha * dt;
 
@@ -985,7 +1106,7 @@ void backend_rk4_final_packed(meshblock_pack_t *pack, double weight, double dt)
 {
     if (!d_ptrs.accum) return;
 
-    size_t total = (size_t)pack->n_fields * pack->n_blocks * pack->npts;
+    size_t total = (size_t)pack->n_fields * pack->n_evolve * pack->npts;
     double w_dt = weight * dt;
 
     int block_size = 256;
@@ -1643,7 +1764,7 @@ extern "C"
 void backend_enforce_algebraic_packed(meshblock_pack_t *pack)
 {
     int Nt = pack->Ntotal;
-    int nb = pack->n_blocks;
+    int nb = pack->n_evolve;  /* skip buffer blocks */
     size_t npts = pack->npts;
     int total_threads = nb * Nt * Nt * Nt;
 
