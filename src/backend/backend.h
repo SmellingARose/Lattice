@@ -268,6 +268,26 @@ void backend_cross_level_ghost_fill_packed(
 void backend_upload_cross_level_map(meshblock_pack_t *pack,
                                      const int *map, int count);
 
+/*
+ * 6th-order restriction: fine pack → buffer blocks in coarse pack.
+ * Buffer blocks are non-leaf parents at [n_evolve, n_blocks) in coarse pack.
+ * Each buffer block's 8 children are in the fine pack.
+ * Uses restrict_w/restrict_wkj weights (same as CPU restriction).
+ * Requires fine ghost zones to be valid (call ghost_exchange + cross_level_fill first).
+ * CPU backend: no-op (CPU path uses restrict_level_to_parents on mesh blocks).
+ * Ref: AthenaK device-resident restriction.
+ */
+void backend_restrict_to_buffers_packed(meshblock_pack_t *fine_pack,
+                                         meshblock_pack_t *coarse_pack);
+
+/*
+ * Upload restriction child map to device for a coarse pack.
+ * Map format: [n_buffers * 8] — for each buffer block, 8 fine pack indices (children).
+ * -1 = child not in fine pack (shouldn't happen in valid mesh).
+ */
+void backend_upload_restrict_map(meshblock_pack_t *coarse_pack,
+                                   const int *map, int n_buffers);
+
 /* ========================================================================
  * GPU diagnostic kernels
  *
