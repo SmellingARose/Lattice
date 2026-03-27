@@ -525,8 +525,7 @@ void backend_rk4_final_packed(meshblock_pack_t *pack, double weight, double dt)
 /* ========================================================================
  * Packed ghost exchange — all 5 phases on contiguous pack buffers.
  *
- * Replaces the Commit 1 fallback (unpack → exchange → repack) with
- * direct operations on pack->data and pack->coarse_data.
+ * Operates directly on pack->data and pack->coarse_data.
  *
  * CPU backend: OpenMP parallel for where beneficial.
  * GPU backend: identical algorithm with omp target teams distribute.
@@ -1034,8 +1033,7 @@ static void packed_prolongate_fine_ghosts(meshblock_pack_t *pack)
  * Device-side ghost exchange: all 5 phases on pack buffers.
  *
  * CPU backend: OpenMP parallel for where beneficial.
- * Eliminates the Commit 1 fallback (unpack → exchange → repack)
- * by operating directly on pack->data and pack->coarse_data.
+ * Operates directly on pack->data and pack->coarse_data.
  *
  * For uniform meshes (n_refined == 0), only Phase 0+1 runs.
  *

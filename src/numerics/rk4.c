@@ -179,8 +179,7 @@ static meshblock_pack_t *mesh_build_leaf_pack(mesh_t *m,
     meshblock_pack_load_meta(pack, m->blocks);
 
     /* Build pack-local neighbor table (mesh block ID → pack index).
-     * Required by Commit 2's device ghost exchange; also useful for
-     * diagnostics and debugging. */
+     * Required by device ghost exchange and diagnostics. */
     meshblock_pack_build_neighbors(pack, m->blocks);
 
     /* Load coarse_buf data for multilevel ghost exchange */
@@ -191,9 +190,6 @@ static meshblock_pack_t *mesh_build_leaf_pack(mesh_t *m,
     return pack;
 }
 
-/* Commit 1 fallback (packed_ghost_exchange_fallback) removed.
- * Ghost exchange now runs directly on pack buffers via
- * backend_ghost_exchange_packed() — no unpack/repack needed. */
 
 /*
  * CK45 packed mesh stepper: all leaf blocks in one pack, one kernel per op.
@@ -201,7 +197,7 @@ static meshblock_pack_t *mesh_build_leaf_pack(mesh_t *m,
  * Algorithm (same CK45 as per-block, different execution model):
  *   dU = 0   (zero scratch)
  *   For s = 0..4:
- *     Ghost exchange (Commit 2: direct on pack buffers)
+ *     Ghost exchange (direct on pack buffers)
  *     F = RHS(U)       (batched: all blocks in one kernel)
  *     Sommerfeld(F)    (batched: boundary BCs in one kernel)
  *     dU = A[s]*dU + dt*F;  U += B[s]*dU  (fused update, one kernel)
@@ -957,7 +953,7 @@ static void subcycle_level_gpu(mesh_t *m, const sim_params_t *p,
  *   GPU: device-resident subcycling (zero PCIe during sub-steps).
  *   CPU: host-side subcycling with per-level packs.
  *
- * Ghost exchange via device kernels (Commit 2: direct on pack buffers).
+ * Ghost exchange via device kernels (direct on pack buffers).
  *
  * Ref: Berger & Oliger (1984), JCP 53:484.
  */
