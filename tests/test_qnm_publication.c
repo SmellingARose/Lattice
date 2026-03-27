@@ -235,9 +235,7 @@ int main(void)
         p.time += p.dt;
 
         int do_psi4 = (step % psi4_every == 0);
-        /* Print every step near crash zone (step 40-55) for debugging */
-        int do_diag = (step % diag_every == 0 || step == total_steps
-                       || (step >= 40 && step <= 55));
+        int do_diag = 1;  /* every step for debugging */
 
         /* Psi4 extraction: CPU psi4_extract uses mesh_find_block_at to
          * find the finest block at each angular point. GPU-resident data
