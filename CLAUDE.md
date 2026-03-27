@@ -176,14 +176,19 @@ work on AMR meshes.
     `backend_activate_pack()` sets global pointers without memcpy.
     `backend_free_pack_device()` frees on pack destruction. Eliminates
     ~465 hipMalloc/hipFree calls per global step.
-  - *GPU-resident evolution:* Zero PCIe during Berger-Oliger subcycling.
-    `step_level_gpu()` / `subcycle_level_gpu()` in `rk4.c` run entire
-    recursive subcycle on device. `fields_old` buffer for temporal
+  - *GPU AMR subcycling with host-orchestrated restriction:*
+    `step_level_gpu()` / `subcycle_level_gpu()` in `rk4.c` run RK4
+    evolution on device. `fields_old` buffer for linear temporal
     interpolation. `hip_cross_level_ghost_fill` kernel reads from coarser
-    pack with linear temporal interpolation. `gpu_ensure_level_packs()`
-    builds packs + cross-level maps on first step or regrid. Data stays
-    on device after subcycling; `gpu_sync_all_to_host()` called by main.c
-    only when CPU-only work is needed.
+    pack. `gpu_ensure_level_packs()` builds packs + cross-level maps on
+    first step or regrid. Post-subcycle restriction via host round-trip:
+    D→H sync, CPU `ghost_exchange` + `ghost_fill_from_coarser` +
+    `restrict_level_to_parents`, H→D re-sync. Matches CarpetX/AMReX
+    pattern (host-orchestrated restriction). Every production AMR NR code
+    restricts after fine subcycling (GRChombo, Athena++, CarpetX, BAM).
+    Without restriction, momentum constraint grows exponentially at AMR
+    boundaries → NaN. RHS buffer zeroed before RK4 stages to prevent
+    stale ghost-zone RHS from corrupting data.
   - *Solver:* GPU solver removed (produced inf residuals at inspiral scale).
     CPU covering grid FAS always used — FMG converges in 1 pass per level,
     no inter-block ghost exchange during MG. ~2800 lines of GPU solver backend
