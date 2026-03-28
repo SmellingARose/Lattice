@@ -158,6 +158,7 @@ int main(void)
     p.amr.chi_refine = 0.1;
     p.amr.regrid_every = 0;
     p.noise.use_cako = 0;  /* uniform dissipation — stable for deep AMR */
+    p.ccz4.kappa1 = 0.5;  /* stronger constraint damping for 5-level AMR */
 
     double dx_fine = p.dx / (1 << max_level);
     printf("  Grid: N_block=%d, L=%.0f, dx_base=%.3f, dx_fine=%.4f (M/%.0f)\n",
