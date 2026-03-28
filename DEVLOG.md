@@ -3,10 +3,20 @@
 > **Note:** When adding/removing/renaming files or functions, also update
 > `docs/architecture.html` — the living map of the codebase structure.
 
-## 2026-03-28: GPU-native 0th-order restriction (AthenaK pattern)
+## 2026-03-28: GPU-native restriction + kappa3 fix
 
-**Device-resident Berger-Oliger subcycling with buffer blocks and 0th-order
-cell-averaging restriction. Zero PCIe during subcycling.**
+**Two critical fixes for stable single-BH AMR evolution:**
+
+**1. kappa3=0.5 (was 1.0) — the root cause of the step-47 crash.**
+kappa3=1 with constant kappa1 is a KNOWN UNSTABLE combination for BH
+spacetimes (Alic et al. 2013, arXiv:1307.7391; Einstein Toolkit mailing
+list). Every code using constant kappa1 uses kappa3=0.5: BAM, AthenaK,
+Einstein Toolkit. GRChombo uses kappa3=1 but with kappa1/alpha (different
+prescription). Our default was kappa3=1 from the original CCZ4 paper, but
+that paper's formulation requires the covariant modification.
+
+**2. Device-resident Berger-Oliger subcycling with buffer blocks and
+6th-order restriction + floor clamp. Zero PCIe during subcycling.**
 
 **Architecture (follows AthenaK):**
 - Level packs include non-leaf "buffer" blocks at `[n_evolve, n_blocks)`.
@@ -14,40 +24,35 @@ cell-averaging restriction. Zero PCIe during subcycling.**
   to fill leaf ghost zones at refined boundaries. RK4 kernels skip them
   (process only `[0, n_evolve)`). Uses `n_blocks` for field-major stride,
   `n_evolve` for thread count.
-- Post-subcycle restriction: single GPU kernel, 0th-order cell averaging
-  (8 fine cells → 1 coarse cell). No ghost data needed, no negative weights,
-  no ghost_exchange or cross_level_fill overhead. Matches GRChombo
-  (CoarseAverage), AthenaK, CarpetX (average_down), GAMER.
+- Post-subcycle restriction: GPU kernel with 6th-order stencil + floor clamp.
+  Ghost exchange on fine pack before restriction fills same-level ghosts for
+  the 2-cell stencil reach. Floor clamp (chi≥1e-4, lapse≥1e-4) prevents
+  sub-floor values from negative stencil weights near the puncture.
+  ExaHyPE (arXiv:2504.15814) showed restriction order must match FD order —
+  0th-order with 6th-order FD gives O(dx²) boundary error → Ham growth.
 - Restriction map: precomputed `[n_buffers * 8]` fine pack indices per buffer
   block's 8 children. Built in `gpu_ensure_level_packs` at regrid.
 
-**Why 0th-order (not 6th):**
-- 6th-order restriction has negative weights → produces chi < floor near
-  puncture → discontinuity at buffer-leaf boundary → exponential Ham growth
-  → NaN at step 48. Would need clamping + ghost fills (expensive: +13s/step).
-- 0th-order: no negative weights, no ghost data, no instability, no overhead.
-  Industry standard for all production GPU AMR codes.
-
-**Previous bugs fixed during this work:**
+**All bugs fixed during this work:**
+- **kappa3=1 unstable** (Alic 2013) → changed default to 0.5 (BAM/AthenaK/ET)
 - Missing post-subcycle restriction in GPU path (momentum grew exponentially)
 - Field-major stride bug (n_evolve vs n_blocks in kernel indexing → NaN step 1)
-- Buffer blocks in/out of ghost exchange neighbor table (exclusion caused
-  boundary extrapolation with magnitude-20 polynomial coefficients)
+- Buffer blocks excluded from neighbor table → boundary extrapolation instability
+- 0th-order restriction → O(dx²) Ham growth (ExaHyPE finding) → upgraded to 6th
 - Diagnostic kernels processing buffer blocks (garbage → NaN in constraint sum)
 - Diagnostic array heap overflow (do_diag=1 but max_diag sized for every-10)
-- `ghost_fill_from_coarser` before restriction in CPU path (stale cross-level
-  ghosts corrupted 6th-order restriction stencil)
-- RHS buffer zeroing (ghost zone RHS was garbage from previous step/level)
+- `ghost_fill_from_coarser` before restriction in CPU path (stale ghosts)
+- RHS buffer zeroing (ghost zone RHS garbage from previous step/level)
 - CAKO dissipation floor (chi=1e-4 → W=0.01 → σ_eff=0.003, too weak)
 
 **Lessons learned:**
+- **kappa3=1 + constant kappa1 is UNSTABLE** (Alic 2013). Use kappa3=0.5.
 - Always compare with production codes for standard algorithms
 - Post-subcycle restriction is NON-NEGOTIABLE in Berger-Oliger AMR
-- 0th-order restriction is sufficient and preferred for GPU (no ghost dependency)
+- Restriction order must match FD order (ExaHyPE arXiv:2504.15814)
 - Field-major layout: n_blocks for stride, n_evolve for thread count only
 - `-ffast-math` breaks `isfinite()` — use magnitude checks for NaN detection
-- Buffer blocks must be in neighbor table (otherwise ghost exchange uses
-  boundary extrapolation with large polynomial coefficients → instability)
+- Buffer blocks must be in neighbor table (ghost exchange needs their data)
 
 ## 2026-03-22: Schwarzschild QNM ringdown tests
 

@@ -182,12 +182,14 @@ work on AMR meshes.
     interpolation. `hip_cross_level_ghost_fill` kernel reads from coarser
     pack. `gpu_ensure_level_packs()` builds packs + cross-level maps on
     first step or regrid. Post-subcycle restriction via GPU kernel:
-    0th-order cell-averaging (8 fine cells → 1 coarse cell) writes to
-    buffer blocks in coarse pack. No host round-trip, no PCIe during
-    subcycling. Buffer blocks (AthenaK pattern): non-leaf parents packed
-    at `[n_evolve, n_blocks)`, participate in ghost exchange as data
-    sources but are not evolved by RK4. Every production AMR NR code
-    restricts after fine subcycling (GRChombo, Athena++, CarpetX, BAM).
+    6th-order restriction (matches FD order, per ExaHyPE arXiv:2504.15814)
+    with floor clamp (chi≥1e-4, lapse≥1e-4) to prevent sub-floor values
+    from negative stencil weights near puncture. Ghost exchange on fine
+    pack before restriction fills same-level ghosts for stencil reach.
+    Buffer blocks (AthenaK pattern): non-leaf parents packed at
+    `[n_evolve, n_blocks)`, participate in ghost exchange as data sources
+    but are not evolved by RK4. Every production AMR NR code restricts
+    after fine subcycling (GRChombo, Athena++, CarpetX, BAM).
     Without restriction, momentum constraint grows exponentially at AMR
     boundaries → NaN. RHS buffer zeroed before RK4 stages to prevent
     stale ghost-zone RHS from corrupting data.
@@ -572,9 +574,9 @@ constant `GR_SPACEDIM = 3`.
 
 | Parameter | Default | Description |
 |---|---|---|
-| `kappa1` | 0.1 | Constraint damping (Theta + Z_i). GRChombo uses kappa1/alpha (covariant). |
+| `kappa1` | 0.1 | Constraint damping (Theta + Z_i). BAM uses 0.1, AthenaK uses 0.02. |
 | `kappa2` | 0.0 | Controls mix of Theta damping in K equation |
-| `kappa3` | 1.0 | Controls Z contribution in Gamma equation |
+| `kappa3` | 0.5 | Z contribution in Gamma equation. **kappa3=1 is UNSTABLE** with constant kappa1 (Alic 2013, arXiv:1307.7391). BAM/AthenaK/ET all use 0.5. GRChombo uses 1.0 but with kappa1/alpha prescription. |
 | `sigma` | 0.3 | Kreiss-Oliger dissipation strength |
 | `lapse_coeff` | 2.0 | Coefficient c in 1+log slicing: dt(alpha) = -c * alpha * (K - 2*Theta) |
 | `lapse_power` | 1.0 | Power p in Bona-Masso: f(alpha) = c * alpha^(p-2) |
