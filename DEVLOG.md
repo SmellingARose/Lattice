@@ -3,50 +3,51 @@
 > **Note:** When adding/removing/renaming files or functions, also update
 > `docs/architecture.html` — the living map of the codebase structure.
 
-## 2026-03-27: GPU AMR subcycling — post-subcycle restriction critical fix
+## 2026-03-28: GPU-native 0th-order restriction (AthenaK pattern)
 
-**Root cause of NaN at step 50 in QNM publication test (max_level=5, H100):**
+**Device-resident Berger-Oliger subcycling with buffer blocks and 0th-order
+cell-averaging restriction. Zero PCIe during subcycling.**
 
-The GPU `subcycle_level_gpu` was missing post-subcycle restriction. After fine
-levels finish subcycling, the coarse level must be updated with restricted fine
-data. Without this, coarse-level packs carry stale data that progressively
-corrupts cross-level ghost fills → exponential momentum constraint growth → NaN.
+**Architecture (follows AthenaK):**
+- Level packs include non-leaf "buffer" blocks at `[n_evolve, n_blocks)`.
+  Buffer blocks hold restricted fine data. Ghost exchange reads their interiors
+  to fill leaf ghost zones at refined boundaries. RK4 kernels skip them
+  (process only `[0, n_evolve)`). Uses `n_blocks` for field-major stride,
+  `n_evolve` for thread count.
+- Post-subcycle restriction: single GPU kernel, 0th-order cell averaging
+  (8 fine cells → 1 coarse cell). No ghost data needed, no negative weights,
+  no ghost_exchange or cross_level_fill overhead. Matches GRChombo
+  (CoarseAverage), AthenaK, CarpetX (average_down), GAMER.
+- Restriction map: precomputed `[n_buffers * 8]` fine pack indices per buffer
+  block's 8 children. Built in `gpu_ensure_level_packs` at regrid.
 
-**Evidence:**
-- WITH restriction: momentum flat (~2.8e-4), constraints decrease
-- WITHOUT restriction: momentum doubles every 15 steps (1.1e-3 → 5.4e-3), NaN at step 50
-- Every production AMR NR code restricts after fine subcycling: GRChombo
-  (coarseAverage), Athena++ (RestrictCellCenteredValues), CarpetX (average_down),
-  AthenaK, BAM. No exceptions.
+**Why 0th-order (not 6th):**
+- 6th-order restriction has negative weights → produces chi < floor near
+  puncture → discontinuity at buffer-leaf boundary → exponential Ham growth
+  → NaN at step 48. Would need clamping + ghost fills (expensive: +13s/step).
+- 0th-order: no negative weights, no ghost data, no instability, no overhead.
+  Industry standard for all production GPU AMR codes.
 
-**Fix:** Host round-trip in `subcycle_level_gpu` after fine subcycling:
-D→H sync, CPU `ghost_exchange` + `ghost_fill_from_coarser(frac=1.0)` +
-`restrict_level_to_parents`, H→D re-sync. Matches CarpetX pattern.
-
-**Additional fixes applied:**
-- `ghost_fill_from_coarser(level+1, 1.0)` before restriction in both CPU and GPU
-  paths — refreshes cross-level ghosts so 6th-order restriction stencil reads
-  valid data (stale after RK4 stages overwrite ghost zones).
-- `backend_zero_packed(PACK_BUF_RHS)` in `step_level_gpu` — prevents stale ghost
-  RHS from corrupting ghost-zone data via `rk4_stage: data = scratch + c*dt*rhs`.
-- CAKO disabled in QNM test (`use_cako=0`) — CAKO reduces dissipation to ~0.3%
-  at the puncture (W=sqrt(1e-4)=0.01), insufficient for deep AMR. Most production
-  codes use uniform sigma without chi-scaling.
-
-**Known remaining issues:**
-- GPU uses linear (1st-order) temporal interpolation at AMR boundaries. CPU uses
-  quartic (4th-order). Linear may cause O(dt²) error accumulation for very long
-  runs. GRChombo also uses linear; sufficient for stability.
-- kappa1=0.1 may be too small for 5-level AMR. Literature recommends 0.5-1.0.
-- `save_k1_from_pack` missing in GPU path (quartic temporal interp needs it).
-  Not critical since GPU uses linear interp.
-- `block->time` not updated in GPU path. Not critical since GPU uses pack-level
-  temporal interp, not block-level.
+**Previous bugs fixed during this work:**
+- Missing post-subcycle restriction in GPU path (momentum grew exponentially)
+- Field-major stride bug (n_evolve vs n_blocks in kernel indexing → NaN step 1)
+- Buffer blocks in/out of ghost exchange neighbor table (exclusion caused
+  boundary extrapolation with magnitude-20 polynomial coefficients)
+- Diagnostic kernels processing buffer blocks (garbage → NaN in constraint sum)
+- Diagnostic array heap overflow (do_diag=1 but max_diag sized for every-10)
+- `ghost_fill_from_coarser` before restriction in CPU path (stale cross-level
+  ghosts corrupted 6th-order restriction stencil)
+- RHS buffer zeroing (ghost zone RHS was garbage from previous step/level)
+- CAKO dissipation floor (chi=1e-4 → W=0.01 → σ_eff=0.003, too weak)
 
 **Lessons learned:**
 - Always compare with production codes for standard algorithms
 - Post-subcycle restriction is NON-NEGOTIABLE in Berger-Oliger AMR
+- 0th-order restriction is sufficient and preferred for GPU (no ghost dependency)
+- Field-major layout: n_blocks for stride, n_evolve for thread count only
 - `-ffast-math` breaks `isfinite()` — use magnitude checks for NaN detection
+- Buffer blocks must be in neighbor table (otherwise ghost exchange uses
+  boundary extrapolation with large polynomial coefficients → instability)
 
 ## 2026-03-22: Schwarzschild QNM ringdown tests
 

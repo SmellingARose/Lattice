@@ -176,15 +176,17 @@ work on AMR meshes.
     `backend_activate_pack()` sets global pointers without memcpy.
     `backend_free_pack_device()` frees on pack destruction. Eliminates
     ~465 hipMalloc/hipFree calls per global step.
-  - *GPU AMR subcycling with host-orchestrated restriction:*
+  - *GPU AMR subcycling with device-resident restriction:*
     `step_level_gpu()` / `subcycle_level_gpu()` in `rk4.c` run RK4
     evolution on device. `fields_old` buffer for linear temporal
     interpolation. `hip_cross_level_ghost_fill` kernel reads from coarser
     pack. `gpu_ensure_level_packs()` builds packs + cross-level maps on
-    first step or regrid. Post-subcycle restriction via host round-trip:
-    D→H sync, CPU `ghost_exchange` + `ghost_fill_from_coarser` +
-    `restrict_level_to_parents`, H→D re-sync. Matches CarpetX/AMReX
-    pattern (host-orchestrated restriction). Every production AMR NR code
+    first step or regrid. Post-subcycle restriction via GPU kernel:
+    0th-order cell-averaging (8 fine cells → 1 coarse cell) writes to
+    buffer blocks in coarse pack. No host round-trip, no PCIe during
+    subcycling. Buffer blocks (AthenaK pattern): non-leaf parents packed
+    at `[n_evolve, n_blocks)`, participate in ghost exchange as data
+    sources but are not evolved by RK4. Every production AMR NR code
     restricts after fine subcycling (GRChombo, Athena++, CarpetX, BAM).
     Without restriction, momentum constraint grows exponentially at AMR
     boundaries → NaN. RHS buffer zeroed before RK4 stages to prevent
