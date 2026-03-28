@@ -404,14 +404,14 @@ void meshblock_pack_build_neighbors(meshblock_pack_t *pack, block_t **blocks)
     /* Build main neighbor table: pack-local indices for 26 directions.
      * neighbor_table[b * 26 + n] = pack index of neighbor, or -1.
      *
-     * Only map to LEAF blocks [0, n_evolve). Buffer blocks [n_evolve, n_blocks)
-     * must NOT appear in the neighbor table — they hold restricted data but
-     * should not participate in the same-level ghost exchange. Leaf blocks
-     * at the coarse-fine boundary need prolongated data from their coarse_buf
-     * (phase 5), not direct copies from buffer block interiors.
+     * Buffer blocks [n_evolve, n_blocks) ARE included in the neighbor table.
+     * Ghost exchange reads their interiors to fill leaf ghost zones at
+     * refined boundaries. Buffer data comes from the restriction kernel
+     * (6th-order fine→coarse). This is the AthenaK pattern.
      *
-     * Buffer blocks ARE in the pack for the restriction kernel to write to.
-     * The ghost exchange is leaf-only; restriction is buffer-only. */
+     * Without buffer blocks in the table, ghost exchange falls back to
+     * coarse_buf boundary extrapolation with large polynomial coefficients
+     * (up to magnitude 20), which amplifies errors → momentum growth. */
     for (int b = 0; b < pack->n_blocks; b++) {
         block_t *blk = blocks[pack->block_ids[b]];
 
@@ -421,11 +421,7 @@ void meshblock_pack_build_neighbors(meshblock_pack_t *pack, block_t **blocks)
             if (mesh_nbr_id < 0 || mesh_nbr_id > max_id) {
                 pack->neighbor_table[b * NUM_NEIGHBORS + n] = -1;
             } else {
-                int pack_idx = reverse[mesh_nbr_id];
-                /* Exclude buffer blocks from ghost exchange */
-                if (pack_idx >= pack->n_evolve)
-                    pack_idx = -1;
-                pack->neighbor_table[b * NUM_NEIGHBORS + n] = pack_idx;
+                pack->neighbor_table[b * NUM_NEIGHBORS + n] = reverse[mesh_nbr_id];
             }
         }
     }
