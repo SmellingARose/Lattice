@@ -194,7 +194,7 @@ int main(void)
     int psi4_every = 1;   /* every base step = 2M cadence, ~8 samples/QNM cycle */
     int diag_every = 10;  /* constraints every 10 steps */
     int max_psi4 = total_steps / psi4_every + 2;
-    int max_diag = total_steps / diag_every + 2;
+    int max_diag = total_steps + 2;  /* do_diag=1: every step */
 
     int mi_20 = mode_index(2, 0);
     int mi_22 = mode_index(2, 2);
