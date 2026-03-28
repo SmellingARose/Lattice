@@ -261,6 +261,8 @@ int main(void)
         /* GPU-native constraints (no host sync) */
         if (do_diag && is_gpu) {
             double ham = 0, mom = 0, vol_h = 0, vol_m = 0;
+            double ham_per_lev[MAX_AMR_LEVELS] = {0};
+            double vol_per_lev[MAX_AMR_LEVELS] = {0};
             for (int L = 0; L <= m->max_level; L++) {
                 meshblock_pack_t *pk = m->level_packs[L];
                 if (!pk || pk->n_blocks == 0) continue;
@@ -268,6 +270,7 @@ int main(void)
                 double s, v;
                 backend_constraint_l2_raw_packed(pk, &s, &v);
                 ham += s; vol_h += v;
+                ham_per_lev[L] = s; vol_per_lev[L] = v;
                 backend_momentum_l2_raw_packed(pk, &s, &v);
                 mom += s; vol_m += v;
             }
@@ -317,6 +320,15 @@ int main(void)
             double elapsed = wtime() - t_wall_start;
             double dt_wall = wtime() - t_step_start;
             printf("  [%.1fs/step, %.0fs total]\n", dt_wall, elapsed);
+            /* Per-level Ham breakdown every 10 steps */
+            if (step % 10 == 0) {
+                printf("    Ham/level:");
+                for (int L = 0; L <= m->max_level; L++) {
+                    if (vol_per_lev[L] > 0)
+                        printf(" L%d=%.2e", L, sqrt(ham_per_lev[L]/vol_per_lev[L]));
+                }
+                printf("\n");
+            }
         } else if (do_diag) {
             /* CPU fallback */
             double ham = mesh_constraint_l2(m);
