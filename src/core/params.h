@@ -181,7 +181,7 @@ static inline sim_params_t default_params(void)
      * CAHD disabled by default (experimental, Phase 3). */
     p.noise.use_cako           = 1;
     p.noise.cako_floor         = 0.04;  /* W_min = 0.2, σ_eff ≥ 20% of nominal */
-    p.noise.use_cahd           = 0;
+    p.noise.use_cahd           = 1;
     p.noise.use_ssl            = 1;
     p.noise.use_per_field_sigma = 1;
     p.noise.sigma_gauge        = 0.99;

@@ -157,7 +157,6 @@ int main(void)
     p.amr.max_level = max_level;
     p.amr.chi_refine = 0.1;
     p.amr.regrid_every = 0;
-    p.noise.use_cahd = 1;  /* CAHD: constraint damping scales with dx (Etienne 2024) */
     p.ccz4.kappa1 = 0.1;  /* BAM value (Brugmann et al.) */
     p.ccz4.kappa3 = 0.5;  /* non-covariant Z4 — kappa3=1 UNSTABLE (Alic 2013) */
 
