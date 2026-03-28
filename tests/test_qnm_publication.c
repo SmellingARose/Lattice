@@ -237,7 +237,7 @@ int main(void)
         p.time += p.dt;
 
         int do_psi4 = (step % psi4_every == 0);
-        int do_diag = (step % diag_every == 0 || step == total_steps);
+        int do_diag = 1;  /* every step */
 
         /* Psi4 extraction: CPU psi4_extract uses mesh_find_block_at to
          * find the finest block at each angular point. GPU-resident data
