@@ -930,13 +930,10 @@ static void subcycle_level_gpu(mesh_t *m, const sim_params_t *p,
         meshblock_pack_t *cpk = m->level_packs[level];
 
         if (fpk && cpk && cpk->n_evolve < cpk->n_blocks) {
-            /* 1. Fill fine ghost zones (needed by 6th-order restriction stencil) */
-            backend_activate_pack(fpk);
-            backend_ghost_exchange_packed(fpk);
-            if (m->level_packs[level])
-                backend_cross_level_ghost_fill_packed(fpk, cpk, 1.0);
-
-            /* 2. 6th-order restrict: fine pack → buffer blocks in coarse pack */
+            /* 0th-order cell-averaging restriction: fine → buffer blocks.
+             * No ghost data needed (reads only 2³ fine interior cells per
+             * coarse cell). Single kernel call, no ghost_exchange or
+             * cross_level_fill overhead. */
             backend_restrict_to_buffers_packed(fpk, cpk);
         }
     }

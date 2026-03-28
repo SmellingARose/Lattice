@@ -563,10 +563,10 @@ void backend_upload_restrict_map(meshblock_pack_t *coarse_pack,
     }
 }
 
-/* 6th-order restriction kernel: fine pack → buffer blocks in coarse pack.
+/* 0th-order cell-averaging restriction: fine pack → buffer blocks in coarse pack.
  * Each thread handles one coarse interior cell in a buffer block.
- * Reads 6³=216 fine cells via tensor product of restrict_w weights.
- * Ref: restriction.h restrict_cell inline function (identical math). */
+ * Averages 2³=8 fine interior cells — no ghost data needed, no negative weights.
+ * Matches GRChombo (CoarseAverage), AthenaK, CarpetX (average_down), GAMER. */
 __global__ void hip_restrict_to_buffers(
     double *coarse_data,              /* coarse pack data (write to buffers) */
     const double *fine_data,          /* fine pack data (read) */
@@ -583,15 +583,14 @@ __global__ void hip_restrict_to_buffers(
     if (tid >= total_threads) return;
 
     int N3 = N * N * N;
-    int buf_local = tid / N3;         /* which buffer block (0-based) */
-    int cell = tid % N3;              /* which interior cell */
+    int buf_local = tid / N3;
+    int cell = tid % N3;
     int ci = ghost + cell % N;
     int cj = ghost + (cell / N) % N;
     int ck = ghost + cell / (N * N);
 
-    int buf_idx = n_evolve + buf_local;  /* pack index of buffer block */
+    int buf_idx = n_evolve + buf_local;
 
-    /* Which octant and fine block? */
     int half = N / 2;
     int ox = (ci - ghost) / half;
     int oy = (cj - ghost) / half;
@@ -600,32 +599,28 @@ __global__ void hip_restrict_to_buffers(
     int fine_blk = restrict_map[buf_local * 8 + oct];
     if (fine_blk < 0) return;
 
-    /* Fine cell base: map coarse interior position to fine interior */
-    int fi_base = ghost + 2 * ((ci - ghost) - ox * half);
-    int fj_base = ghost + 2 * ((cj - ghost) - oy * half);
-    int fk_base = ghost + 2 * ((ck - ghost) - oz * half);
+    /* Fine cell base: 2 fine cells per coarse cell in each direction */
+    int fi = ghost + 2 * ((ci - ghost) - ox * half);
+    int fj = ghost + 2 * ((cj - ghost) - oy * half);
+    int fk = ghost + 2 * ((ck - ghost) - oz * half);
 
-    /* 6th-order restriction: tensor product of restrict_w[6] */
+    /* 0th-order: average 2³=8 fine interior cells */
     for (int f = 0; f < nf; f++) {
-        double val = 0.0;
-        for (int sk = 0; sk < 6; sk++) {
-            int fk = fk_base - 2 + sk;
-            for (int sj = 0; sj < 6; sj++) {
-                double wkj = d_restrict_wkj[sk][sj];
-                int fj = fj_base - 2 + sj;
-                for (int si = 0; si < 6; si++) {
-                    int fi = fi_base - 2 + si;
-                    size_t fidx = (size_t)f * nb_f * npts_f
-                                + (size_t)fine_blk * npts_f
-                                + (size_t)(fi + fj * Nt + fk * Nt * Nt);
-                    val += wkj * d_restrict_w[si] * fine_data[fidx];
-                }
-            }
-        }
-        size_t cidx = (size_t)f * nb_c * npts_c
-                    + (size_t)buf_idx * npts_c
-                    + (size_t)(ci + cj * Nt + ck * Nt * Nt);
-        coarse_data[cidx] = val;
+        const double *src = fine_data + (size_t)f * nb_f * npts_f
+                          + (size_t)fine_blk * npts_f;
+        double val = 0.125 * (
+            src[(fi)   + (fj)  *Nt + (fk)  *Nt*Nt] +
+            src[(fi+1) + (fj)  *Nt + (fk)  *Nt*Nt] +
+            src[(fi)   + (fj+1)*Nt + (fk)  *Nt*Nt] +
+            src[(fi+1) + (fj+1)*Nt + (fk)  *Nt*Nt] +
+            src[(fi)   + (fj)  *Nt + (fk+1)*Nt*Nt] +
+            src[(fi+1) + (fj)  *Nt + (fk+1)*Nt*Nt] +
+            src[(fi)   + (fj+1)*Nt + (fk+1)*Nt*Nt] +
+            src[(fi+1) + (fj+1)*Nt + (fk+1)*Nt*Nt]);
+
+        coarse_data[(size_t)f * nb_c * npts_c
+                  + (size_t)buf_idx * npts_c
+                  + (size_t)(ci + cj*Nt + ck*Nt*Nt)] = val;
     }
 }
 
