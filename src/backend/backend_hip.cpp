@@ -2021,9 +2021,9 @@ void backend_constraint_l2_raw_packed(meshblock_pack_t *pack,
     *out_vol = 0.0;
     if (!d_ptrs_valid) return;
 
-    int nb = pack->n_blocks;
+    int nb = pack->n_blocks;  /* stride for field-major layout */
     int N = pack->N;
-    int total_points = nb * N * N * N;
+    int total_points = pack->n_evolve * N * N * N;  /* skip buffer blocks */
 
     int bs = 64;
     int gs = (total_points + bs - 1) / bs;
@@ -2069,9 +2069,9 @@ double backend_momentum_l2_packed(meshblock_pack_t *pack)
 {
     if (!d_ptrs_valid) return 0.0;
 
-    int nb = pack->n_blocks;
+    int nb = pack->n_blocks;  /* stride for field-major layout */
     int N = pack->N;
-    int total_points = nb * N * N * N;
+    int total_points = pack->n_evolve * N * N * N;  /* skip buffer blocks */
 
     int bs = 64;
     int gs = (total_points + bs - 1) / bs;
@@ -2120,9 +2120,9 @@ void backend_momentum_l2_raw_packed(meshblock_pack_t *pack,
     *out_vol = 0.0;
     if (!d_ptrs_valid) return;
 
-    int nb = pack->n_blocks;
+    int nb = pack->n_blocks;  /* stride for field-major layout */
     int N = pack->N;
-    int total_points = nb * N * N * N;
+    int total_points = pack->n_evolve * N * N * N;  /* skip buffer blocks */
 
     int bs = 64;
     int gs = (total_points + bs - 1) / bs;
@@ -2232,9 +2232,9 @@ __global__ void hip_min_lapse_partial(
 static double hip_find_min_lapse(meshblock_pack_t *pack,
                                   double *out_x, double *out_y, double *out_z)
 {
-    int nb = pack->n_blocks;
+    int nb = pack->n_blocks;  /* stride for field-major layout */
     int N = pack->N;
-    int total_points = nb * N * N * N;
+    int total_points = pack->n_evolve * N * N * N;  /* skip buffer blocks */
 
     int bs = 256;
     int gs = (total_points + bs - 1) / bs;
@@ -2514,9 +2514,9 @@ double backend_min_lapse_excl_packed(meshblock_pack_t *pack,
     if (n_excl == 0)
         return backend_min_lapse_packed(pack, out_x, out_y, out_z);
 
-    int nb = pack->n_blocks;
+    int nb = pack->n_blocks;  /* stride */
     int N = pack->N;
-    int total_points = nb * N * N * N;
+    int total_points = pack->n_evolve * N * N * N;
 
     int bs = 256;
     int gs = (total_points + bs - 1) / bs;
