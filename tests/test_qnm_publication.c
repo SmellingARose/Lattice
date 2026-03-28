@@ -262,13 +262,14 @@ int main(void)
         /* GPU-native constraints (no host sync) */
         if (do_diag && is_gpu) {
             double ham = 0, mom = 0, vol_h = 0, vol_m = 0;
+            double hlev[MAX_AMR_LEVELS] = {0}, vlev[MAX_AMR_LEVELS] = {0};
             for (int L = 0; L <= m->max_level; L++) {
                 meshblock_pack_t *pk = m->level_packs[L];
                 if (!pk || pk->n_blocks == 0) continue;
                 backend_activate_pack(pk);
                 double s, v;
                 backend_constraint_l2_raw_packed(pk, &s, &v);
-                ham += s; vol_h += v;
+                ham += s; vol_h += v; hlev[L] = s; vlev[L] = v;
                 backend_momentum_l2_raw_packed(pk, &s, &v);
                 mom += s; vol_m += v;
             }
@@ -317,7 +318,11 @@ int main(void)
             if (amp20 > 0) printf("  |Psi4|=%.3e", amp20);
             double elapsed = wtime() - t_wall_start;
             double dt_wall = wtime() - t_step_start;
-            printf("  [%.1fs/step, %.0fs total]\n", dt_wall, elapsed);
+            printf("  [%.1fs/step, %.0fs total]", dt_wall, elapsed);
+            /* Per-level Ham (free — sums already computed) */
+            for (int L = 0; L <= m->max_level; L++)
+                if (vlev[L] > 0) printf(" L%d=%.1e", L, sqrt(hlev[L]/vlev[L]));
+            printf("\n");
         } else if (do_diag) {
             /* CPU fallback */
             double ham = mesh_constraint_l2(m);
