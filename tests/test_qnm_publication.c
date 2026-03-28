@@ -134,17 +134,19 @@ int main(void)
     printf("=== Schwarzschild QNM Ringdown — Publication Quality ===\n\n");
     backend_init();
 
-    /* --- Grid: L=128, 5 AMR levels, dx_fine = M/8 = 0.125M ---
-     * dx_base = 128/32 = 4M. Boundary at 64M.
-     * Level 2 (dx=1M) covers r≤32M — extraction at r=20M,25M has dx≤1M
-     *   (≥16 points per QNM wavelength = 16.8M).
-     * Reflections reach r=25M at t ≈ 64 + (64-25) = 103M > T=100M.
+    /* --- Grid: L=256, 4 AMR levels, dx_fine = M/4 = 0.25M ---
+     * dx_base = 256/32 = 8M. Boundary at 128M.
+     * Coarsest leaf level: L2 at dx=2M (same as test_qnm_ringdown).
+     * Extraction at r=20M,25M: level 3 (dx=1M) → 17 pts/QNM wavelength.
+     * Reflections reach r=25M at t ≈ 128 + (128-25) = 231M >> T=100M.
      * Analysis window: t=40M to 100M = 60M = 3.6 clean QNM cycles.
+     * Fewer AMR levels = less subcycling overhead. Coarsest leaf dx=2M
+     * matches the proven test_qnm_ringdown configuration.
      * Memory: ~200 blocks × 40³ × 25 × 4 × 8 ≈ 10 GB. */
     int N_block = 32;
-    double L = 128.0;
+    double L = 256.0;
     double M_bh = 1.0;
-    int max_level = 5;
+    int max_level = 4;
 
     mesh_t *m = mesh_create_ex(N_block, L, RK_CLASSIC, NUM_CCZ4_FIELDS);
     mesh_rebuild_neighbors(m);
