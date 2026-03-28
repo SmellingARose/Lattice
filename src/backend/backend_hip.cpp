@@ -563,21 +563,32 @@ void backend_upload_restrict_map(meshblock_pack_t *coarse_pack,
     }
 }
 
-/* 0th-order cell-averaging restriction: fine pack → buffer blocks in coarse pack.
+/* 6th-order restriction with floor clamping: fine pack → buffer blocks.
  * Each thread handles one coarse interior cell in a buffer block.
- * Averages 2³=8 fine interior cells — no ghost data needed, no negative weights.
- * Matches GRChombo (CoarseAverage), AthenaK, CarpetX (average_down), GAMER. */
+ * Uses restrict_w/restrict_wkj weights (6-point stencil, 216 fine cells).
+ * Clamps chi and lapse to floor after restriction to prevent sub-floor
+ * values from negative stencil weights near the puncture.
+ *
+ * 6th-order restriction matches the FD order — ExaHyPE (arXiv:2504.15814)
+ * showed that restriction order must match FD order to avoid growing
+ * Hamiltonian violations at AMR boundaries. 0th-order restriction with
+ * 6th-order FD gives O(dx²) boundary error → exponential Ham growth.
+ *
+ * Reads from fine block interior + 2 cells into ghost zone (stencil
+ * reaches fi_base-2 to fi_base+3). Ghost data is from the last RK4
+ * stage's ghost exchange — stale by O(dt), acceptable.
+ *
+ * Ref: restriction.h restrict_cell (identical math).
+ * Ref: ExaHyPE arXiv:2504.15814 — restriction order must match FD order. */
 __global__ void hip_restrict_to_buffers(
-    double *coarse_data,              /* coarse pack data (write to buffers) */
-    const double *fine_data,          /* fine pack data (read) */
-    const int *restrict_map,          /* [n_buffers * 8] fine pack indices */
-    int n_evolve,                     /* buffer blocks start at n_evolve */
-    int n_buffers,
-    int nb_c, size_t npts_c,          /* coarse pack dims */
-    int nb_f, size_t npts_f,          /* fine pack dims */
-    int N, int ghost, int Nt,         /* grid dims (same for both packs) */
-    int nf,                           /* field count */
-    int total_threads)
+    double *coarse_data,
+    const double *fine_data,
+    const int *restrict_map,
+    int n_evolve, int n_buffers,
+    int nb_c, size_t npts_c,
+    int nb_f, size_t npts_f,
+    int N, int ghost, int Nt,
+    int nf, int total_threads)
 {
     int tid = blockIdx.x * blockDim.x + threadIdx.x;
     if (tid >= total_threads) return;
@@ -599,24 +610,34 @@ __global__ void hip_restrict_to_buffers(
     int fine_blk = restrict_map[buf_local * 8 + oct];
     if (fine_blk < 0) return;
 
-    /* Fine cell base: 2 fine cells per coarse cell in each direction */
-    int fi = ghost + 2 * ((ci - ghost) - ox * half);
-    int fj = ghost + 2 * ((cj - ghost) - oy * half);
-    int fk = ghost + 2 * ((ck - ghost) - oz * half);
+    int fi_base = ghost + 2 * ((ci - ghost) - ox * half);
+    int fj_base = ghost + 2 * ((cj - ghost) - oy * half);
+    int fk_base = ghost + 2 * ((ck - ghost) - oz * half);
 
-    /* 0th-order: average 2³=8 fine interior cells */
     for (int f = 0; f < nf; f++) {
         const double *src = fine_data + (size_t)f * nb_f * npts_f
                           + (size_t)fine_blk * npts_f;
-        double val = 0.125 * (
-            src[(fi)   + (fj)  *Nt + (fk)  *Nt*Nt] +
-            src[(fi+1) + (fj)  *Nt + (fk)  *Nt*Nt] +
-            src[(fi)   + (fj+1)*Nt + (fk)  *Nt*Nt] +
-            src[(fi+1) + (fj+1)*Nt + (fk)  *Nt*Nt] +
-            src[(fi)   + (fj)  *Nt + (fk+1)*Nt*Nt] +
-            src[(fi+1) + (fj)  *Nt + (fk+1)*Nt*Nt] +
-            src[(fi)   + (fj+1)*Nt + (fk+1)*Nt*Nt] +
-            src[(fi+1) + (fj+1)*Nt + (fk+1)*Nt*Nt]);
+
+        /* 6th-order restriction: tensor product of restrict_w[6] */
+        double val = 0.0;
+        for (int sk = 0; sk < 6; sk++) {
+            int fk = fk_base - 2 + sk;
+            for (int sj = 0; sj < 6; sj++) {
+                double wkj = d_restrict_wkj[sk][sj];
+                int fj = fj_base - 2 + sj;
+                for (int si = 0; si < 6; si++) {
+                    int fi = fi_base - 2 + si;
+                    val += wkj * d_restrict_w[si]
+                         * src[fi + fj * Nt + fk * Nt * Nt];
+                }
+            }
+        }
+
+        /* Floor clamp: negative stencil weights can produce sub-floor
+         * values near puncture where chi → 0. Clamp prevents discontinuity
+         * at buffer-leaf boundary → no exponential Ham growth. */
+        if (f == FIELD_CHI && val < 1.0e-4) val = 1.0e-4;
+        if (f == FIELD_LAPSE && val < 1.0e-4) val = 1.0e-4;
 
         coarse_data[(size_t)f * nb_c * npts_c
                   + (size_t)buf_idx * npts_c

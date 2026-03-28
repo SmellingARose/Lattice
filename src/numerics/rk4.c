@@ -930,10 +930,14 @@ static void subcycle_level_gpu(mesh_t *m, const sim_params_t *p,
         meshblock_pack_t *cpk = m->level_packs[level];
 
         if (fpk && cpk && cpk->n_evolve < cpk->n_blocks) {
-            /* 0th-order cell-averaging restriction: fine → buffer blocks.
-             * No ghost data needed (reads only 2³ fine interior cells per
-             * coarse cell). Single kernel call, no ghost_exchange or
-             * cross_level_fill overhead. */
+            /* 6th-order restriction with floor clamp: fine → buffer blocks.
+             * Ghost exchange fills fine same-level ghosts (stencil reads
+             * 2 cells into ghost zone). Ghost data is from last RK4 stage —
+             * stale by O(dt), but much better than O(dx²) from 0th-order.
+             * Ref: ExaHyPE arXiv:2504.15814 — restriction order must match
+             * FD order to avoid Ham violations at AMR boundaries. */
+            backend_activate_pack(fpk);
+            backend_ghost_exchange_packed(fpk);
             backend_restrict_to_buffers_packed(fpk, cpk);
         }
     }
