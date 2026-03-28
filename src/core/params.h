@@ -176,9 +176,8 @@ static inline sim_params_t default_params(void)
     p.amr.solver_levels = -1;  /* default: use max_level */
 
     /* Noise reduction defaults.
-     * CAKO, per-field sigma, and SSL enabled by default — these are
-     * standard production techniques (arXiv:2404.01137, Etienne 2024).
-     * CAHD disabled by default (experimental, Phase 3). */
+     * CAKO, CAHD, per-field sigma, and SSL all enabled by default —
+     * standard production techniques (arXiv:2404.01137, Etienne 2024). */
     p.noise.use_cako           = 1;
     p.noise.cako_floor         = 0.04;  /* W_min = 0.2, σ_eff ≥ 20% of nominal */
     p.noise.use_cahd           = 1;
