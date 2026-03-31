@@ -403,5 +403,9 @@ test-qnm-pub: $(BUILD)/test_qnm_publication
 	@echo "=== Running publication-quality QNM ringdown test ==="
 	$(BUILD)/test_qnm_publication
 
+test-gauge-wave: $(BUILD)/test_gauge_wave
+	@echo "=== Running gauge wave test ==="
+	$(BUILD)/test_gauge_wave
+
 clean:
 	rm -rf $(BUILD)

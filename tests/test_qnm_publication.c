@@ -2,26 +2,33 @@
  * Lattice — 3D Numerical Relativity
  * Publication-quality Schwarzschild QNM ringdown test.
  *
- * Single M=1 puncture BH, AMR with dx_fine = M/8 = 0.125M.
+ * Single M=1 puncture BH, AMR with dx_fine = M/8.
  * Extracts Psi4 (2,0) and (2,2) modes at two radii, measures QNM
- * frequency + damping, tracks constraints and AH mass over time.
+ * frequency + damping, tracks constraints and lapse over time.
  *
  * Known Schwarzschild l=2 QNM (Leaver 1985):
  *   ω_R = 0.37367 / M,  ω_I = 0.08896 / M
  *
- * Grid: N_block=32, L=128, 5 AMR levels → dx_fine = 0.125M = M/8
- *   Level 2 (dx=1M) covers extraction radii (r=20M, r=25M).
- *   Boundary at 64M. Reflections reach r=25M at t≈103M. T=100M safe.
+ * Grid: N_block=32, L=256, 6 AMR levels, C=1.5 → dx_fine = 0.125M = M/8
+ *   Boundary at ±128M. BAM-like box-in-box with C=1.5 (finest ±1.5M).
+ *   Level 2 (dx=2M) covers extraction radii (r=30M, r=50M).
+ *   Reflections reach r=50M at t ≈ 128 + (128-50) = 206M >> T=100M.
+ *   Analysis window: t=40M to 100M ≈ 3.6 clean QNM cycles.
+ *   BAM uses 5 levels + spherical patch, dx=M/16, boundary 58.5M
+ *   (arXiv:1212.2901). We use 6 Cartesian levels, dx=M/8 (6th-order FD
+ *   compensates for 2× coarser grid vs BAM's 4th-order).
  *
  * Output CSVs for plotting:
- *   build/qnm_pub_r20.csv     — Psi4 modes at r=20M
- *   build/qnm_pub_r25.csv     — Psi4 modes at r=25M
+ *   build/qnm_pub_r30.csv     — Psi4 modes at r=30M
+ *   build/qnm_pub_r50.csv     — Psi4 modes at r=50M
  *   build/qnm_pub_diag.csv    — constraints + lapse over time
  *
- * Memory: ~200 blocks × 40³ × 25 × 4 × 8 ≈ 10 GB
- * Runs on: GPU (≥16 GB VRAM) or CPU (≥16 GB RAM).
+ * Estimated performance (H100 GPU):
+ *   ~30-60 sec/step (6-level subcycling: 64 fine steps per base step)
+ *   Total: ~50 base steps × 1 min ≈ 1 hr
  *
  * Ref: Leaver (1985), Berti et al. (2009, arXiv:0905.2975)
+ * Ref: Hilditch et al. (2013, arXiv:1212.2901) — BAM single BH test
  * Ref: Etienne (2024, arXiv:2404.01137)
  */
 
@@ -134,19 +141,18 @@ int main(void)
     printf("=== Schwarzschild QNM Ringdown — Publication Quality ===\n\n");
     backend_init();
 
-    /* --- Grid: L=256, 4 AMR levels, dx_fine = M/4 = 0.25M ---
-     * dx_base = 256/32 = 8M. Boundary at 128M.
-     * Coarsest leaf level: L2 at dx=2M (same as test_qnm_ringdown).
-     * Extraction at r=20M,25M: level 3 (dx=1M) → 17 pts/QNM wavelength.
-     * Reflections reach r=25M at t ≈ 128 + (128-25) = 231M >> T=100M.
-     * Analysis window: t=40M to 100M = 60M = 3.6 clean QNM cycles.
-     * Fewer AMR levels = less subcycling overhead. Coarsest leaf dx=2M
-     * matches the proven test_qnm_ringdown configuration.
-     * Memory: ~200 blocks × 40³ × 25 × 4 × 8 ≈ 10 GB. */
+    /* --- Grid: L=256, 6 AMR levels, C=1.5, dx_fine = M/8 ---
+     * dx_base = 256/32 = 8M.  Boundary at ±128M.
+     * C=1.5 (BAM-like): finest level covers ±1.5M around puncture.
+     * Level 2 (dx=2M) covers extraction radii r=30M, r=50M.
+     *   At r=30M: 8.4 pts per QNM wavelength (λ ≈ 16.8M).
+     * Reflections reach r=50M at t ≈ 128 + 78 = 206M >> T=100M.
+     * Analysis window: t=40M to 100M ≈ 3.6 clean QNM cycles. */
     int N_block = 32;
     double L = 256.0;
     double M_bh = 1.0;
-    int max_level = 4;
+    int max_level = 6;
+    double refine_c = 1.5;     /* BAM-like: finest box covers ±1.5M */
 
     mesh_t *m = mesh_create_ex(N_block, L, RK_CLASSIC, NUM_CCZ4_FIELDS);
     mesh_rebuild_neighbors(m);
@@ -158,18 +164,21 @@ int main(void)
     p.dt = 0.25 * p.dx;
     p.amr.max_level = max_level;
     p.amr.chi_refine = 0.1;
-    p.amr.regrid_every = 0;
-    p.ccz4.kappa1 = 0.1;  /* BAM value (Brugmann et al.) */
-    p.ccz4.kappa3 = 0.5;  /* non-covariant Z4 — kappa3=1 UNSTABLE (Alic 2013) */
+    p.amr.regrid_every = 0;   /* static mesh — no regrid during evolution */
+    p.ccz4.kappa1 = 0.1;      /* BAM value (Brugmann et al.) */
+    p.ccz4.kappa3 = 0.5;      /* non-covariant Z4 — kappa3=1 UNSTABLE (Alic 2013) */
 
     double dx_fine = p.dx / (1 << max_level);
     printf("  Grid: N_block=%d, L=%.0f, dx_base=%.3f, dx_fine=%.4f (M/%.0f)\n",
            N_block, L, p.dx, dx_fine, 1.0/dx_fine);
+    printf("  AMR: max_level=%d, C=%.1f, boundary=±%.0fM\n",
+           max_level, refine_c, L/2.0);
     printf("  Time: dt=%.4f, T=100M, CFL=0.25\n", p.dt);
+    printf("  Subcycling: %d fine steps per base step\n", 1 << max_level);
 
     /* --- Initial data with AMR --- */
     puncture_data_t bh = {.mass = M_bh, .center = {0, 0, 0}};
-    set_bowen_york_mesh(m, 1, &bh, max_level);
+    set_bowen_york_mesh_ex(m, 1, &bh, max_level, refine_c, p.amr.refine_beta);
     ghost_exchange(m);
 
     int n_leaves = mesh_num_leaves(m);
@@ -182,8 +191,10 @@ int main(void)
     double ml0 = mesh_min_lapse(m);
     printf("  Initial: Ham=%.4e, Mom=%.4e, lapse_min=%.4f\n\n", ham0, mom0, ml0);
 
-    /* --- Psi4 at two radii --- */
-    double r1 = 20.0, r2 = 25.0;
+    /* --- Psi4 at two radii ---
+     * r=30M: level 2 (dx=2M), 8.4 pts per QNM wavelength.
+     * r=50M: level 1 (dx=4M), 4.2 pts per QNM wavelength. */
+    double r1 = 30.0, r2 = 50.0;
     double center[3] = {0, 0, 0};
     int n_theta = 24, n_phi = 48, l_max = 4;
     psi4_workspace_t *ws1 = psi4_alloc(n_theta, n_phi, l_max, r1, center);
@@ -192,12 +203,12 @@ int main(void)
            n_theta, n_phi, l_max);
 
     /* --- Time series --- */
-    double T_final = 100.0;  /* reflections reach r=25M at t≈103M; T=100M safe */
+    double T_final = 100.0;
     int total_steps = (int)(T_final / p.dt + 0.5);
-    int psi4_every = 1;   /* every base step = 2M cadence, ~8 samples/QNM cycle */
-    int diag_every = 10;  /* constraints every 10 steps */
+    int psi4_every = 1;   /* every base step */
+    int diag_every = 1;   /* every base step */
     int max_psi4 = total_steps / psi4_every + 2;
-    int max_diag = total_steps + 2;  /* do_diag=1: every step */
+    int max_diag = total_steps + 2;
 
     int mi_20 = mode_index(2, 0);
     int mi_22 = mode_index(2, 2);
@@ -223,7 +234,8 @@ int main(void)
     double *diag_spin  = malloc(max_diag * sizeof(double));
     int n_diag = 0;
 
-    printf("  Evolving T=%.0fM (%d base steps)\n", T_final, total_steps);
+    printf("  Evolving T=%.0fM (%d base steps, %d fine steps each)\n",
+           T_final, total_steps, 1 << max_level);
     printf("  Psi4 every %d steps, diagnostics every %d\n\n",
            psi4_every, diag_every);
 
@@ -238,11 +250,9 @@ int main(void)
         p.time += p.dt;
 
         int do_psi4 = (step % psi4_every == 0);
-        int do_diag = 1;  /* every step */
+        int do_diag = (step % diag_every == 0);
 
-        /* Psi4 extraction: CPU psi4_extract uses mesh_find_block_at to
-         * find the finest block at each angular point. GPU-resident data
-         * needs sync to host for CPU extraction. */
+        /* Psi4 extraction */
         if (do_psi4) {
             if (is_gpu)
                 gpu_sync_all_to_host(m);
@@ -264,13 +274,13 @@ int main(void)
         if (do_diag && is_gpu) {
             double ham = 0, mom = 0, vol_h = 0, vol_m = 0;
             double hlev[MAX_AMR_LEVELS] = {0}, vlev[MAX_AMR_LEVELS] = {0};
-            for (int L = 0; L <= m->max_level; L++) {
-                meshblock_pack_t *pk = m->level_packs[L];
+            for (int lv = 0; lv <= m->max_level; lv++) {
+                meshblock_pack_t *pk = m->level_packs[lv];
                 if (!pk || pk->n_blocks == 0) continue;
                 backend_activate_pack(pk);
                 double s, v;
                 backend_constraint_l2_raw_packed(pk, &s, &v);
-                ham += s; vol_h += v; hlev[L] = s; vlev[L] = v;
+                ham += s; vol_h += v; hlev[lv] = s; vlev[lv] = v;
                 backend_momentum_l2_raw_packed(pk, &s, &v);
                 mom += s; vol_m += v;
             }
@@ -279,8 +289,8 @@ int main(void)
 
             /* Min lapse: use finest level pack */
             double ml = 1.0;
-            for (int L = m->max_level; L >= 0; L--) {
-                meshblock_pack_t *pk = m->level_packs[L];
+            for (int lv = m->max_level; lv >= 0; lv--) {
+                meshblock_pack_t *pk = m->level_packs[lv];
                 if (!pk || pk->n_blocks == 0) continue;
                 backend_activate_pack(pk);
                 double x, y, z;
@@ -299,30 +309,16 @@ int main(void)
             double amp20 = (n_psi4 > 0) ?
                 sqrt(r1_re20[n_psi4-1]*r1_re20[n_psi4-1] +
                      r1_im20[n_psi4-1]*r1_im20[n_psi4-1]) : 0;
-            /* chi_min from host blocks (already synced for Psi4) */
-            double chi_min = 1e30;
-            for (int bid = 0; bid < m->num_blocks; bid++) {
-                block_t *blk = m->blocks[bid];
-                if (!blk || !blk->is_leaf) continue;
-                grid_t *g = blk->grid;
-                int lo = g->ghost, hi = g->ghost + g->N;
-                for (int k = lo; k < hi; k++)
-                    for (int j = lo; j < hi; j++)
-                        for (int i = lo; i < hi; i++) {
-                            double c = g->fields[FIELD_CHI][IDX(g,i,j,k)];
-                            if (c < chi_min) chi_min = c;
-                        }
-            }
 
-            printf("  step %4d  t=%6.1fM  Ham=%.3e  Mom=%.3e  lapse=%.4f  chi=%.4e",
-                   step, p.time, ham, mom, ml, chi_min);
-            if (amp20 > 0) printf("  |Psi4|=%.3e", amp20);
             double elapsed = wtime() - t_wall_start;
             double dt_wall = wtime() - t_step_start;
+            printf("  step %4d  t=%6.1fM  Ham=%.3e  Mom=%.3e  lapse=%.4f",
+                   step, p.time, ham, mom, ml);
+            if (amp20 > 0) printf("  |Psi4|=%.3e", amp20);
             printf("  [%.1fs/step, %.0fs total]", dt_wall, elapsed);
-            /* Per-level Ham (free — sums already computed) */
-            for (int L = 0; L <= m->max_level; L++)
-                if (vlev[L] > 0) printf(" L%d=%.1e", L, sqrt(hlev[L]/vlev[L]));
+            /* Per-level Ham */
+            for (int lv = 0; lv <= m->max_level; lv++)
+                if (vlev[lv] > 0) printf(" L%d=%.1e", lv, sqrt(hlev[lv]/vlev[lv]));
             printf("\n");
         } else if (do_diag) {
             /* CPU fallback */
@@ -341,24 +337,11 @@ int main(void)
             double amp20 = (n_psi4 > 0) ?
                 sqrt(r1_re20[n_psi4-1]*r1_re20[n_psi4-1] +
                      r1_im20[n_psi4-1]*r1_im20[n_psi4-1]) : 0;
-            double chi_min = 1e30;
-            for (int bid = 0; bid < m->num_blocks; bid++) {
-                block_t *blk = m->blocks[bid];
-                if (!blk || !blk->is_leaf) continue;
-                grid_t *g = blk->grid;
-                int lo = g->ghost, hi = g->ghost + g->N;
-                for (int k = lo; k < hi; k++)
-                    for (int j = lo; j < hi; j++)
-                        for (int i = lo; i < hi; i++) {
-                            double c = g->fields[FIELD_CHI][IDX(g,i,j,k)];
-                            if (c < chi_min) chi_min = c;
-                        }
-            }
-            printf("  step %4d  t=%6.1fM  Ham=%.3e  Mom=%.3e  lapse=%.4f  chi=%.4e",
-                   step, p.time, ham, mom, ml, chi_min);
-            if (amp20 > 0) printf("  |Psi4|=%.3e", amp20);
             double elapsed = wtime() - t_wall_start;
             double dt_wall = wtime() - t_step_start;
+            printf("  step %4d  t=%6.1fM  Ham=%.3e  Mom=%.3e  lapse=%.4f",
+                   step, p.time, ham, mom, ml);
+            if (amp20 > 0) printf("  |Psi4|=%.3e", amp20);
             printf("  [%.1fs/step, %.0fs total]\n", dt_wall, elapsed);
         }
     }
@@ -370,17 +353,17 @@ int main(void)
     /* Frequency */
     double wR1 = measure_omega_R(psi4_t, r1_re20, n_psi4, t_start);
     double wR2 = measure_omega_R(psi4_t, r2_re20, n_psi4, t_start);
-    printf("  ω_R(r=20M) = %.5f/M  (expected 0.37367, err=%.2f%%)\n",
+    printf("  ω_R(r=30M) = %.5f/M  (expected 0.37367, err=%.2f%%)\n",
            wR1, wR1 > 0 ? 100*fabs(wR1-0.37367)/0.37367 : -1.0);
-    printf("  ω_R(r=25M) = %.5f/M  (expected 0.37367, err=%.2f%%)\n",
+    printf("  ω_R(r=50M) = %.5f/M  (expected 0.37367, err=%.2f%%)\n",
            wR2, wR2 > 0 ? 100*fabs(wR2-0.37367)/0.37367 : -1.0);
 
     /* Damping */
     double wI1 = measure_omega_I(psi4_t, r1_re20, n_psi4, t_start);
     double wI2 = measure_omega_I(psi4_t, r2_re20, n_psi4, t_start);
-    printf("  ω_I(r=20M) = %.5f/M  (expected 0.08896, err=%.2f%%)\n",
+    printf("  ω_I(r=30M) = %.5f/M  (expected 0.08896, err=%.2f%%)\n",
            wI1, wI1 > 0 ? 100*fabs(wI1-0.08896)/0.08896 : -1.0);
-    printf("  ω_I(r=25M) = %.5f/M  (expected 0.08896, err=%.2f%%)\n",
+    printf("  ω_I(r=50M) = %.5f/M  (expected 0.08896, err=%.2f%%)\n",
            wI2, wI2 > 0 ? 100*fabs(wI2-0.08896)/0.08896 : -1.0);
 
     /* (2,2) mode — should be near zero for non-spinning BH */
@@ -408,22 +391,22 @@ int main(void)
     /* --- Pass/fail --- */
     printf("\n=== Pass/Fail ===\n");
 
-    check(wR1 > 0, "ω_R(r=20) measurable");
-    check(wR2 > 0, "ω_R(r=25) measurable");
+    check(wR1 > 0, "ω_R(r=30) measurable");
+    check(wR2 > 0, "ω_R(r=50) measurable");
     if (wR1 > 0)
         check(fabs(wR1-0.37367)/0.37367 < 0.05,
-              "ω_R(r=20) within 5% of Leaver");
+              "ω_R(r=30) within 5% of Leaver");
     if (wR2 > 0)
         check(fabs(wR2-0.37367)/0.37367 < 0.05,
-              "ω_R(r=25) within 5% of Leaver");
+              "ω_R(r=50) within 5% of Leaver");
     if (wR1 > 0 && wR2 > 0)
         check(fabs(wR1-wR2)/(0.5*(wR1+wR2)) < 0.03,
               "ω_R consistent across radii (<3%)");
 
-    check(wI1 > 0, "ω_I(r=20) measurable");
+    check(wI1 > 0, "ω_I(r=30) measurable");
     if (wI1 > 0)
         check(fabs(wI1-0.08896)/0.08896 < 0.15,
-              "ω_I(r=20) within 15% of Leaver");
+              "ω_I(r=30) within 15% of Leaver");
 
     check(max_20 > 0, "Psi4(2,0) mode excited");
     check(max_22 < 0.1 * max_20,
@@ -437,7 +420,7 @@ int main(void)
     printf("\n=== Results: %d passed, %d failed ===\n", n_pass, n_fail);
 
     /* --- CSV: Psi4 at both radii --- */
-    FILE *fp = fopen("build/qnm_pub_r20.csv", "w");
+    FILE *fp = fopen("build/qnm_pub_r30.csv", "w");
     if (fp) {
         fprintf(fp, "t,re_20,im_20,re_22,im_22\n");
         for (int i = 0; i < n_psi4; i++)
@@ -445,7 +428,7 @@ int main(void)
                     psi4_t[i], r1_re20[i], r1_im20[i], r1_re22[i], r1_im22[i]);
         fclose(fp);
     }
-    fp = fopen("build/qnm_pub_r25.csv", "w");
+    fp = fopen("build/qnm_pub_r50.csv", "w");
     if (fp) {
         fprintf(fp, "t,re_20,im_20,re_22,im_22\n");
         for (int i = 0; i < n_psi4; i++)
@@ -464,7 +447,7 @@ int main(void)
                     diag_lapse[i], diag_mass[i], diag_spin[i]);
         fclose(fp);
     }
-    printf("  CSV: qnm_pub_r20.csv, qnm_pub_r25.csv, qnm_pub_diag.csv\n");
+    printf("  CSV: qnm_pub_r30.csv, qnm_pub_r50.csv, qnm_pub_diag.csv\n");
 
     free(psi4_t); free(r1_re20); free(r1_im20); free(r1_re22); free(r1_im22);
     free(r2_re20); free(r2_im20); free(r2_re22); free(r2_im22);

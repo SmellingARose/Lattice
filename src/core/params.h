@@ -66,6 +66,8 @@ typedef struct {
     double chi_coarsen;    /* coarsen threshold (hysteresis)                  */
     int    regrid_every;   /* check interval: 1=every step, 0=never (static)  */
     int    solver_levels;  /* AMR levels for initial data solver (-1 = use max_level) */
+    double refine_c;       /* finest box radius = C * M_puncture (default 4)  */
+    double refine_beta;    /* level growth ratio (default 2^(3/5) ≈ 1.516)   */
 } amr_params_t;
 
 /*
@@ -174,6 +176,8 @@ static inline sim_params_t default_params(void)
     p.amr.chi_coarsen   = 0.01;
     p.amr.regrid_every  = 1;
     p.amr.solver_levels = -1;  /* default: use max_level */
+    p.amr.refine_c      = 1.5;                    /* finest box radius = C * M (BAM uses ~1.25) */
+    p.amr.refine_beta   = 1.5157165665103982;      /* 2^(3/5), optimal for 6th-order FD */
 
     /* Noise reduction defaults.
      * CAKO, CAHD, per-field sigma, and SSL all enabled by default —

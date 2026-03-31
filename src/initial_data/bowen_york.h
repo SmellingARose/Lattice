@@ -89,5 +89,9 @@ void set_ccz4_from_hispid_block(block_t *blk, int n_bh, const puncture_data_t *b
  */
 void set_bowen_york_mesh(mesh_t *m, int n_bh, const puncture_data_t *bhs,
                           int n_amr_levels);
+/* Extended version with custom refinement geometry */
+void set_bowen_york_mesh_ex(mesh_t *m, int n_bh, const puncture_data_t *bhs,
+                             int n_amr_levels,
+                             double refine_c, double refine_beta);
 
 #endif /* LATTICE_BOWEN_YORK_H */

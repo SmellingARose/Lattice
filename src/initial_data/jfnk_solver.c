@@ -1351,11 +1351,9 @@ static double fas_solve_level_by_level(mesh_t *m, int n_bh,
  * Mesh refinement near punctures (reused from relaxation_amr.c)
  * ================================================================ */
 
-static const double REFINE_BETA = 1.5157165665103982;  /* pow(2.0, 0.6) */
-static const double REFINE_C    = 4.0;
-
 void refine_mesh_near_punctures(mesh_t *m, int n_amr_levels,
-                                int n_bh, const puncture_data_t *bhs)
+                                int n_bh, const puncture_data_t *bhs,
+                                double refine_c, double refine_beta)
 {
     int base_level = m->max_level;
     double S = m->L / 2.0;
@@ -1363,9 +1361,9 @@ void refine_mesh_near_punctures(mesh_t *m, int n_amr_levels,
     double m_min = bhs[0].mass;
     for (int p = 1; p < n_bh; p++)
         if (bhs[p].mass < m_min) m_min = bhs[p].mass;
-    double r_finest = REFINE_C * m_min;
+    double r_finest = refine_c * m_min;
     if (r_finest < S) {
-        int n_useful = (int)(log(S / r_finest) / log(REFINE_BETA)) + 1;
+        int n_useful = (int)(log(S / r_finest) / log(refine_beta)) + 1;
         if (n_amr_levels > n_useful) {
             printf("[AMR-refine] Capping levels from %d to %d "
                    "(domain S=%.1f, r_finest=%.2f)\n",
@@ -1382,7 +1380,7 @@ void refine_mesh_near_punctures(mesh_t *m, int n_amr_levels,
         double m_max = 0.0;
         for (int p = 0; p < n_bh; p++)
             if (bhs[p].mass > m_max) m_max = bhs[p].mass;
-        double r_log = REFINE_C * m_max * pow(REFINE_BETA, levels_from_finest);
+        double r_log = refine_c * m_max * pow(refine_beta, levels_from_finest);
         if (r_log > S) r_log = S;
 
         printf("[AMR-refine] Level %d/%d: dx=%.4f, r_refine=%.2f, blocks=%d\n",
@@ -1407,8 +1405,8 @@ void refine_mesh_near_punctures(mesh_t *m, int n_amr_levels,
             double bz_max = bz_min + N_blk * block_dx;
 
             for (int p = 0; p < n_bh; p++) {
-                double r_refine = REFINE_C * bhs[p].mass
-                                * pow(REFINE_BETA, levels_from_finest);
+                double r_refine = refine_c * bhs[p].mass
+                                * pow(refine_beta, levels_from_finest);
                 if (r_refine > S) r_refine = S;
 
                 double pcx = bhs[p].center[0];
@@ -1441,10 +1439,12 @@ void refine_mesh_near_punctures(mesh_t *m, int n_amr_levels,
  * Create solver mesh with refinement near punctures
  * ================================================================ */
 static mesh_t *create_solver_mesh(int N_base, double L, int n_amr_levels,
-                                   int n_bh, const puncture_data_t *bhs)
+                                   int n_bh, const puncture_data_t *bhs,
+                                   double refine_c, double refine_beta)
 {
     mesh_t *m = mesh_create_ex(N_base, L, RK_CLASSIC, JFNK_N_FIELDS);
-    refine_mesh_near_punctures(m, n_amr_levels, n_bh, bhs);
+    refine_mesh_near_punctures(m, n_amr_levels, n_bh, bhs,
+                               refine_c, refine_beta);
     return m;
 }
 
@@ -1579,7 +1579,8 @@ static void transfer_4field_to_grid(mesh_t *m, grid_t *g,
 
 double jfnk_solve_mesh(mesh_t *m, int n_bh, const puncture_data_t *bhs,
                         double tol, int max_iter, int verbose,
-                        int n_amr_levels)
+                        int n_amr_levels,
+                        double refine_c, double refine_beta)
 {
     if (n_amr_levels > MAX_AMR_LEVELS) {
         fprintf(stderr, "[FAS-mesh] ERROR: n_amr_levels=%d exceeds "
@@ -1604,7 +1605,8 @@ double jfnk_solve_mesh(mesh_t *m, int n_bh, const puncture_data_t *bhs,
                n_amr_levels, tol);
 
     if (n_amr_levels > 0)
-        refine_mesh_near_punctures(m, n_amr_levels, n_bh, bhs);
+        refine_mesh_near_punctures(m, n_amr_levels, n_bh, bhs,
+                                   refine_c, refine_beta);
     if (verbose)
         printf("[FAS-mesh] Mesh: %d blocks, %d leaves, max_level=%d\n",
                m->num_blocks, mesh_num_leaves(m), m->max_level);
@@ -1615,7 +1617,8 @@ double jfnk_solve_mesh(mesh_t *m, int n_bh, const puncture_data_t *bhs,
 
 double jfnk_solve_mesh_coupled(mesh_t *m, int n_bh, const puncture_data_t *bhs,
                                 double tol, int max_iter, int verbose,
-                                int n_amr_levels)
+                                int n_amr_levels,
+                                double refine_c, double refine_beta)
 {
     /* Validate accum arrays */
     for (int b = 0; b < m->num_blocks; b++) {
@@ -1634,7 +1637,8 @@ double jfnk_solve_mesh_coupled(mesh_t *m, int n_bh, const puncture_data_t *bhs,
                n_amr_levels, tol);
 
     if (n_amr_levels > 0)
-        refine_mesh_near_punctures(m, n_amr_levels, n_bh, bhs);
+        refine_mesh_near_punctures(m, n_amr_levels, n_bh, bhs,
+                                   refine_c, refine_beta);
     if (verbose)
         printf("[FAS-mesh] Mesh: %d blocks, %d leaves, max_level=%d\n",
                m->num_blocks, mesh_num_leaves(m), m->max_level);
@@ -1667,7 +1671,8 @@ double jfnk_solve_amr(grid_t *g, int n_bh, const puncture_data_t *bhs,
         printf("[FAS] Starting 1-field solver: N=%d, %d AMR levels, tol=%.2e\n",
                g->N, n_amr_levels, tol);
 
-    mesh_t *m = create_solver_mesh(g->N, g->L, n_amr_levels, n_bh, bhs);
+    mesh_t *m = create_solver_mesh(g->N, g->L, n_amr_levels, n_bh, bhs,
+                                   1.5, 1.5157165665103982);
     if (verbose)
         printf("[FAS] Solver mesh: %d blocks, %d leaves, max_level=%d\n",
                m->num_blocks, mesh_num_leaves(m), m->max_level);
@@ -1692,7 +1697,8 @@ double jfnk_solve_coupled_amr(grid_t *g, int n_bh, const puncture_data_t *bhs,
         printf("[FAS] Starting coupled solver: N=%d, %d AMR levels\n",
                g->N, n_amr_levels);
 
-    mesh_t *m = create_solver_mesh(g->N, g->L, n_amr_levels, n_bh, bhs);
+    mesh_t *m = create_solver_mesh(g->N, g->L, n_amr_levels, n_bh, bhs,
+                                   1.5, 1.5157165665103982);
     if (verbose)
         printf("[FAS] Solver mesh: %d blocks, %d leaves, max_level=%d\n",
                m->num_blocks, mesh_num_leaves(m), m->max_level);

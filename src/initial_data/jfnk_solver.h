@@ -33,7 +33,8 @@
  */
 double jfnk_solve_mesh(mesh_t *m, int n_bh, const puncture_data_t *bhs,
                         double tol, int max_iter, int verbose,
-                        int n_amr_levels);
+                        int n_amr_levels,
+                        double refine_c, double refine_beta);
 
 /*
  * Solve the 4-field coupled constraints (HiSpID) directly on an external mesh.
@@ -42,7 +43,8 @@ double jfnk_solve_mesh(mesh_t *m, int n_bh, const puncture_data_t *bhs,
  */
 double jfnk_solve_mesh_coupled(mesh_t *m, int n_bh, const puncture_data_t *bhs,
                                 double tol, int max_iter, int verbose,
-                                int n_amr_levels);
+                                int n_amr_levels,
+                                double refine_c, double refine_beta);
 
 /*
  * Grid-based wrappers (for unit tests — creates 1-block mesh internally).
@@ -77,6 +79,7 @@ double jfnk_solve_coupled_amr(grid_t *g, int n_bh, const puncture_data_t *bhs,
  * Ref: Athena++ MeshRefinement pattern.
  */
 void refine_mesh_near_punctures(mesh_t *m, int n_amr_levels,
-                                int n_bh, const puncture_data_t *bhs);
+                                int n_bh, const puncture_data_t *bhs,
+                                double refine_c, double refine_beta);
 
 #endif /* LATTICE_JFNK_SOLVER_H */

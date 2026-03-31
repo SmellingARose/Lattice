@@ -265,9 +265,10 @@ work on AMR meshes.
   Refinement radius per level uses equidistribution-optimal scaling:
   `r_k = C · M_p · β^k` where β = 2^(3/5) ≈ 1.516 (derived from equal
   truncation error at every level boundary for 6th-order FD on 1/r³ Riemann
-  curvature fields), C = 4 (finest level covers 4M), M_p = puncture mass.
-  Number of levels auto-capped at domain half-size. Per-puncture radii scale
-  with mass — heavier BHs get larger refinement regions.
+  curvature fields), C = 1.5 (BAM-like, finest level covers ±1.5M),
+  M_p = puncture mass. Both C and β are CLI-configurable (`--refine-c`,
+  `--refine-beta`). Number of levels auto-capped at domain half-size.
+  Per-puncture radii scale with mass — heavier BHs get larger refinement regions.
   Ref: docs/amr_refinement_ratio.html (full derivation).
 - **Solve on evolution mesh:** AMR initial data constraint solver operates directly
   on evolution blocks (`set_bowen_york_mesh()`), eliminating interpolation error
@@ -406,7 +407,8 @@ lattice/
 │   ├── test_gpu_tracker.c     # GPU vs CPU BH tracker (packed lapse-min, boosted BH, 9/9)
 │   ├── test_gpu_debug.c       # GPU kernel isolation test (per-kernel sync barriers)
 │   ├── test_qnm_ringdown.c   # Schwarzschild QNM ringdown (AMR, dx=0.5M, quick)
-│   └── test_qnm_publication.c  # Publication QNM (dx=M/8, 2-radius Psi4, AH mass, GPU)
+│   ├── test_qnm_publication.c  # Publication QNM (L=256, 6 levels, C=1.5, dx=M/8, Psi4 r=30+50M)
+│   └── test_gauge_wave.c       # Gauge wave (WIP — needs periodic BCs)
 ├── docs/
 │   ├── architecture.html       # consolidated architecture & design reference
 │   ├── amr_refinement_ratio.html  # equidistribution-optimal β=1.516 derivation
@@ -452,7 +454,8 @@ make test-checkpoint   # Checkpoint/restart (uniform + AMR, bitwise-identical)
 make test-gpu-tracker  # GPU vs CPU BH tracker (packed lapse-min, boosted BH, 9/9)
 make test-gpu-debug    # GPU kernel isolation test (requires BACKEND=gpu)
 make test-qnm          # Schwarzschild QNM ringdown (AMR, dx=0.5M, ~1 hr CPU)
-make test-qnm-pub      # Publication QNM (dx=M/8, 2-radius Psi4, AH, ~10 min GPU)
+make test-qnm-pub      # Publication QNM (L=256, 6 levels, dx=M/8, Psi4 r=30+50M, ~30 min GPU)
+make test-gauge-wave   # Gauge wave (WIP — needs periodic BCs)
 make clean
 ```
 
@@ -585,6 +588,8 @@ constant `GR_SPACEDIM = 3`.
 | `rk_method` | `RK_CLASSIC` | Time integrator: `RK_CLASSIC` (4 stages, 4 blocks) or `RK_CK45` (5 stages, 3 blocks) |
 | `bc_type` | `BC_CONSTRAINT_PRESERVING` | Boundary conditions: `BC_SOMMERFELD` (standard radiative) or `BC_CONSTRAINT_PRESERVING` (BAM-style, arXiv:1212.2901) |
 | `amr_levels` | `max_level` | Initial data solver refinement levels (`--amr-levels`). Defaults to `--max_level` so initial data and evolution use the same depth. Each level halves dx near punctures. Override for rare cases where you want finer initial data than evolution can afford. Requires `--rk classic`. |
+| `refine_c` | 1.5 | Finest refinement box radius = C × M_puncture (`--refine-c`). BAM uses ~1.25. |
+| `refine_beta` | 1.516 | Level growth ratio β = 2^(3/5) (`--refine-beta`). Optimal for 6th-order FD. |
 
 ### FAS Multigrid Solver Tuning
 

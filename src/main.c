@@ -139,6 +139,8 @@ static void print_usage(void)
     fprintf(stderr, "  --chi_coarsen <float>  Coarsening threshold (default 0.01)\n");
     fprintf(stderr, "  --regrid_every <int>   Regrid check interval (default 1)\n");
     fprintf(stderr, "  --amr-levels <int>    Initial data solver levels (default: max-level)\n");
+    fprintf(stderr, "  --refine-c <float>     Finest box radius = C * M (default 4.0)\n");
+    fprintf(stderr, "  --refine-beta <float>  Level growth ratio (default 1.516)\n");
     fprintf(stderr, "  --diag_level <int>     Fire diagnostics at this AMR level's dt (-1=off)\n");
     fprintf(stderr, "\nInitial data:\n");
     fprintf(stderr, "  --hispid               Force HiSpID (high-spin) initial data\n");
@@ -288,6 +290,10 @@ int main(int argc, char **argv)
             p.amr.regrid_every = atoi(argv[++a]);
         } else if (strcmp(argv[a], "--amr-levels") == 0 && a + 1 < argc) {
             p.amr.solver_levels = atoi(argv[++a]);
+        } else if (strcmp(argv[a], "--refine-c") == 0 && a + 1 < argc) {
+            p.amr.refine_c = atof(argv[++a]);
+        } else if (strcmp(argv[a], "--refine-beta") == 0 && a + 1 < argc) {
+            p.amr.refine_beta = atof(argv[++a]);
         } else if (strcmp(argv[a], "--diag_level") == 0 && a + 1 < argc) {
             p.diag_level = atoi(argv[++a]);
         /* CCZ4 constraint damping */
@@ -520,7 +526,8 @@ int main(int argc, char **argv)
         if (n_bh > 0) {
             printf("  Initial data: Bowen-York, %d puncture(s), "
                    "solver_levels=%d\n", n_bh, p.amr.solver_levels);
-            set_bowen_york_mesh(m, n_bh, bhs, p.amr.solver_levels);
+            set_bowen_york_mesh_ex(m, n_bh, bhs, p.amr.solver_levels,
+                                    p.amr.refine_c, p.amr.refine_beta);
         } else {
             printf("  Initial data: flat spacetime (AMR)\n");
             for (int bid = 0; bid < m->num_blocks; bid++) {

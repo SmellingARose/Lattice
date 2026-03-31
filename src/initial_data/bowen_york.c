@@ -676,6 +676,13 @@ void set_ccz4_from_hispid_block(block_t *blk, int n_bh, const puncture_data_t *b
 void set_bowen_york_mesh(mesh_t *m, int n_bh, const puncture_data_t *bhs,
                           int n_amr_levels)
 {
+    set_bowen_york_mesh_ex(m, n_bh, bhs, n_amr_levels, 1.5, 1.5157165665103982);
+}
+
+void set_bowen_york_mesh_ex(mesh_t *m, int n_bh, const puncture_data_t *bhs,
+                             int n_amr_levels,
+                             double refine_c, double refine_beta)
+{
     /* Check if all momenta and spins are zero — use fast BL path */
     int need_solver = 0;
     int high_spin = 0;
@@ -702,7 +709,8 @@ void set_bowen_york_mesh(mesh_t *m, int n_bh, const puncture_data_t *bhs,
 
         /* Refine near punctures if requested */
         if (n_amr_levels > 0)
-            refine_mesh_near_punctures(m, n_amr_levels, n_bh, bhs);
+            refine_mesh_near_punctures(m, n_amr_levels, n_bh, bhs,
+                                       refine_c, refine_beta);
 
         for (int bid = 0; bid < m->num_blocks; bid++) {
             block_t *blk = m->blocks[bid];
@@ -729,7 +737,8 @@ void set_bowen_york_mesh(mesh_t *m, int n_bh, const puncture_data_t *bhs,
         /* HiSpID: coupled 4-field solver on evolution mesh */
         printf("  Bowen-York (mesh): HiSpID path, %d AMR levels\n", n_amr_levels);
         double residual = jfnk_solve_mesh_coupled(
-            m, n_bh, bhs, 1.0e-10, 50, 1, n_amr_levels);
+            m, n_bh, bhs, 1.0e-10, 50, 1, n_amr_levels,
+            refine_c, refine_beta);
         printf("  HiSpID (mesh): residual = %.6e\n", residual);
 
         /* Convert solver data → CCZ4 on each leaf block */
@@ -742,7 +751,8 @@ void set_bowen_york_mesh(mesh_t *m, int n_bh, const puncture_data_t *bhs,
         /* Standard BY: 1-field solver on evolution mesh */
         printf("  Bowen-York (mesh): 1-field path, %d AMR levels\n", n_amr_levels);
         double residual = jfnk_solve_mesh(
-            m, n_bh, bhs, 1.0e-10, 50, 1, n_amr_levels);
+            m, n_bh, bhs, 1.0e-10, 50, 1, n_amr_levels,
+            refine_c, refine_beta);
         printf("  Bowen-York (mesh): residual = %.6e\n", residual);
 
         /* Convert solver data → CCZ4 on each leaf block */
