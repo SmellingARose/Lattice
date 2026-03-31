@@ -407,7 +407,7 @@ lattice/
 │   ├── test_gpu_tracker.c     # GPU vs CPU BH tracker (packed lapse-min, boosted BH, 9/9)
 │   ├── test_gpu_debug.c       # GPU kernel isolation test (per-kernel sync barriers)
 │   ├── test_qnm_ringdown.c   # Schwarzschild QNM ringdown (AMR, dx=0.5M, quick)
-│   ├── test_qnm_publication.c  # Publication QNM (L=256, 6 levels, C=1.5, dx=M/8, Psi4 r=30+50M)
+│   ├── test_qnm_publication.c  # Publication QNM (L=256, 7 levels, C=1.5, β=2, dx=M/16, Psi4 r=30+50M)
 │   └── test_gauge_wave.c       # Gauge wave (WIP — needs periodic BCs)
 ├── docs/
 │   ├── architecture.html       # consolidated architecture & design reference
@@ -454,7 +454,7 @@ make test-checkpoint   # Checkpoint/restart (uniform + AMR, bitwise-identical)
 make test-gpu-tracker  # GPU vs CPU BH tracker (packed lapse-min, boosted BH, 9/9)
 make test-gpu-debug    # GPU kernel isolation test (requires BACKEND=gpu)
 make test-qnm          # Schwarzschild QNM ringdown (AMR, dx=0.5M, ~1 hr CPU)
-make test-qnm-pub      # Publication QNM (L=256, 6 levels, dx=M/8, Psi4 r=30+50M, ~30 min GPU)
+make test-qnm-pub      # Publication QNM (L=256, 7 levels, β=2, dx=M/16, Psi4 r=30+50M, ~2 hrs GPU)
 make test-gauge-wave   # Gauge wave (WIP — needs periodic BCs)
 make clean
 ```

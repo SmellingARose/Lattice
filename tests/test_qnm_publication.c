@@ -2,21 +2,22 @@
  * Lattice — 3D Numerical Relativity
  * Publication-quality Schwarzschild QNM ringdown test.
  *
- * Single M=1 puncture BH, AMR with dx_fine = M/8.
+ * Single M=1 puncture BH, AMR with dx_fine = M/16, β=2 (BAM nesting).
  * Extracts Psi4 (2,0) and (2,2) modes at two radii, measures QNM
  * frequency + damping, tracks constraints and lapse over time.
  *
  * Known Schwarzschild l=2 QNM (Leaver 1985):
  *   ω_R = 0.37367 / M,  ω_I = 0.08896 / M
  *
- * Grid: N_block=32, L=256, 6 AMR levels, C=1.5 → dx_fine = 0.125M = M/8
- *   Boundary at ±128M. BAM-like box-in-box with C=1.5 (finest ±1.5M).
- *   Level 2 (dx=2M) covers extraction radii (r=30M, r=50M).
- *   Reflections reach r=50M at t ≈ 128 + (128-50) = 206M >> T=100M.
+ * Grid: N_block=32, L=256, 7 AMR levels, C=1.5, β=2 → dx_fine = M/16
+ *   Boundary at ±128M. β=2 (BAM standard 2:1 nesting) extends
+ *   refinement to the wave zone so extraction radii are resolved:
+ *   Level 2 (dx=2M, r<48M) covers r=30M — 8.4 pts per QNM wavelength.
+ *   Level 1 (dx=4M, r<96M) covers r=50M — 4.2 pts per wavelength.
+ *   Reflections reach r=50M at t ≈ 206M >> T=100M.
  *   Analysis window: t=40M to 100M ≈ 3.6 clean QNM cycles.
- *   BAM uses 5 levels + spherical patch, dx=M/16, boundary 58.5M
- *   (arXiv:1212.2901). We use 6 Cartesian levels, dx=M/8 (6th-order FD
- *   compensates for 2× coarser grid vs BAM's 4th-order).
+ *   BAM uses β=2, 5 levels + spherical patch, dx=M/16, boundary 58.5M
+ *   (arXiv:1212.2901). We match dx_fine=M/16 with 6th-order FD.
  *
  * Output CSVs for plotting:
  *   build/qnm_pub_r30.csv     — Psi4 modes at r=30M
@@ -24,8 +25,8 @@
  *   build/qnm_pub_diag.csv    — constraints + lapse over time
  *
  * Estimated performance (H100 GPU):
- *   ~30-60 sec/step (6-level subcycling: 64 fine steps per base step)
- *   Total: ~50 base steps × 1 min ≈ 1 hr
+ *   ~1-2 min/step (7-level subcycling: 128 fine steps per base step)
+ *   Total: ~50 base steps × 2 min ≈ 2 hrs
  *
  * Ref: Leaver (1985), Berti et al. (2009, arXiv:0905.2975)
  * Ref: Hilditch et al. (2013, arXiv:1212.2901) — BAM single BH test
@@ -141,18 +142,23 @@ int main(void)
     printf("=== Schwarzschild QNM Ringdown — Publication Quality ===\n\n");
     backend_init();
 
-    /* --- Grid: L=256, 6 AMR levels, C=1.5, dx_fine = M/8 ---
+    /* --- Grid: L=256, 7 AMR levels, C=1.5, β=2, dx_fine = M/16 ---
      * dx_base = 256/32 = 8M.  Boundary at ±128M.
-     * C=1.5 (BAM-like): finest level covers ±1.5M around puncture.
-     * Level 2 (dx=2M) covers extraction radii r=30M, r=50M.
-     *   At r=30M: 8.4 pts per QNM wavelength (λ ≈ 16.8M).
+     * β=2 (BAM standard 2:1 nesting) extends refinement to wave zone.
+     * C=1.5: finest level covers ±1.5M around puncture.
+     * Level 2 (dx=2M, r<48M) covers r=30M: 8.4 pts per QNM wavelength.
+     * Level 1 (dx=4M, r<96M) covers r=50M: 4.2 pts per wavelength.
      * Reflections reach r=50M at t ≈ 128 + 78 = 206M >> T=100M.
-     * Analysis window: t=40M to 100M ≈ 3.6 clean QNM cycles. */
+     * Analysis window: t=40M to 100M ≈ 3.6 clean QNM cycles.
+     *
+     * Ref: BAM uses β=2 (standard), 5 levels, n=40, dx=M/16, r_out=58.5M
+     *      (arXiv:1212.2901, Hilditch et al. 2013). */
     int N_block = 32;
     double L = 256.0;
     double M_bh = 1.0;
-    int max_level = 6;
+    int max_level = 7;
     double refine_c = 1.5;     /* BAM-like: finest box covers ±1.5M */
+    double refine_beta = 2.0;  /* BAM standard 2:1 nesting (not 1.516) */
 
     mesh_t *m = mesh_create_ex(N_block, L, RK_CLASSIC, NUM_CCZ4_FIELDS);
     mesh_rebuild_neighbors(m);
@@ -171,14 +177,14 @@ int main(void)
     double dx_fine = p.dx / (1 << max_level);
     printf("  Grid: N_block=%d, L=%.0f, dx_base=%.3f, dx_fine=%.4f (M/%.0f)\n",
            N_block, L, p.dx, dx_fine, 1.0/dx_fine);
-    printf("  AMR: max_level=%d, C=%.1f, boundary=±%.0fM\n",
-           max_level, refine_c, L/2.0);
+    printf("  AMR: max_level=%d, C=%.1f, β=%.1f, boundary=±%.0fM\n",
+           max_level, refine_c, refine_beta, L/2.0);
     printf("  Time: dt=%.4f, T=100M, CFL=0.25\n", p.dt);
     printf("  Subcycling: %d fine steps per base step\n", 1 << max_level);
 
     /* --- Initial data with AMR --- */
     puncture_data_t bh = {.mass = M_bh, .center = {0, 0, 0}};
-    set_bowen_york_mesh_ex(m, 1, &bh, max_level, refine_c, p.amr.refine_beta);
+    set_bowen_york_mesh_ex(m, 1, &bh, max_level, refine_c, refine_beta);
     ghost_exchange(m);
 
     int n_leaves = mesh_num_leaves(m);
