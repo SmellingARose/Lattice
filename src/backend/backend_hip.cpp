@@ -56,8 +56,8 @@ extern "C" {
  * ======================================================================== */
 
 __constant__ int d_nbr_offset[26][3];                    /* 624 B  */
-__constant__ double d_restrict_w[6];                     /* 48 B   */
-__constant__ double d_restrict_wkj[6][6];                /* 288 B  */
+/* Restriction weight tables removed — trilinear (cell averaging) uses
+ * hardcoded 0.125 weight (1/8 for 2×2×2 fine cells per coarse cell). */
 __constant__ double d_prolong_w[7];                      /* 56 B   */
 __constant__ double d_prolong_wkj[4][7][7];              /* 1568 B */
 __constant__ double d_extrap_c[COARSE_BUF_GHOST][3];
@@ -130,10 +130,7 @@ void backend_init(void)
     /* Load constant memory */
     HIP_CHECK(hipMemcpyToSymbol(HIP_SYMBOL(d_nbr_offset), nbr_offset,
               sizeof(nbr_offset)));
-    HIP_CHECK(hipMemcpyToSymbol(HIP_SYMBOL(d_restrict_w), restrict_w,
-              sizeof(double) * RESTRICT_STENCIL));
-    HIP_CHECK(hipMemcpyToSymbol(HIP_SYMBOL(d_restrict_wkj), restrict_wkj,
-              sizeof(double) * RESTRICT_STENCIL * RESTRICT_STENCIL));
+    /* Restriction weights removed — trilinear uses hardcoded 0.125 */
     HIP_CHECK(hipMemcpyToSymbol(HIP_SYMBOL(d_prolong_w), prolong_w,
               sizeof(double) * PROLONG_STENCIL));
     HIP_CHECK(hipMemcpyToSymbol(HIP_SYMBOL(d_prolong_wkj), prolong_wkj,
@@ -563,23 +560,14 @@ void backend_upload_restrict_map(meshblock_pack_t *coarse_pack,
     }
 }
 
-/* 6th-order restriction with floor clamping: fine pack → buffer blocks.
+/* Trilinear restriction (cell averaging): fine pack → buffer blocks.
  * Each thread handles one coarse interior cell in a buffer block.
- * Uses restrict_w/restrict_wkj weights (6-point stencil, 216 fine cells).
- * Clamps chi and lapse to floor after restriction to prevent sub-floor
- * values from negative stencil weights near the puncture.
- *
- * 6th-order restriction matches the FD order — ExaHyPE (arXiv:2504.15814)
- * showed that restriction order must match FD order to avoid growing
- * Hamiltonian violations at AMR boundaries. 0th-order restriction with
- * 6th-order FD gives O(dx²) boundary error → exponential Ham growth.
- *
- * Reads from fine block interior + 2 cells into ghost zone (stencil
- * reaches fi_base-2 to fi_base+3). Ghost data is from the last RK4
- * stage's ghost exchange — stale by O(dt), acceptable.
+ * Averages 2×2×2 = 8 fine cells per coarse cell. All weights positive
+ * (1/8 each), no Gibbs oscillations near puncture singularities.
+ * No floor clamp needed — positive weights cannot produce sub-floor values.
  *
  * Ref: restriction.h restrict_cell (identical math).
- * Ref: ExaHyPE arXiv:2504.15814 — restriction order must match FD order. */
+ * Ref: GRChombo CoarseAverage — simple cell averaging is standard. */
 __global__ void hip_restrict_to_buffers(
     double *coarse_data,
     const double *fine_data,
@@ -618,26 +606,15 @@ __global__ void hip_restrict_to_buffers(
         const double *src = fine_data + (size_t)f * nb_f * npts_f
                           + (size_t)fine_blk * npts_f;
 
-        /* 6th-order restriction: tensor product of restrict_w[6] */
+        /* Trilinear (cell averaging): 2×2×2 = 8 fine cells */
         double val = 0.0;
-        for (int sk = 0; sk < 6; sk++) {
-            int fk = fk_base - 2 + sk;
-            for (int sj = 0; sj < 6; sj++) {
-                double wkj = d_restrict_wkj[sk][sj];
-                int fj = fj_base - 2 + sj;
-                for (int si = 0; si < 6; si++) {
-                    int fi = fi_base - 2 + si;
-                    val += wkj * d_restrict_w[si]
-                         * src[fi + fj * Nt + fk * Nt * Nt];
-                }
-            }
-        }
-
-        /* Floor clamp: negative stencil weights can produce sub-floor
-         * values near puncture where chi → 0. Clamp prevents discontinuity
-         * at buffer-leaf boundary → no exponential Ham growth. */
-        if (f == FIELD_CHI && val < 1.0e-4) val = 1.0e-4;
-        if (f == FIELD_LAPSE && val < 1.0e-4) val = 1.0e-4;
+        for (int dk = 0; dk < 2; dk++)
+            for (int dj = 0; dj < 2; dj++)
+                for (int di = 0; di < 2; di++)
+                    val += src[(fi_base+di)
+                             + (fj_base+dj) * Nt
+                             + (fk_base+dk) * Nt * Nt];
+        val *= 0.125;
 
         coarse_data[(size_t)f * nb_c * npts_c
                   + (size_t)buf_idx * npts_c
@@ -1235,19 +1212,15 @@ __global__ void hip_ghost_restrict(double *pk_data, double *coarse_data,
     for (int ci = ghost_c; ci < ck_hi; ci++) {
         int fi_base = 2 * (ci - ghost_c) + ghost_f;
 
+        /* Trilinear (cell averaging): 2×2×2 = 8 fine cells */
         double val = 0.0;
-        for (int sk = 0; sk < 6; sk++) {
-            int fk = fk_base - 2 + sk;
-            for (int sj = 0; sj < 6; sj++) {
-                double wkj = d_restrict_wkj[sk][sj];
-                int fj = fj_base - 2 + sj;
-                for (int si = 0; si < 6; si++) {
-                    int fi = fi_base - 2 + si;
-                    val += wkj * d_restrict_w[si]
-                        * src[fi + fj*Nt_f + fk*Nt_f*Nt_f];
-                }
-            }
-        }
+        for (int dk = 0; dk < 2; dk++)
+            for (int dj = 0; dj < 2; dj++)
+                for (int di = 0; di < 2; di++)
+                    val += src[(fi_base+di)
+                             + (fj_base+dj)*Nt_f
+                             + (fk_base+dk)*Nt_f*Nt_f];
+        val *= 0.125;
         dst[ci + cj*Nt_c + ck*Nt_c*Nt_c] = val;
     }
 }

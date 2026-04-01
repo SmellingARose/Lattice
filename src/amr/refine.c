@@ -205,11 +205,10 @@ int mesh_refine_block(mesh_t *m, int block_id)
  * Restrict one child's interior into the overlapping region of the parent.
  * Child at octant (cx,cy,cz) covers parent interior cells [cx*N/2, (cx+1)*N/2).
  *
- * 6th-order cell-average Lagrange restriction (restrict_w[] weights).
- * Stencil [base-2, base+3] always fits within [0, child_Nt) since
- * fi_base ∈ [ghost, ghost+N-2] and ghost=4 gives margin of 2 on each side.
+ * Trilinear restriction (cell averaging): 2×2×2 = 8 fine cells per coarse cell.
+ * All weights positive (1/8), no Gibbs oscillations near punctures.
  *
- * Ref: ExaHyPE (arXiv:2504.15814) — matching restriction to prolongation order
+ * Ref: GRChombo CoarseAverage — simple cell averaging is standard.
  */
 static void restrict_child_into_parent(const block_t *child, block_t *parent,
                                        int cx, int cy, int cz)
@@ -236,20 +235,14 @@ static void restrict_child_into_parent(const block_t *child, block_t *parent,
                     int fj_base = child_ghost + 2 * pj;
                     int fk_base = child_ghost + 2 * pk;
 
-                    /* 6th-order: 3D tensor product of 6-point stencil */
+                    /* Trilinear (cell averaging): 2×2×2 = 8 fine cells */
                     double val = 0.0;
-                    for (int sk = 0; sk < RESTRICT_STENCIL; sk++) {
-                        int fk = fk_base - 2 + sk;
-                        for (int sj = 0; sj < RESTRICT_STENCIL; sj++) {
-                            double wkj = restrict_w[sk] * restrict_w[sj];
-                            int fj = fj_base - 2 + sj;
-                            for (int si = 0; si < RESTRICT_STENCIL; si++) {
-                                int fi = fi_base - 2 + si;
-                                val += wkj * restrict_w[si] *
-                                       src[IDX(cg, fi, fj, fk)];
-                            }
-                        }
-                    }
+                    for (int dk = 0; dk < 2; dk++)
+                        for (int dj = 0; dj < 2; dj++)
+                            for (int di = 0; di < 2; di++)
+                                val += src[IDX(cg,
+                                    fi_base + di, fj_base + dj, fk_base + dk)];
+                    val *= 0.125;
 
                     int pii = ghost + p_off_i + pi;
                     int pjj = ghost + p_off_j + pj;

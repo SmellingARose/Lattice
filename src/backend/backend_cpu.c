@@ -654,20 +654,15 @@ static void packed_restrict_to_coarse(meshblock_pack_t *pack)
                     for (int ci = ghost_c; ci < ghost_c + N_c; ci++) {
                         int fi_base = 2 * (ci - ghost_c) + ghost_f;
 
-                        /* 6th-order: 6-point stencil */
+                        /* Trilinear (cell averaging): 2×2×2 = 8 fine cells */
                         double val = 0.0;
-                        for (int sk = 0; sk < RESTRICT_STENCIL; sk++) {
-                            int fk = fk_base - 2 + sk;
-                            for (int sj = 0; sj < RESTRICT_STENCIL; sj++) {
-                                double wkj = restrict_wkj[sk][sj];
-                                int fj = fj_base - 2 + sj;
-                                for (int si = 0; si < RESTRICT_STENCIL; si++) {
-                                    int fi = fi_base - 2 + si;
-                                    val += wkj * restrict_w[si]
-                                        * src[fi + fj*Nt_f + fk*Nt_f*Nt_f];
-                                }
-                            }
-                        }
+                        for (int dk = 0; dk < 2; dk++)
+                            for (int dj = 0; dj < 2; dj++)
+                                for (int di = 0; di < 2; di++)
+                                    val += src[(fi_base+di)
+                                             + (fj_base+dj)*Nt_f
+                                             + (fk_base+dk)*Nt_f*Nt_f];
+                        val *= 0.125;
                         dst[ci + cj*Nt_c + ck*Nt_c*Nt_c] = val;
                     }
                 }

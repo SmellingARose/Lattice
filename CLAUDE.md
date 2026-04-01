@@ -91,7 +91,9 @@ work on AMR meshes.
 
 **Phase 3 progress:**
 - **6th-order operators:** FD stencils, KO dissipation, AMR prolongation (7-point)
-  and restriction (6-point) all upgraded from 4th to 6th order. 6th-order off-grid
+  all upgraded from 4th to 6th order. Restriction changed from 6th-order Lagrange
+  to trilinear cell averaging (GRChombo match — positive weights only, no Gibbs
+  oscillations near puncture singularities). 6th-order off-grid
   Lagrange interpolation (7-point stencil, half-width 3). 4th-order Sommerfeld
   BCs. Quartic temporal interpolation for subcycling.
 - **Tier 1 optimizations (all complete):** LTO for CPU builds, fast-path `pow(lapse,1)`,
@@ -182,7 +184,7 @@ work on AMR meshes.
     interpolation. `hip_cross_level_ghost_fill` kernel reads from coarser
     pack. `gpu_ensure_level_packs()` builds packs + cross-level maps on
     first step or regrid. Post-subcycle restriction via GPU kernel:
-    6th-order restriction (matches FD order, per ExaHyPE arXiv:2504.15814)
+    Trilinear restriction (cell averaging, GRChombo match)
     with floor clamp (chi≥1e-4, lapse≥1e-4) to prevent sub-floor values
     from negative stencil weights near puncture. Ghost exchange on fine
     pack before restriction fills same-level ghosts for stencil reach.
@@ -261,7 +263,7 @@ work on AMR meshes.
   Lattice → `CceR####.h5` → SpECTRE `PreprocessCceWorldtube` → gauge-invariant
   strain at scri+. Optional dependency on libhdf5 (`make HDF5=on`). CLI: `--cce`,
   `--cce_every`, `--cce_radius`, `--cce_lmax`.
-- **AMR:** Block-structured Berger-Oliger with subcycling, Morton-ordered mesh, 6th-order prolongation/restriction, multi-level ghost exchange. AMR-aware 1D output slices and AH finder.
+- **AMR:** Block-structured Berger-Oliger with subcycling, Morton-ordered mesh, 6th-order prolongation, trilinear restriction (cell averaging), multi-level ghost exchange. AMR-aware 1D output slices and AH finder.
   Refinement radius per level uses equidistribution-optimal scaling:
   `r_k = C · M_p · β^k` where β = 2^(3/5) ≈ 1.516 (derived from equal
   truncation error at every level boundary for 6th-order FD on 1/r³ Riemann
@@ -380,7 +382,7 @@ lattice/
 │   │   ├── mesh.h / mesh.c     # mesh_t: collection of blocks forming domain
 │   │   ├── ghost_exchange.h/c  # 26-neighbor + multi-level ghost exchange
 │   │   ├── prolongation.h/c    # 6th-order Lagrange coarse→fine (AthenaK)
-│   │   ├── restriction.h/c     # 6th-order Lagrange fine→coarse restriction
+│   │   ├── restriction.h/c     # trilinear (cell averaging) fine→coarse restriction
 │   │   ├── criterion.h/c       # chi-gradient refinement criterion
 │   │   ├── refine.h/c          # oct-tree split/merge/regrid
 │   │   └── meshblock_pack.h/c  # GPU batch packing (AthenaK-style)

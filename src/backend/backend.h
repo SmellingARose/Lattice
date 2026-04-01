@@ -269,10 +269,10 @@ void backend_upload_cross_level_map(meshblock_pack_t *pack,
                                      const int *map, int count);
 
 /*
- * 6th-order restriction: fine pack → buffer blocks in coarse pack.
+ * Trilinear restriction (cell averaging): fine pack → buffer blocks in coarse pack.
  * Buffer blocks are non-leaf parents at [n_evolve, n_blocks) in coarse pack.
  * Each buffer block's 8 children are in the fine pack.
- * Uses restrict_w/restrict_wkj weights (same as CPU restriction).
+ * Averages 2×2×2 = 8 fine cells per coarse cell (all positive weights).
  * Requires fine ghost zones to be valid (call ghost_exchange + cross_level_fill first).
  * CPU backend: no-op (CPU path uses restrict_level_to_parents on mesh blocks).
  * Ref: AthenaK device-resident restriction.
