@@ -580,7 +580,7 @@ constant `GR_SPACEDIM = 3`.
 | `kappa1` | 0.1 | Constraint damping (Theta + Z_i). BAM uses 0.1, AthenaK uses 0.02. |
 | `kappa2` | 0.0 | Controls mix of Theta damping in K equation |
 | `kappa3` | 0.5 | Z contribution in Gamma equation. **kappa3=1 is UNSTABLE** with constant kappa1 (Alic 2013, arXiv:1307.7391). BAM/AthenaK/ET all use 0.5. GRChombo uses 1.0 but with kappa1/alpha prescription. |
-| `sigma` | 0.3 | Kreiss-Oliger dissipation strength |
+| `sigma` | 1.0 | Kreiss-Oliger dissipation strength (GRChombo default) |
 | `lapse_coeff` | 2.0 | Coefficient c in 1+log slicing: dt(alpha) = -c * alpha * (K - 2*Theta) |
 | `lapse_power` | 1.0 | Power p in Bona-Masso: f(alpha) = c * alpha^(p-2) |
 | `shift_Gamma_coeff` | 0.75 | F in dt(beta^i) = F * B^i |

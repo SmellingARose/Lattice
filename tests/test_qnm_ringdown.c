@@ -83,9 +83,10 @@ int main(void)
     /* AMR grid: N_block=32, L=64, 3 levels → dx_fine = 0.25M
      * Level 0: 1 block (32³), dx=2M.  Boundary at 32M.
      * Level 3: ~64 blocks (32³), dx=0.25M near puncture.
-     * dx=0.5M crashes at t≈20M (gauge instability). dx=0.25M is stable.
-     * CK45: 3 memory blocks (25% less than RK4 classic).
-     * Memory: ~120 blocks × 40³ × 25 × 3 × 8 ≈ 5.8 GB. */
+     * dx=0.5M crashes at t≈20M (gauge instability). dx=0.25M survives
+     * longer but still has growing constraint violations — puncture
+     * stability at fine dx remains an open issue.
+     * Memory: ~120 blocks × 40³ × 25 × 4 × 8 ≈ 7.7 GB (RK4 classic). */
     int N_block = 32;
     double L = 64.0;
     double M_bh = 1.0;

@@ -147,7 +147,7 @@ static inline sim_params_t default_params(void)
     p.CFL          = 0.25;
     p.num_steps    = 1000;
     p.output_every = 0;
-    p.sigma        = 0.3;
+    p.sigma        = 1.0;  /* GRChombo default (uniform, all fields) */
     p.rk_method    = RK_CLASSIC;
 
     p.dx = p.L / p.N;
@@ -180,13 +180,16 @@ static inline sim_params_t default_params(void)
     p.amr.refine_beta   = 1.5157165665103982;      /* 2^(3/5), optimal for 6th-order FD */
 
     /* Noise reduction defaults.
-     * CAKO, CAHD, per-field sigma, and SSL all enabled by default —
-     * standard production techniques (arXiv:2404.01137, Etienne 2024). */
-    p.noise.use_cako           = 1;
+     * All off by default — matches community standard practice.
+     * GRChombo uses uniform sigma=1.0, AthenaK uses 0.5, BAM uses 0.5.
+     * CAKO/SSL/CAHD/per-field sigma are from arXiv:2404.01137 (Etienne 2024)
+     * but not adopted by any other major NR code. Enable via CLI flags
+     * for advanced waveform extraction if needed. */
+    p.noise.use_cako           = 0;
     p.noise.cako_floor         = 0.04;  /* W_min = 0.2, σ_eff ≥ 20% of nominal */
-    p.noise.use_cahd           = 1;
-    p.noise.use_ssl            = 1;
-    p.noise.use_per_field_sigma = 1;
+    p.noise.use_cahd           = 0;
+    p.noise.use_ssl            = 0;
+    p.noise.use_per_field_sigma = 0;
     p.noise.sigma_gauge        = 0.99;
     p.noise.sigma_phys         = 0.3;
     p.noise.cahd_coeff         = 0.15;
