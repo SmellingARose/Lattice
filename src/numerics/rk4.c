@@ -447,7 +447,13 @@ static void step_level(mesh_t *m, const sim_params_t *p,
     /* Cross-level ghost fill (time-interpolated from coarser level).
      * Done on the mesh BEFORE using the per-level pack.
      * ghost_fill_from_coarser restricts all blocks first, then exchanges,
-     * so same-level neighbor coarse_bufs are always valid. */
+     * so same-level neighbor coarse_bufs are always valid.
+     *
+     * NOTE: CPU path fills cross-level ghosts once per step (here), not per
+     * RK4 stage. The GPU path (step_level_gpu) fills per-stage matching
+     * GRChombo/Chombo. For deep AMR hierarchies (7+ levels), per-stage fill
+     * prevents O(dt) ghost error from compounding across levels.
+     * CPU tests use ≤4 levels where once-per-step is sufficient. */
     if (level > 0)
         ghost_fill_from_coarser(m, level, frac);
 
@@ -487,6 +493,7 @@ static void step_level(mesh_t *m, const sim_params_t *p,
     } else {
         backend_copy_packed(pack, PACK_BUF_SCRATCH, PACK_BUF_DATA);
         backend_zero_packed(pack, PACK_BUF_ACCUM);
+        backend_zero_packed(pack, PACK_BUF_RHS);
 
         /* Stage 1 */
         backend_enforce_algebraic_packed(pack);
@@ -821,10 +828,19 @@ static void step_level_gpu(mesh_t *m, const sim_params_t *p,
     meshblock_pack_t *pack = m->level_packs[level];
     if (!pack) return;
 
-    /* Cross-level ghost fill entirely on device */
-    if (level > 0 && m->level_packs[level - 1])
-        backend_cross_level_ghost_fill_packed(
-            pack, m->level_packs[level - 1], frac);
+    /* Coarser level pack for per-stage cross-level ghost fill.
+     * GRChombo fills coarse-fine boundary ghosts at every RK4 sub-stage with
+     * temporally interpolated data at the sub-stage time (Chombo fillInterp).
+     * This prevents stale cross-level ghost data from accumulating O(dt) error
+     * across stages, which compounds exponentially through deep AMR hierarchies.
+     * Ref: arXiv:2112.10567 (GRChombo AMR lessons), Chombo TimeInterpolatorRK4. */
+    meshblock_pack_t *coarser = (level > 0) ? m->level_packs[level - 1] : NULL;
+
+    /* RK4 sub-stage time offsets within a single step: c_s = {0, 0.5, 0.5, 1.0}.
+     * Convert to coarse-time fraction: stage_frac = frac + c_s / refine_ratio.
+     * refine_ratio = 2 for oct-tree AMR (each level halves dx and dt). */
+    const int refine_ratio = 2;
+    const double inv_ratio = 1.0 / refine_ratio;
 
     /* Set global d_ptrs from this pack's device handle (no memcpy) */
     backend_activate_pack(pack);
@@ -838,28 +854,39 @@ static void step_level_gpu(mesh_t *m, const sim_params_t *p,
     backend_zero_packed(pack, PACK_BUF_ACCUM);
     backend_zero_packed(pack, PACK_BUF_RHS);
 
-    /* Stage 1 */
+    /* Stage 1: evaluate at t (c=0) */
+    if (coarser)
+        backend_cross_level_ghost_fill_packed(pack, coarser, frac);
     backend_enforce_algebraic_packed(pack);
     backend_ghost_exchange_packed(pack);
     backend_compute_rhs_packed(pack, p);
     backend_sommerfeld_packed(pack, p);
     backend_rk4_stage_packed(pack, 1.0/6.0, 0.5, dt_level);
 
-    /* Stage 2 */
+    /* Stage 2: evaluate at t + dt/2 (c=0.5) */
+    if (coarser)
+        backend_cross_level_ghost_fill_packed(pack, coarser,
+                                              frac + 0.5 * inv_ratio);
     backend_enforce_algebraic_packed(pack);
     backend_ghost_exchange_packed(pack);
     backend_compute_rhs_packed(pack, p);
     backend_sommerfeld_packed(pack, p);
     backend_rk4_stage_packed(pack, 1.0/3.0, 0.5, dt_level);
 
-    /* Stage 3 */
+    /* Stage 3: evaluate at t + dt/2 (c=0.5) */
+    if (coarser)
+        backend_cross_level_ghost_fill_packed(pack, coarser,
+                                              frac + 0.5 * inv_ratio);
     backend_enforce_algebraic_packed(pack);
     backend_ghost_exchange_packed(pack);
     backend_compute_rhs_packed(pack, p);
     backend_sommerfeld_packed(pack, p);
     backend_rk4_stage_packed(pack, 1.0/3.0, 1.0, dt_level);
 
-    /* Stage 4 */
+    /* Stage 4: evaluate at t + dt (c=1.0) */
+    if (coarser)
+        backend_cross_level_ghost_fill_packed(pack, coarser,
+                                              frac + 1.0 * inv_ratio);
     backend_enforce_algebraic_packed(pack);
     backend_ghost_exchange_packed(pack);
     backend_compute_rhs_packed(pack, p);
@@ -938,6 +965,7 @@ static void subcycle_level_gpu(mesh_t *m, const sim_params_t *p,
              * FD order to avoid Ham violations at AMR boundaries. */
             backend_activate_pack(fpk);
             backend_ghost_exchange_packed(fpk);
+            backend_cross_level_ghost_fill_packed(fpk, cpk, 1.0);
             backend_restrict_to_buffers_packed(fpk, cpk);
         }
     }

@@ -3,6 +3,42 @@
 > **Note:** When adding/removing/renaming files or functions, also update
 > `docs/architecture.html` — the living map of the codebase structure.
 
+## 2026-04-01: AMR subcycling bug fixes + per-stage cross-level ghost fill
+
+**Three fixes for deep AMR hierarchy stability (7+ levels):**
+
+Discovered while running QNM publication test (L=256, 7 AMR levels, β=2,
+dx_fine=M/16) on H100. Constraint violations at L7 grew exponentially and
+crashed at t≈14M. Other codes (GRChombo, BAM) handle this fine.
+
+**1. CPU `step_level`: missing RHS buffer zeroing.**
+`backend_zero_packed(pack, PACK_BUF_RHS)` was present in GPU path but missing
+in CPU path. `compute_rhs_packed` only writes interior cells `[ghost, ghost+N)`.
+Ghost-zone RHS retained stale values from previous step, corrupting cross-level
+boundaries via `rk4_stage: data = scratch + c*dt*stale_rhs`.
+
+**2. GPU `subcycle_level_gpu`: missing cross-level ghost fill before restriction.**
+Post-subcycle restriction sequence was: ghost_exchange (same-level only) →
+restrict. Missing: cross-level ghost fill from coarser pack. The 6th-order
+restriction stencil reads 2 cells into ghost zones — without fresh cross-level
+data, stale ghost values produced incorrect restricted values at refinement
+boundaries, compounding across 7 nested levels.
+
+**3. Per-RK4-stage cross-level ghost fill (GRChombo match).**
+The critical architectural difference: GRChombo fills coarse-fine boundary
+ghosts at every RK4 sub-stage via Chombo's `fillInterp()`, temporally
+interpolated to the sub-stage time. Our code filled once per step. With 7
+levels, O(dt) ghost error at each stage compounded exponentially through the
+hierarchy. Now `step_level_gpu` calls `backend_cross_level_ghost_fill_packed`
+at each stage with `frac + c_s / refine_ratio` (c_s = {0, 0.5, 0.5, 1.0}).
+Adds ~7 kernel launches per stage × 4 stages per step, but each is small.
+
+Ref: arXiv:2112.10567 (GRChombo AMR lessons), Chombo TimeInterpolatorRK4.
+
+CPU path note: per-stage fill not yet implemented for CPU (the CPU backend's
+`backend_cross_level_ghost_fill_packed` is a stub). CPU tests use ≤4 levels
+where once-per-step fill is sufficient. GPU path is production.
+
 ## 2026-03-28: GPU-native restriction + kappa3 fix
 
 **Two critical fixes for stable single-BH AMR evolution:**

@@ -298,7 +298,19 @@ work on AMR meshes.
   integer `sub_step` parameter (latent bug in long-duration runs). Old AMR composite
   multigrid cross-level ghost corruption bug eliminated by design — the covering grid
   solver has no inter-block ghost exchange during MG (each level solved on a single
-  contiguous grid).
+  contiguous grid). CPU `step_level` missing `backend_zero_packed(RHS)` — stale
+  ghost-zone RHS corrupted cross-level boundaries during RK4 stages. GPU
+  `subcycle_level_gpu` missing cross-level ghost fill before post-subcycle
+  restriction — 6th-order restriction stencil read stale ghost data at
+  refinement boundaries.
+- **Per-stage cross-level ghost fill (GRChombo match):** GPU `step_level_gpu` now
+  fills coarse-fine boundary ghosts at every RK4 sub-stage with temporally
+  interpolated data at the correct sub-stage time (`frac + c_s / refine_ratio`,
+  where c_s = {0, 0.5, 0.5, 1.0} for classic RK4). Matches GRChombo/Chombo's
+  `fillInterp()` pattern. Prevents O(dt) ghost error from compounding across
+  deep AMR hierarchies (7+ levels). Without per-stage fill, constraint violations
+  grew exponentially at finest levels and crashed at t≈14M with 7 AMR levels.
+  Ref: arXiv:2112.10567 (GRChombo AMR lessons), Chombo TimeInterpolatorRK4.
 - **Default integrator:** Changed from CK45 to classic RK4 (`RK_CLASSIC`). Classic is
   faster (4 stages vs 5) but uses 25% more memory. All test allocations updated.
 - **Tests:** Flat spacetime, convergence (order 6.5), Bowen-York (33/33 + N-body),
