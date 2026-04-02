@@ -85,30 +85,32 @@ typedef struct block_s {
     int      on_boundary[6];       /* 1 if face touches domain boundary        */
                                    /* [0]=x-, [1]=x+, [2]=y-, [3]=y+, [4]=z-, [5]=z+ */
 
-    /* Subcycling (Berger-Oliger) state for temporal interpolation.
+    /* Subcycling (Berger-Oliger) state for cubic Taylor temporal interpolation.
      *
-     * 4th-order quartic interpolation through 5 constraints:
-     *   p(0) = U_n (fields_old), p(1) = U_{n+1} (fields), p(-1) = U_{n-1} (fields_older)
-     *   p'(0) = dt*F_n (rhs_old), p'(-1) = dt*F_{n-1} (rhs_older)
+     * Chombo TimeInterpolatorRK4 pattern: during each RK4 stage on the coarse
+     * level, accumulate 3 Taylor coefficient buffers from the stage's RHS.
+     * Finer levels evaluate: U(θ) = U_n + θ*(a1 + θ*(a2 + θ*a3))
      *
-     * Ramps up: step 0 → copy (no data), step 1 → linear, step 2+ → quartic.
+     * Coefficient matrix (coeffs[term][stage], each × dt × k_s):
+     *   a1:  { 1,      0,      0,      0     }
+     *   a2:  {-3/2,    1,      1,     -1/2   }
+     *   a3:  { 2/3,   -2/3,   -2/3,    2/3   }
+     *
+     * At θ=0: U_n. At θ=1: U_n + dt/6*(k1+2k2+2k3+k4) = U_{n+1}.
+     * 3rd-degree polynomial, O(dt⁴) accurate.
+     *
      * Only allocated for leaf blocks at level < max_level.
      *
-     * Ref: Chombo AMRLevel::m_old_data / m_new_data pattern.
-     * Ref: Athena++ MeshRefinement::ProlongateBoundaries time interp. */
+     * Ref: Chombo TimeInterpolatorRK4.cpp, GRChombo GRAMRLevel.cpp. */
     double   time;                 /* simulation time this block is at          */
-    int      interp_order;         /* 0=copy, 1=linear, 4=quartic              */
     double   time_old;             /* time at t_n (before current step)         */
-    double   dt_old;               /* dt used for step n-1 → n                 */
 
-    double  *fields_old[NUM_FIELDS]; /* state at t_n                           */
+    double  *fields_old[NUM_FIELDS]; /* state U_n at start of step             */
     double  *fields_old_block;     /* contiguous backing allocation             */
-    double  *fields_older[NUM_FIELDS]; /* state at t_{n-1}                     */
-    double  *fields_older_block;   /* contiguous backing allocation             */
-    double  *rhs_old[NUM_FIELDS];  /* dU/dt at t_n (k1 from step n → n+1)     */
-    double  *rhs_old_block;        /* contiguous backing allocation             */
-    double  *rhs_older[NUM_FIELDS]; /* dU/dt at t_{n-1}                        */
-    double  *rhs_older_block;      /* contiguous backing allocation             */
+    double  *taylor_a1[NUM_FIELDS];  /* cubic Taylor coefficient a1            */
+    double  *taylor_a2[NUM_FIELDS];  /* cubic Taylor coefficient a2            */
+    double  *taylor_a3[NUM_FIELDS];  /* cubic Taylor coefficient a3            */
+    double  *taylor_block;         /* contiguous backing for a1+a2+a3          */
 } block_t;
 
 /* Physical coordinate of grid point i in direction dir within a block.
@@ -137,10 +139,11 @@ block_t *block_alloc(int id, int level, int N_block, double dx,
 void block_free(block_t *b);
 
 /*
- * Allocate fields_old + fields_older + rhs_old + rhs_older arrays for
- * 4th-order temporal interpolation (subcycling).
- * Only needed for leaf blocks at level < max_level.
+ * Allocate fields_old + Taylor coefficient arrays for cubic temporal
+ * interpolation (subcycling). Only needed for leaf blocks at level < max_level.
  * No-op if already allocated.
+ *
+ * Ref: Chombo TimeInterpolatorRK4.
  */
 void block_alloc_fields_old(block_t *b);
 
@@ -148,35 +151,36 @@ void block_alloc_fields_old(block_t *b);
 void block_free_fields_old(block_t *b);
 
 /*
- * Rotate time history and save current fields → fields_old.
+ * Save current fields → fields_old and zero Taylor coefficient buffers.
  * Called before advancing a level so finer levels can time-interpolate.
  *
- * Rotation: fields_older ← fields_old (pointer swap)
- *           rhs_older ← rhs_old (pointer swap)
- *           fields_old ← current fields (memcpy)
- *           interp_order ramps: 0 → 1 → 4
- *
- * Ref: Chombo AMRLevel m_old_data save pattern.
+ * Ref: Chombo TimeInterpolatorRK4::setDt + saveInitialSoln.
  */
 void block_save_old(block_t *b);
 
 /*
- * Save RHS (k1) into rhs_old for temporal interpolation.
- * Called after RK4 Stage 1 RHS evaluation with beginning-of-step data.
- * The caller provides the RHS array (from pack or grid).
+ * Accumulate RK4 stage RHS into Taylor coefficient buffers.
+ * Called after each stage's RHS + BC evaluation.
+ *
+ * Chombo coefficient matrix (coeffs[term][stage] × dt):
+ *   a1:  { 1,      0,      0,      0     }
+ *   a2:  {-3/2,    1,      1,     -1/2   }
+ *   a3:  { 2/3,   -2/3,   -2/3,    2/3   }
+ *
+ * Ref: Chombo TimeInterpolatorRK4::saveRHS.
  */
-void block_save_rhs_old(block_t *b, const double *const *rhs_src, size_t npoints);
+void block_accumulate_taylor(block_t *b, const double *const *rhs_src,
+                              int stage, double dt, size_t npoints);
 
 /*
- * Multi-order time interpolation between saved time levels.
- *   interp_order == 0: copy fields_old (no interpolation)
- *   interp_order == 1: linear (1st-order)
- *   interp_order == 4: quartic (4th-order, using 5 constraints)
+ * Cubic Taylor temporal interpolation (Horner form).
+ * U(θ) = U_n + θ*(a1 + θ*(a2 + θ*a3))
  *
  * frac in [0,1]: 0 = old state (t_n), 1 = new state (t_{n+1}).
+ * When Taylor buffers are zero (first step), gives U_n (0th-order copy).
  * Writes into the provided out[] array (caller-owned, same layout as fields[]).
  *
- * Ref: Athena++ MeshRefinement::ProlongateBoundaries temporal interpolation.
+ * Ref: Chombo TimeInterpolatorRK4::intermediate (Horner evaluation).
  */
 void block_time_interp(const block_t *b, double frac,
                         double *out[], size_t npoints);

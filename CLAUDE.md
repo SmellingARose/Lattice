@@ -95,7 +95,9 @@ work on AMR meshes.
   to trilinear cell averaging (GRChombo match — positive weights only, no Gibbs
   oscillations near puncture singularities). 6th-order off-grid
   Lagrange interpolation (7-point stencil, half-width 3). 4th-order Sommerfeld
-  BCs. Quartic temporal interpolation for subcycling.
+  BCs. Cubic Taylor temporal interpolation for subcycling (Chombo
+  TimeInterpolatorRK4 match — 3rd-degree polynomial from all 4 RK4
+  stages, O(dt⁴) accurate, Horner evaluation).
 - **Tier 1 optimizations (all complete):** LTO for CPU builds, fast-path `pow(lapse,1)`,
   `restrict` qualifiers on RHS pointers, skip EM fields in dissipation/Sommerfeld,
   OMP-parallelized packed ghost exchange, flattened RK4 update loops (single OMP
@@ -180,9 +182,10 @@ work on AMR meshes.
     ~465 hipMalloc/hipFree calls per global step.
   - *GPU AMR subcycling with device-resident restriction:*
     `step_level_gpu()` / `subcycle_level_gpu()` in `rk4.c` run RK4
-    evolution on device. `fields_old` buffer for linear temporal
-    interpolation. `hip_cross_level_ghost_fill` kernel reads from coarser
-    pack. `gpu_ensure_level_packs()` builds packs + cross-level maps on
+    evolution on device. Cubic Taylor temporal interpolation (Chombo
+    TimeInterpolatorRK4 match): 3 Taylor coefficient buffers per parent
+    pack, accumulated from each RK4 stage's RHS, Horner evaluation in
+    `hip_cross_level_ghost_fill` kernel. `gpu_ensure_level_packs()` builds packs + cross-level maps on
     first step or regrid. Post-subcycle restriction via GPU kernel:
     Trilinear restriction (cell averaging, GRChombo match)
     with floor clamp (chi≥1e-4, lapse≥1e-4) to prevent sub-floor values
@@ -305,13 +308,15 @@ work on AMR meshes.
   `subcycle_level_gpu` missing cross-level ghost fill before post-subcycle
   restriction — 6th-order restriction stencil read stale ghost data at
   refinement boundaries.
-- **Per-stage cross-level ghost fill (GRChombo match):** GPU `step_level_gpu` now
-  fills coarse-fine boundary ghosts at every RK4 sub-stage with temporally
-  interpolated data at the correct sub-stage time (`frac + c_s / refine_ratio`,
-  where c_s = {0, 0.5, 0.5, 1.0} for classic RK4). Matches GRChombo/Chombo's
-  `fillInterp()` pattern. Prevents O(dt) ghost error from compounding across
-  deep AMR hierarchies (7+ levels). Without per-stage fill, constraint violations
-  grew exponentially at finest levels and crashed at t≈14M with 7 AMR levels.
+- **Per-stage cross-level ghost fill (GRChombo match):** Both CPU `step_level` and
+  GPU `step_level_gpu` now fill coarse-fine boundary ghosts at every RK4 sub-stage
+  with temporally interpolated data at the correct sub-stage time
+  (`frac + c_s / refine_ratio`, where c_s = {0, 0.5, 0.5, 1.0} for classic RK4).
+  Uses cubic Taylor temporal interpolation (Chombo TimeInterpolatorRK4): Taylor
+  coefficient buffers (a1, a2, a3) accumulated from each RK4 stage's RHS,
+  evaluated via Horner form `U(θ) = U_n + θ*(a1 + θ*(a2 + θ*a3))`.
+  Post-subcycle restriction followed by coarse ghost re-exchange (GRChombo
+  `postTimeStep` → `averageToCoarse` → `fillBdyGhosts` pattern).
   Ref: arXiv:2112.10567 (GRChombo AMR lessons), Chombo TimeInterpolatorRK4.
 - **Default integrator:** Changed from CK45 to classic RK4 (`RK_CLASSIC`). Classic is
   faster (4 stages vs 5) but uses 25% more memory. All test allocations updated.

@@ -324,26 +324,34 @@ static void classic_rk4_step_mesh_packed(mesh_t *m, const sim_params_t *p,
  * ======================================================================== */
 
 /*
- * Save k1 (Stage 1 RHS) from pack into blocks' rhs_old for quartic
- * temporal interpolation. Called after Stage 1 RHS + Sommerfeld,
- * before Stage 2 overwrites the pack's RHS buffer.
+ * Accumulate RK4 stage RHS from pack into per-block Taylor coefficient
+ * buffers for cubic temporal interpolation. Called after each stage's
+ * RHS + BCs are applied.
  *
- * Only copies for blocks that have rhs_old allocated (level < max_level).
- * Ref: Quartic temporal prolongation design (tools/compute_amr_weights.py).
+ * Only accumulates for blocks that have Taylor buffers allocated
+ * (level < max_level). Reads from the pack's RHS buffer which has
+ * the current stage's right-hand side.
+ *
+ * Ref: Chombo TimeInterpolatorRK4::saveRHS coefficient accumulation.
  */
-static void save_k1_from_pack(const meshblock_pack_t *pack, block_t **blocks)
+static void accumulate_taylor_from_pack(const meshblock_pack_t *pack,
+                                         block_t **blocks,
+                                         int stage, double dt)
 {
     for (int b = 0; b < pack->n_blocks; b++) {
         block_t *blk = blocks[pack->block_ids[b]];
-        if (!blk->rhs_old_block) continue;
+        if (!blk->taylor_block) continue;
 
         size_t npts = pack->npts;
-        for (int f = 0; f < pack->n_fields; f++) {
-            size_t src_off = (size_t)f * pack->n_blocks * npts
-                           + (size_t)b * npts;
-            memcpy(blk->rhs_old[f], pack->rhs + src_off,
-                   npts * sizeof(double));
-        }
+        int nf = pack->n_fields;
+
+        /* Build per-field RHS pointer array from pack layout */
+        const double *rhs_ptrs[NUM_FIELDS];
+        for (int f = 0; f < nf; f++)
+            rhs_ptrs[f] = pack->rhs + (size_t)f * pack->n_blocks * npts
+                         + (size_t)b * npts;
+
+        block_accumulate_taylor(blk, rhs_ptrs, stage, dt, npts);
     }
 }
 
@@ -444,19 +452,6 @@ static void mesh_save_old_level(mesh_t *m, int level)
 static void step_level(mesh_t *m, const sim_params_t *p,
                         int level, double dt_level, double frac)
 {
-    /* Cross-level ghost fill (time-interpolated from coarser level).
-     * Done on the mesh BEFORE using the per-level pack.
-     * ghost_fill_from_coarser restricts all blocks first, then exchanges,
-     * so same-level neighbor coarse_bufs are always valid.
-     *
-     * NOTE: CPU path fills cross-level ghosts once per step (here), not per
-     * RK4 stage. The GPU path (step_level_gpu) fills per-stage matching
-     * GRChombo/Chombo. For deep AMR hierarchies (7+ levels), per-stage fill
-     * prevents O(dt) ghost error from compounding across levels.
-     * CPU tests use ≤4 levels where once-per-step is sufficient. */
-    if (level > 0)
-        ghost_fill_from_coarser(m, level, frac);
-
     /* Get or rebuild cached level pack */
     if (level < MAX_AMR_LEVELS &&
         m->level_packs[level] && !m->packs_dirty) {
@@ -480,6 +475,12 @@ static void step_level(mesh_t *m, const sim_params_t *p,
 
     backend_map_pack(pack, p);
 
+    /* RK4 sub-stage time offsets for per-stage cross-level ghost fill.
+     * stage_frac = frac + c_s / refine_ratio.
+     * Ref: GRChombo evalRHS → fillInterp at each sub-stage. */
+    const double c_s[4] = {0.0, 0.5, 0.5, 1.0};
+    const double inv_ratio = 0.5;  /* 1/refine_ratio, refine_ratio=2 */
+
     if (p->rk_method == RK_CK45) {
         backend_zero_packed(pack, PACK_BUF_SCRATCH);
         for (int s = 0; s < 5; s++) {
@@ -487,7 +488,6 @@ static void step_level(mesh_t *m, const sim_params_t *p,
             backend_ghost_exchange_packed(pack);
             backend_compute_rhs_packed(pack, p);
             backend_sommerfeld_packed(pack, p);
-            if (s == 0) save_k1_from_pack(pack, m->blocks);
             backend_update_ck45_packed(pack, CK_A[s], CK_B[s], dt_level);
         }
     } else {
@@ -495,33 +495,64 @@ static void step_level(mesh_t *m, const sim_params_t *p,
         backend_zero_packed(pack, PACK_BUF_ACCUM);
         backend_zero_packed(pack, PACK_BUF_RHS);
 
-        /* Stage 1 */
+        /* Stage 1: evaluate at t (c=0) */
+        if (level > 0) {
+            meshblock_pack_sync_to_blocks(pack, m->blocks);
+            ghost_fill_from_coarser(m, level, frac + c_s[0] * inv_ratio);
+            meshblock_pack_sync_from_blocks(pack, m->blocks);
+            if (pack->n_refined > 0)
+                meshblock_pack_load_coarse(pack, m->blocks);
+        }
         backend_enforce_algebraic_packed(pack);
         backend_ghost_exchange_packed(pack);
         backend_compute_rhs_packed(pack, p);
         backend_sommerfeld_packed(pack, p);
-        save_k1_from_pack(pack, m->blocks);
+        accumulate_taylor_from_pack(pack, m->blocks, 0, dt_level);
         backend_rk4_stage_packed(pack, 1.0/6.0, 0.5, dt_level);
 
-        /* Stage 2 */
+        /* Stage 2: evaluate at t + dt/2 (c=0.5) */
+        if (level > 0) {
+            meshblock_pack_sync_to_blocks(pack, m->blocks);
+            ghost_fill_from_coarser(m, level, frac + c_s[1] * inv_ratio);
+            meshblock_pack_sync_from_blocks(pack, m->blocks);
+            if (pack->n_refined > 0)
+                meshblock_pack_load_coarse(pack, m->blocks);
+        }
         backend_enforce_algebraic_packed(pack);
         backend_ghost_exchange_packed(pack);
         backend_compute_rhs_packed(pack, p);
         backend_sommerfeld_packed(pack, p);
+        accumulate_taylor_from_pack(pack, m->blocks, 1, dt_level);
         backend_rk4_stage_packed(pack, 1.0/3.0, 0.5, dt_level);
 
-        /* Stage 3 */
+        /* Stage 3: evaluate at t + dt/2 (c=0.5) */
+        if (level > 0) {
+            meshblock_pack_sync_to_blocks(pack, m->blocks);
+            ghost_fill_from_coarser(m, level, frac + c_s[2] * inv_ratio);
+            meshblock_pack_sync_from_blocks(pack, m->blocks);
+            if (pack->n_refined > 0)
+                meshblock_pack_load_coarse(pack, m->blocks);
+        }
         backend_enforce_algebraic_packed(pack);
         backend_ghost_exchange_packed(pack);
         backend_compute_rhs_packed(pack, p);
         backend_sommerfeld_packed(pack, p);
+        accumulate_taylor_from_pack(pack, m->blocks, 2, dt_level);
         backend_rk4_stage_packed(pack, 1.0/3.0, 1.0, dt_level);
 
-        /* Stage 4 */
+        /* Stage 4: evaluate at t + dt (c=1.0) */
+        if (level > 0) {
+            meshblock_pack_sync_to_blocks(pack, m->blocks);
+            ghost_fill_from_coarser(m, level, frac + c_s[3] * inv_ratio);
+            meshblock_pack_sync_from_blocks(pack, m->blocks);
+            if (pack->n_refined > 0)
+                meshblock_pack_load_coarse(pack, m->blocks);
+        }
         backend_enforce_algebraic_packed(pack);
         backend_ghost_exchange_packed(pack);
         backend_compute_rhs_packed(pack, p);
         backend_sommerfeld_packed(pack, p);
+        accumulate_taylor_from_pack(pack, m->blocks, 3, dt_level);
         backend_rk4_final_packed(pack, 1.0/6.0, dt_level);
     }
 
@@ -746,6 +777,12 @@ static void gpu_ensure_level_packs(mesh_t *m, const sim_params_t *p)
         }
     }
 
+    /* Set has_children flag for Taylor buffer allocation on GPU */
+    for (int L = 0; L <= m->max_level; L++) {
+        if (m->level_packs[L])
+            m->level_packs[L]->has_children = (L < m->max_level) ? 1 : 0;
+    }
+
     /* Build cross-level maps for levels > 0 */
     for (int L = 1; L <= m->max_level; L++) {
         if (m->level_packs[L] && m->level_packs[L-1] &&
@@ -861,6 +898,7 @@ static void step_level_gpu(mesh_t *m, const sim_params_t *p,
     backend_ghost_exchange_packed(pack);
     backend_compute_rhs_packed(pack, p);
     backend_sommerfeld_packed(pack, p);
+    backend_taylor_accumulate_packed(pack, 0, dt_level);
     backend_rk4_stage_packed(pack, 1.0/6.0, 0.5, dt_level);
 
     /* Stage 2: evaluate at t + dt/2 (c=0.5) */
@@ -871,6 +909,7 @@ static void step_level_gpu(mesh_t *m, const sim_params_t *p,
     backend_ghost_exchange_packed(pack);
     backend_compute_rhs_packed(pack, p);
     backend_sommerfeld_packed(pack, p);
+    backend_taylor_accumulate_packed(pack, 1, dt_level);
     backend_rk4_stage_packed(pack, 1.0/3.0, 0.5, dt_level);
 
     /* Stage 3: evaluate at t + dt/2 (c=0.5) */
@@ -881,6 +920,7 @@ static void step_level_gpu(mesh_t *m, const sim_params_t *p,
     backend_ghost_exchange_packed(pack);
     backend_compute_rhs_packed(pack, p);
     backend_sommerfeld_packed(pack, p);
+    backend_taylor_accumulate_packed(pack, 2, dt_level);
     backend_rk4_stage_packed(pack, 1.0/3.0, 1.0, dt_level);
 
     /* Stage 4: evaluate at t + dt (c=1.0) */
@@ -891,6 +931,7 @@ static void step_level_gpu(mesh_t *m, const sim_params_t *p,
     backend_ghost_exchange_packed(pack);
     backend_compute_rhs_packed(pack, p);
     backend_sommerfeld_packed(pack, p);
+    backend_taylor_accumulate_packed(pack, 3, dt_level);
     backend_rk4_final_packed(pack, 1.0/6.0, dt_level);
 
     backend_enforce_algebraic_packed(pack);
@@ -967,6 +1008,17 @@ static void subcycle_level_gpu(mesh_t *m, const sim_params_t *p,
             backend_ghost_exchange_packed(fpk);
             backend_cross_level_ghost_fill_packed(fpk, cpk, 1.0);
             backend_restrict_to_buffers_packed(fpk, cpk);
+
+            /* Post-restriction coarse ghost exchange.
+             * Restriction just wrote into coarse buffer blocks. Coarse leaf
+             * blocks bordering those buffers need updated ghost zones.
+             * Without this, ghosts contain pre-restriction data → O(dt) error
+             * that compounds through deep AMR hierarchies.
+             *
+             * Ref: GRChombo postTimeStep → averageToCoarse → fillBdyGhosts. */
+            backend_activate_pack(cpk);
+            backend_ghost_exchange_packed(cpk);
+            backend_enforce_algebraic_packed(cpk);
         }
     }
 }

@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Lattice vs. Production NR Codes — Comprehensive Comparison</title>
+<style>
+body { font-family: Georgia, serif; max-width: 960px; margin: 40px auto; padding: 0 20px; line-height: 1.6; color: #333; }
+h1 { border-bottom: 2px solid #333; padding-bottom: 10px; }
+h2 { color: #444; margin-top: 40px; border-bottom: 1px solid #ccc; padding-bottom: 5px; }
+h3 { color: #555; }
+table { border-collapse: collapse; width: 100%; margin: 15px 0; font-size: 14px; }
+th, td { border: 1px solid #ccc; padding: 6px 10px; text-align: left; }
+th { background: #f5f5f5; font-weight: bold; }
+tr:nth-child(even) { background: #fafafa; }
+code { background: #f0f0f0; padding: 1px 4px; border-radius: 3px; font-size: 13px; }
+pre { background: #f5f5f5; padding: 12px; border-radius: 4px; overflow-x: auto; font-size: 13px; }
+.match { color: #2a7; font-weight: bold; }
+.exceed { color: #27a; font-weight: bold; }
+.short { color: #a52; font-weight: bold; }
+.unique { color: #72a; font-weight: bold; }
+</style>
+</head>
+<body>
+
+<h1>Lattice vs. Production NR Codes</h1>
+<p><em>Last updated: 2026-04-02. Post cubic Taylor temporal interpolation implementation.</em></p>
+
+<p>Comprehensive comparison of Lattice's numerical methods and architecture against
+all major production numerical relativity codes. Covers accuracy-critical choices
+in AMR subcycling, finite differences, boundary conditions, temporal interpolation,
+initial data, and GPU acceleration.</p>
+
+<p>Codes compared: GRChombo (Chombo), BAM, SpEC, CarpetX/Einstein Toolkit (AMReX),
+AthenaK (Kokkos), Dendro-GR (wavelet), NRPy+ (code generation), Lean (Carpet).</p>
+
+<h2>1. Formulation</h2>
+<table>
+<tr><th>Code</th><th>Formulation</th><th>Notes</th></tr>
+<tr><td><strong>Lattice</strong></td><td>CCZ4</td><td>arXiv:1106.2254. 25 CCZ4 + 6 optional EM fields = 31 total.</td></tr>
+<tr><td>GRChombo</td><td>CCZ4</td><td>Same formulation. Primary reference implementation.</td></tr>
+<tr><td>BAM</td><td>CCZ4</td><td>Same. Reference for constraint damping parameters.</td></tr>
+<tr><td>SpEC</td><td>Generalized Harmonic</td><td>Fundamentally different: spectral methods, elliptic gauge.</td></tr>
+<tr><td>CarpetX</td><td>Z4c / BSSN / CCZ4</td><td>Z4c default. Drops covariant Theta.</td></tr>
+<tr><td>AthenaK</td><td>Z4c</td><td>Bernuzzi &amp; Hilditch (2010) variant.</td></tr>
+<tr><td>Dendro-GR</td><td>BSSN</td><td>No Z4 constraint damping.</td></tr>
+<tr><td>NRPy+</td><td>BSSN / Z4c</td><td>Code-generated. BSSN primary.</td></tr>
+<tr><td>Lean</td><td>BSSN</td><td>Traditional BSSN with Carpet.</td></tr>
+</table>
+
+<h2>2. Finite Difference Order</h2>
+<table>
+<tr><th>Code</th><th>Default Order</th><th>Options</th></tr>
+<tr><td><strong>Lattice</strong></td><td><strong>6th</strong></td><td>4th via <code>FD_ORDER=4</code>. Fused d1/d2 stencil.</td></tr>
+<tr><td>GRChombo</td><td>4th</td><td>6th available but less tested.</td></tr>
+<tr><td>BAM</td><td>6th</td><td>4th, 6th, 8th configurable.</td></tr>
+<tr><td>SpEC</td><td>Spectral</td><td>Exponential convergence.</td></tr>
+<tr><td>CarpetX</td><td>4th</td><td>8th via <code>ML_CCZ4_O8</code>.</td></tr>
+<tr><td>AthenaK</td><td>4th</td><td>6th available.</td></tr>
+<tr><td>Dendro-GR</td><td>4th-6th</td><td>Wavelet-dependent.</td></tr>
+<tr><td>NRPy+</td><td>4th</td><td>Arbitrary (code-generated). Up to 10th.</td></tr>
+<tr><td>Lean</td><td>4th</td><td>Fixed.</td></tr>
+</table>
+
+<h2>3. Prolongation (Coarse &rarr; Fine)</h2>
+<table>
+<tr><th>Code</th><th>Order</th><th>Method</th></tr>
+<tr><td><strong>Lattice</strong></td><td><strong>6th</strong></td><td>Cell-centered Lagrange, 7-point tensor product. Pre-computed weight tables. AthenaK pattern.</td></tr>
+<tr><td>GRChombo</td><td>4th</td><td>Chombo <code>FourthOrderFineInterp</code>.</td></tr>
+<tr><td>BAM</td><td>5th-6th</td><td>Lagrange polynomial.</td></tr>
+<tr><td>CarpetX</td><td>Linear (default)</td><td>AMReX conservative interpolation.</td></tr>
+<tr><td>AthenaK</td><td>6th</td><td><code>HighOrderProlongCC</code>. Same algorithm as Lattice.</td></tr>
+<tr><td>Lean</td><td>5th</td><td>Carpet ENO/polynomial.</td></tr>
+</table>
+
+<h2>4. Restriction (Fine &rarr; Coarse)</h2>
+<p>All FD AMR codes use simple cell averaging (2&times;2&times;2 = 8 fine cells, weight 1/8 each).
+Lattice previously used 6th-order Lagrange restriction (negative weights caused Gibbs
+oscillations near puncture singularities); switched to cell averaging to match GRChombo.</p>
+
+<h2>5. Kreiss-Oliger Dissipation</h2>
+<table>
+<tr><th>Code</th><th>KO Order</th><th>Default &sigma;</th><th>Per-field &sigma;</th><th>Chi-adjusted</th></tr>
+<tr><td><strong>Lattice</strong></td><td><strong>8th</strong> (with 6th FD)</td><td>1.0</td><td>Optional (0.99 gauge / 0.3 phys)</td><td>Optional (CAKO)</td></tr>
+<tr><td>GRChombo</td><td>6th</td><td>1.0</td><td>No</td><td>No</td></tr>
+<tr><td>BAM</td><td>6th</td><td>0.1-0.5</td><td>Sometimes</td><td>No</td></tr>
+<tr><td>CarpetX</td><td>5th</td><td>0.32-0.5</td><td>No</td><td>No</td></tr>
+<tr><td>AthenaK</td><td>6th</td><td>0.5</td><td>No</td><td>No</td></tr>
+<tr><td>Lean</td><td>4th</td><td>0.5-1.0</td><td>No</td><td>No</td></tr>
+</table>
+<p>CAKO and per-field sigma from arXiv:2404.01137. Not adopted by any other code.</p>
+
+<h2>6. CCZ4 Constraint Damping</h2>
+<table>
+<tr><th>Code</th><th>&kappa;1</th><th>&kappa;2</th><th>&kappa;3</th><th>Notes</th></tr>
+<tr><td><strong>Lattice</strong></td><td>0.1</td><td>0.0</td><td>0.5</td><td>Constant &kappa;1. &kappa;3=0.5 stable (Alic 2013).</td></tr>
+<tr><td>GRChombo</td><td>0.1</td><td>0.0</td><td>1.0</td><td>Uses &kappa;1/&alpha; to compensate &kappa;3=1 instability.</td></tr>
+<tr><td>BAM</td><td>0.1</td><td>0.0</td><td>0.5</td><td>Same as Lattice.</td></tr>
+<tr><td>CarpetX</td><td>0.02</td><td>0.0</td><td>0.5</td><td>Lower &kappa;1.</td></tr>
+<tr><td>AthenaK</td><td>0.02</td><td>0.0</td><td>0.5</td><td>Same as CarpetX.</td></tr>
+</table>
+
+<h2>7. Boundary Conditions</h2>
+<table>
+<tr><th>Code</th><th>Default BC</th><th>Notes</th></tr>
+<tr><td><strong>Lattice</strong></td><td><strong>Constraint-preserving</strong></td><td>BAM-style (arXiv:1212.2901). Per-field characteristic speeds.</td></tr>
+<tr><td>GRChombo</td><td>Sommerfeld</td><td>No CP option.</td></tr>
+<tr><td>BAM</td><td>CP</td><td>Originator of the approach.</td></tr>
+<tr><td>SpEC</td><td>Constraint-preserving</td><td>Custom for GH formulation. Gold standard.</td></tr>
+<tr><td>CarpetX</td><td>Sommerfeld</td><td>No widely-used CP for CCZ4.</td></tr>
+<tr><td>AthenaK</td><td>Sommerfeld/outflow</td><td>No CP.</td></tr>
+<tr><td>All others</td><td>Sommerfeld</td><td>Standard radiative.</td></tr>
+</table>
+
+<h2>8. Time Integration</h2>
+<table>
+<tr><th>Code</th><th>Integrator</th><th>CFL</th></tr>
+<tr><td><strong>Lattice</strong></td><td>Classic RK4 (default) + CK45 (low-storage)</td><td>0.25</td></tr>
+<tr><td>GRChombo</td><td>RK4</td><td>0.25</td></tr>
+<tr><td>BAM</td><td>RK4</td><td>~0.25</td></tr>
+<tr><td>SpEC</td><td>Adams-Bashforth (multi-step)</td><td>Variable</td></tr>
+<tr><td>AthenaK</td><td>RK2 / RK3 (SSP-RK3)</td><td>~0.5</td></tr>
+</table>
+<p>CK45 (Carpenter-Kennedy 2N) as a runtime switch is unique to Lattice.
+5 stages / 3 memory blocks vs RK4's 4 stages / 4 blocks.</p>
+
+<h2>9. AMR Subcycling</h2>
+<table>
+<tr><th>Code</th><th>Subcycling</th><th>Post-restrict ghost exchange</th></tr>
+<tr><td><strong>Lattice</strong></td><td>Berger-Oliger, 2:1 ratio, zero-PCIe GPU</td><td>Yes (GRChombo match)</td></tr>
+<tr><td>GRChombo</td><td>Berger-Oliger via Chombo</td><td>Yes (<code>fillBdyGhosts</code> in <code>postTimeStep</code>)</td></tr>
+<tr><td>BAM</td><td>Berger-Oliger</td><td>Yes</td></tr>
+<tr><td>SpEC</td><td>No subcycling</td><td>N/A</td></tr>
+<tr><td>CarpetX</td><td>Berger-Oliger via AMReX</td><td>Yes</td></tr>
+<tr><td>AthenaK</td><td>No subcycling (uniform dt)</td><td>N/A</td></tr>
+<tr><td>Dendro-GR</td><td>No subcycling</td><td>N/A</td></tr>
+</table>
+
+<h2>10. Per-Stage Cross-Level Ghost Fill</h2>
+<table>
+<tr><th>Code</th><th>Per-stage fill?</th><th>Notes</th></tr>
+<tr><td><strong>Lattice</strong></td><td><strong>Yes</strong> (CPU + GPU)</td><td>Both paths fill at every RK4 sub-stage.</td></tr>
+<tr><td>GRChombo</td><td>Yes</td><td><code>fillInterp()</code> inside <code>evalRHS()</code>.</td></tr>
+<tr><td>BAM</td><td>Yes</td><td>Full temporal interpolation per stage.</td></tr>
+<tr><td>CarpetX</td><td>Configurable</td><td>AMReX supports it; depends on setup.</td></tr>
+<tr><td>AthenaK</td><td>Per-step only</td><td>Ghost fill once at step start.</td></tr>
+<tr><td>NRPy+/Lean</td><td>Per-step (Carpet)</td><td>Carpet fills at step boundaries.</td></tr>
+</table>
+
+<h2>11. Temporal Interpolation</h2>
+<table>
+<tr><th>Code</th><th>Method</th><th>Order</th><th>Storage</th></tr>
+<tr><td><strong>Lattice</strong></td><td><strong>Cubic Taylor</strong> (Chombo TimeInterpolatorRK4)</td><td>O(dt<sup>4</sup>)</td><td>U_n + 3 Taylor buffers (a1, a2, a3)</td></tr>
+<tr><td>GRChombo</td><td>Cubic Taylor (Chombo)</td><td>O(dt<sup>4</sup>)</td><td>Same: U_n + 3 Taylor coefficients</td></tr>
+<tr><td>BAM</td><td>Cubic/quartic Lagrange</td><td>O(dt<sup>3</sup>)-O(dt<sup>4</sup>)</td><td>Multiple time levels</td></tr>
+<tr><td>CarpetX</td><td>Linear (default) or dense output</td><td>O(dt<sup>2</sup>)-O(dt<sup>4</sup>)</td><td>2 time levels (linear) or k1..k4 (dense)</td></tr>
+<tr><td>AthenaK</td><td>Linear</td><td>O(dt<sup>2</sup>)</td><td>fields_old + fields_new</td></tr>
+<tr><td>NRPy+/Lean</td><td>Linear (Carpet default)</td><td>O(dt<sup>2</sup>)</td><td>2 time levels</td></tr>
+</table>
+
+<p>Chombo coefficient matrix (coeffs[term][stage] &times; dt):</p>
+<pre>
+        k1     k2     k3     k4
+a1:     1      0      0      0
+a2:    -3/2    1      1     -1/2
+a3:     2/3   -2/3   -2/3    2/3
+</pre>
+<p>Evaluation: <code>U(&theta;) = U_n + &theta;*(a1 + &theta;*(a2 + &theta;*a3))</code> (Horner form, 3 FMA per point).</p>
+
+<h2>12. Gauge Conditions</h2>
+<table>
+<tr><th>Code</th><th>Slicing</th><th>Shift</th><th>&eta;</th><th>Position-dep &eta;</th><th>Advection</th></tr>
+<tr><td><strong>Lattice</strong></td><td>1+log (c=2)</td><td>Gamma-driver (F=0.75)</td><td>1.0</td><td><strong>Yes (default ON)</strong></td><td>Full (coeff=1)</td></tr>
+<tr><td>GRChombo</td><td>1+log</td><td>Gamma-driver</td><td>1.0</td><td>No (manual)</td><td>Full</td></tr>
+<tr><td>BAM</td><td>1+log</td><td>Gamma-driver</td><td>1.0-2.0</td><td>Yes</td><td>Full</td></tr>
+<tr><td>AthenaK</td><td>1+log</td><td>Gamma-driver</td><td>1.0</td><td>No</td><td>Full</td></tr>
+</table>
+<p>Position-dependent &eta;(x) = &eta;<sub>0</sub>/W(x), W = &radic;chi. Ref: arXiv:1003.0859 (Muller &amp; Brugmann).</p>
+
+<h2>13. Initial Data Solver</h2>
+<table>
+<tr><th>Code</th><th>Solver</th><th>N-body</th><th>High-spin</th></tr>
+<tr><td><strong>Lattice</strong></td><td><strong>Covering grid FAS multigrid</strong></td><td><strong>N &le; 32</strong></td><td><strong>HiSpID 4-field coupled</strong></td></tr>
+<tr><td>GRChombo</td><td>External (TwoPunctures)</td><td>N=2 (solver), N=25 (superposition)</td><td>No</td></tr>
+<tr><td>BAM</td><td>TwoPunctures (built-in)</td><td>N=2</td><td>No</td></tr>
+<tr><td>SpEC</td><td>Spectral elliptic</td><td>N=2</td><td>Yes (spectral)</td></tr>
+<tr><td>CarpetX</td><td>TwoPunctures / Kadath</td><td>N=2</td><td>No</td></tr>
+<tr><td>NRPy+</td><td>NRPyElliptic (multigrid)</td><td>N &ge; 2</td><td>No</td></tr>
+</table>
+
+<h2>14. GPU Acceleration</h2>
+<table>
+<tr><th>Code</th><th>GPU</th><th>Framework</th><th>Zero-PCIe subcycling</th></tr>
+<tr><td><strong>Lattice</strong></td><td><strong>Yes</strong></td><td>HIP (AMD + NVIDIA)</td><td><strong>Yes</strong></td></tr>
+<tr><td>GRChombo</td><td>No</td><td>CPU + MPI</td><td>N/A</td></tr>
+<tr><td>BAM</td><td>No</td><td>CPU + MPI + OpenMP</td><td>N/A</td></tr>
+<tr><td>CarpetX</td><td>Yes</td><td>AMReX (CUDA/HIP/SYCL)</td><td>Partial</td></tr>
+<tr><td>AthenaK</td><td>Yes</td><td>Kokkos (CUDA/HIP/SYCL/OpenMP)</td><td>Yes (no subcycling)</td></tr>
+<tr><td>Dendro-GR</td><td>Experimental</td><td>CUDA</td><td>No</td></tr>
+</table>
+
+<h2>15. Unique Features</h2>
+<p>Features found in Lattice but not in any single other code:</p>
+<ol>
+<li>CCZ4 + Einstein-Maxwell + charged puncture initial data + N-body solver in one codebase</li>
+<li>CK45 low-storage RK4 as a runtime switch</li>
+<li>HiSpID 4-field coupled multigrid for high-spin initial data</li>
+<li>Equidistribution-optimal AMR refinement ratio &beta; = 2<sup>3/5</sup> &asymp; 1.516</li>
+<li>Compile-time EM dispatch (<code>COMPILED_NUM_FIELDS</code>)</li>
+<li>Pre-computed prolongation weight tables verified bit-exact</li>
+<li>Zero-PCIe Berger-Oliger subcycling with cubic Taylor temporal interpolation on GPU</li>
+</ol>
+
+<h2>16. Summary</h2>
+<table>
+<tr><th>Category</th><th>Lattice</th><th class="match">Matches</th><th class="exceed">Exceeds</th><th class="short">Falls Short</th></tr>
+<tr><td>Formulation</td><td>CCZ4</td><td>GRChombo, BAM</td><td>BSSN codes (no Z4 damping)</td><td>SpEC (GH)</td></tr>
+<tr><td>FD Order</td><td>6th</td><td>BAM</td><td>GRChombo (4th), CarpetX (4th), AthenaK (4th), Lean (4th)</td><td>NRPy+ (10th), SpEC (spectral)</td></tr>
+<tr><td>Prolongation</td><td>6th Lagrange</td><td>AthenaK</td><td>GRChombo (4th), CarpetX (linear), Lean (5th)</td><td>&mdash;</td></tr>
+<tr><td>Restriction</td><td>Cell averaging</td><td>All</td><td>&mdash;</td><td>&mdash;</td></tr>
+<tr><td>KO Dissipation</td><td>8th</td><td>&mdash;</td><td>All FD codes (4th-6th)</td><td>&mdash;</td></tr>
+<tr><td>Boundary Conditions</td><td>CP (BAM-style)</td><td>BAM</td><td>GRChombo, CarpetX, AthenaK, Lean</td><td>SpEC (more sophisticated)</td></tr>
+<tr><td>Temporal Interp</td><td>Cubic Taylor O(dt<sup>4</sup>)</td><td>GRChombo</td><td>AthenaK (linear), CarpetX (linear), NRPy+/Lean (linear)</td><td>&mdash;</td></tr>
+<tr><td>Per-Stage Ghost Fill</td><td>Yes</td><td>GRChombo, BAM</td><td>AthenaK, NRPy+, Lean (per-step)</td><td>&mdash;</td></tr>
+<tr><td>GPU</td><td>HIP, zero-PCIe</td><td>AthenaK (Kokkos)</td><td>GRChombo, BAM, Lean (no GPU)</td><td>&mdash;</td></tr>
+<tr><td>N-body</td><td>32 punctures</td><td>GRChombo (25 BH)</td><td>BAM, CarpetX, AthenaK (N=2)</td><td>&mdash;</td></tr>
+<tr><td>Einstein-Maxwell</td><td>Charged punctures</td><td>&mdash; (unique)</td><td>All (no charged BH)</td><td>CarpetX/AthenaK (GRMHD, different scope)</td></tr>
+<tr><td>AH Finder</td><td>Hyperbolic flow</td><td>BAM</td><td>AthenaK, Dendro-GR (none)</td><td>SpEC (spectral AH)</td></tr>
+<tr><td>Psi4 + CCE</td><td>Both</td><td>BAM, CarpetX</td><td>GRChombo, AthenaK, Lean (no CCE)</td><td>SpEC (native CCE)</td></tr>
+</table>
+
+<h2>References</h2>
+<ul>
+<li>arXiv:1106.2254 &mdash; CCZ4 formulation (Alic et al. 2012)</li>
+<li>arXiv:2112.10567 &mdash; GRChombo AMR lessons</li>
+<li>arXiv:1212.2901 &mdash; BAM constraint-preserving BCs (Hilditch et al.)</li>
+<li>arXiv:2409.16053 &mdash; AthenaK (Grete et al. 2024)</li>
+<li>arXiv:2503.09629 &mdash; CarpetX GPU subcycling (Ji et al. 2025)</li>
+<li>arXiv:1003.0859 &mdash; Position-dependent eta (Muller &amp; Brugmann)</li>
+<li>arXiv:2404.01137 &mdash; Improved KO dissipation + constraint damping</li>
+<li>arXiv:2505.15912 &mdash; BHaHAHA hyperbolic AH flow</li>
+<li>arXiv:2505.01495 &mdash; GRChombo 25-BH cluster simulation</li>
+<li>Chombo LevelRK4.H, TimeInterpolatorRK4.cpp &mdash; Cubic Taylor temporal interpolation</li>
+</ul>
+
+</body>
+</html>

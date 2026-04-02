@@ -103,6 +103,15 @@ typedef struct {
     int n_fields;
     /* GPU-resident subcycling (Part B): temporal interp + cross-level map */
     double *fields_old;          /* [total] pre-step data for temporal interp  */
+    /* Cubic Taylor coefficient buffers (Chombo TimeInterpolatorRK4).
+     * Accumulated from each RK4 stage's RHS. Only allocated for packs
+     * with has_children=1 (levels that have finer children).
+     * U(θ) = U_n + θ*(a1 + θ*(a2 + θ*a3)).
+     * Ref: Chombo/lib/src/AMRTimeDependent/TimeInterpolatorRK4.cpp */
+    double *taylor_a1;           /* [total] cubic Taylor coefficient a1        */
+    double *taylor_a2;           /* [total] cubic Taylor coefficient a2        */
+    double *taylor_a3;           /* [total] cubic Taylor coefficient a3        */
+    int has_taylor;              /* 1 if Taylor buffers are allocated           */
     int *cross_level_map;        /* [n_cross * 3] (fine_blk, dir, coarse_blk) */
     int n_cross_entries;
     /* Buffer block restriction map: fine children → buffer parents */
@@ -212,6 +221,24 @@ void backend_map_pack(meshblock_pack_t *pack, const sim_params_t *p)
     HIP_CHECK(hipMalloc(&dp->fields_old, total_bytes));
     HIP_CHECK(hipMemset(dp->fields_old, 0, total_bytes));
 
+    /* Allocate Taylor coefficient buffers for cubic temporal interpolation.
+     * Only for packs that have finer children (has_children flag set by
+     * gpu_ensure_level_packs). Finest-level packs skip this.
+     * Ref: Chombo TimeInterpolatorRK4. */
+    dp->taylor_a1 = NULL;
+    dp->taylor_a2 = NULL;
+    dp->taylor_a3 = NULL;
+    dp->has_taylor = 0;
+    if (pack->has_children) {
+        dp->has_taylor = 1;
+        HIP_CHECK(hipMalloc(&dp->taylor_a1, total_bytes));
+        HIP_CHECK(hipMemset(dp->taylor_a1, 0, total_bytes));
+        HIP_CHECK(hipMalloc(&dp->taylor_a2, total_bytes));
+        HIP_CHECK(hipMemset(dp->taylor_a2, 0, total_bytes));
+        HIP_CHECK(hipMalloc(&dp->taylor_a3, total_bytes));
+        HIP_CHECK(hipMemset(dp->taylor_a3, 0, total_bytes));
+    }
+
     /* Per-block metadata */
     dp->origins         = (double *)hip_alloc_copy(pack->origins,
                               nb * 3 * sizeof(double));
@@ -290,6 +317,9 @@ static void hip_free_device_ptrs_struct(hip_device_ptrs_t *dp)
     (void)hipFree(dp->scratch);
     if (dp->accum) (void)hipFree(dp->accum);
     if (dp->fields_old) (void)hipFree(dp->fields_old);
+    if (dp->taylor_a1) (void)hipFree(dp->taylor_a1);
+    if (dp->taylor_a2) (void)hipFree(dp->taylor_a2);
+    if (dp->taylor_a3) (void)hipFree(dp->taylor_a3);
     (void)hipFree(dp->origins);
     (void)hipFree(dp->dx_per_block);
     (void)hipFree(dp->on_boundary);
@@ -338,7 +368,10 @@ void backend_activate_pack(meshblock_pack_t *pack)
 
 /*
  * Save pre-step field data on device: fields_old = data (D2D copy).
- * Used for temporal interpolation by finer levels during subcycling.
+ * Also zeroes Taylor coefficient buffers for the upcoming step's
+ * accumulation. Used for temporal interpolation by finer levels.
+ *
+ * Ref: Chombo TimeInterpolatorRK4::setDt + saveInitialSoln.
  */
 extern "C"
 void backend_save_old_packed(meshblock_pack_t *pack)
@@ -348,6 +381,61 @@ void backend_save_old_packed(meshblock_pack_t *pack)
     size_t bytes = dp->total * sizeof(double);
     HIP_CHECK(hipMemcpyAsync(dp->fields_old, dp->data, bytes,
                               hipMemcpyDeviceToDevice, gpu_stream));
+    /* Zero Taylor coefficient buffers for the new step */
+    if (dp->has_taylor) {
+        HIP_CHECK(hipMemsetAsync(dp->taylor_a1, 0, bytes, gpu_stream));
+        HIP_CHECK(hipMemsetAsync(dp->taylor_a2, 0, bytes, gpu_stream));
+        HIP_CHECK(hipMemsetAsync(dp->taylor_a3, 0, bytes, gpu_stream));
+    }
+}
+
+/*
+ * Accumulate RK4 stage RHS into Taylor coefficient buffers on device.
+ * Called after each stage's RHS + BCs. Same Chombo coefficients as CPU.
+ *
+ * Ref: Chombo TimeInterpolatorRK4::saveRHS.
+ */
+__global__ void hip_taylor_accumulate(
+    double *a1, double *a2, double *a3,
+    const double *rhs,
+    double c1_dt, double c2_dt, double c3_dt,
+    size_t total)
+{
+    size_t tid = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
+    if (tid >= total) return;
+    double r = rhs[tid];
+    a1[tid] += c1_dt * r;
+    a2[tid] += c2_dt * r;
+    a3[tid] += c3_dt * r;
+}
+
+/* Chombo TimeInterpolatorRK4 coefficient matrix.
+ * coeffs[term][stage] — multiply by dt * rhs to accumulate.
+ * Ref: Chombo/lib/src/AMRTimeDependent/TimeInterpolatorRK4.cpp */
+static const double h_taylor_coeffs[3][4] = {
+    {  1.0,          0.0,          0.0,          0.0         },  /* a1 */
+    { -3.0/2.0,      1.0,          1.0,         -1.0/2.0     },  /* a2 */
+    {  2.0/3.0,     -2.0/3.0,     -2.0/3.0,      2.0/3.0     }   /* a3 */
+};
+
+extern "C"
+void backend_taylor_accumulate_packed(meshblock_pack_t *pack,
+                                       int stage, double dt)
+{
+    hip_device_ptrs_t *dp = (hip_device_ptrs_t *)pack->device_handle;
+    if (!dp || !dp->has_taylor) return;
+
+    double c1_dt = h_taylor_coeffs[0][stage] * dt;
+    double c2_dt = h_taylor_coeffs[1][stage] * dt;
+    double c3_dt = h_taylor_coeffs[2][stage] * dt;
+
+    size_t total = dp->total;
+    int bs = 256;
+    int gs = (int)((total + bs - 1) / bs);
+    hipLaunchKernelGGL(hip_taylor_accumulate, gs, bs, 0, gpu_stream,
+                       dp->taylor_a1, dp->taylor_a2, dp->taylor_a3,
+                       dp->rhs,
+                       c1_dt, c2_dt, c3_dt, total);
 }
 
 /* Forward declarations: ghost exchange kernels used by cross-level and solver
@@ -378,8 +466,11 @@ __global__ void hip_ghost_prolong(double *pk_data, double *coarse_data,
                                    size_t npts, size_t cnpts, int nf);
 __global__ void hip_cross_level_ghost_fill(
     double *fine_coarse_data,
-    const double *coarse_data_new,
-    const double *coarse_data_old,
+    const double *coarse_fields_old,
+    const double *coarse_taylor_a1,
+    const double *coarse_taylor_a2,
+    const double *coarse_taylor_a3,
+    int has_taylor,
     const int *cross_map,
     int n_entries,
     const int *fine_refined_map,
@@ -476,12 +567,17 @@ void backend_cross_level_ghost_fill_packed(
         int n_entries = fdp->n_cross_entries;
         int gs = (n_entries + bs - 1) / bs;
 
-        /* Linear temporal interpolation: val = (1-frac)*old + frac*new.
-         * frac = 0.0 for first sub-step, 0.5 for second. */
+        /* Cubic Taylor temporal interpolation (Chombo TimeInterpolatorRK4):
+         * U(θ) = U_n + θ*(a1 + θ*(a2 + θ*a3))   [Horner form]
+         * When Taylor buffers are zero (first step), gives U_n.
+         * Ref: Chombo TimeInterpolatorRK4::intermediate. */
         hipLaunchKernelGGL(hip_cross_level_ghost_fill, gs, bs, 0, gpu_stream,
                            fdp->coarse_data,
-                           cdp->data,
                            cdp->fields_old,
+                           cdp->taylor_a1,
+                           cdp->taylor_a2,
+                           cdp->taylor_a3,
+                           cdp->has_taylor,
                            fdp->cross_level_map,
                            n_entries,
                            fdp->refined_map,
@@ -1497,26 +1593,33 @@ __global__ void hip_ghost_prolong(double *pk_data, double *coarse_data,
 
 /* Kernel 13b: Cross-level ghost fill (cross-pack, temporal interpolation).
  * Each entry in cross_map encodes (fine_block, direction, coarse_block).
- * One thread per entry. Reads from coarse pack's data (temporally
- * interpolated), writes to fine pack's coarse_data buffer.
+ * One thread per entry. Reads from coarse pack's Taylor coefficient buffers
+ * (accumulated during the coarse level's RK4 step), evaluates cubic Taylor
+ * polynomial via Horner form, writes to fine pack's coarse_data buffer.
  *
  * Used by backend_cross_level_ghost_fill_packed for GPU-resident subcycling.
- * Linear temporal interpolation: val = (1-frac)*old + frac*new.
+ * Cubic Taylor: U(θ) = U_n + θ*(a1 + θ*(a2 + θ*a3)).
+ * When has_taylor=0 or Taylor buffers are NULL, falls back to copy of U_n.
+ *
+ * Ref: Chombo TimeInterpolatorRK4::intermediate (Horner evaluation).
  */
 __global__ void hip_cross_level_ghost_fill(
-    double *fine_coarse_data,       /* fine pack's coarse buffer (dst) */
-    const double *coarse_data_new,  /* coarse pack's current data */
-    const double *coarse_data_old,  /* coarse pack's pre-step data */
-    const int *cross_map,           /* [n_entries * 3] */
+    double *fine_coarse_data,          /* fine pack's coarse buffer (dst) */
+    const double *coarse_fields_old,   /* U_n: coarse pack's pre-step data */
+    const double *coarse_taylor_a1,    /* Taylor a1 (NULL if no Taylor) */
+    const double *coarse_taylor_a2,    /* Taylor a2 */
+    const double *coarse_taylor_a3,    /* Taylor a3 */
+    int has_taylor,                    /* 1 = cubic Taylor, 0 = copy U_n */
+    const int *cross_map,              /* [n_entries * 3] */
     int n_entries,
-    const int *fine_refined_map,    /* fine pack's refined_map */
-    const double *fine_origins,     /* fine pack's origins */
-    const double *coarse_origins,   /* coarse pack's origins */
-    const double *coarse_dx,        /* coarse pack's dx_per_block */
-    double frac,                    /* temporal interp fraction (0.0 or 0.5) */
+    const int *fine_refined_map,       /* fine pack's refined_map */
+    const double *fine_origins,        /* fine pack's origins */
+    const double *coarse_origins,      /* coarse pack's origins */
+    const double *coarse_dx,           /* coarse pack's dx_per_block */
+    double frac,                       /* temporal interp fraction θ */
     int fine_nb, int coarse_nb,
     int ghost_c, int N_c, int Nt_c,
-    int Nt_coarse_full,             /* coarse pack's Ntotal */
+    int Nt_coarse_full,                /* coarse pack's Ntotal */
     size_t fine_cnpts, size_t coarse_npts,
     int nf)
 {
@@ -1551,13 +1654,10 @@ __global__ void hip_cross_level_ghost_fill(
     ghost_range_pack(oy, ghost_c, N_c, Nt_c, &dy_lo, &dy_hi, &dummy3, &dummy4);
     ghost_range_pack(oz, ghost_c, N_c, Nt_c, &dz_lo, &dz_hi, &dummy5, &dummy6);
 
-    double one_minus_frac = 1.0 - frac;
-
     for (int f = 0; f < nf; f++) {
         size_t dst_off = (size_t)r * nf * fine_cnpts + (size_t)f * fine_cnpts;
-        size_t src_off_new = (size_t)f * coarse_nb * coarse_npts
-                           + (size_t)cb * coarse_npts;
-        size_t src_off_old = src_off_new;  /* same layout for fields_old */
+        size_t src_off = (size_t)f * coarse_nb * coarse_npts
+                       + (size_t)cb * coarse_npts;
 
         for (int kk = dz_lo; kk < dz_hi; kk++) {
             int sk = kk + off_k;
@@ -1571,9 +1671,21 @@ __global__ void hip_cross_level_ghost_fill(
 
                     size_t src_idx = (size_t)sk * Nt_coarse_full * Nt_coarse_full
                                    + (size_t)sj * Nt_coarse_full + si;
-                    double val_new = coarse_data_new[src_off_new + src_idx];
-                    double val_old = coarse_data_old[src_off_old + src_idx];
-                    double val = one_minus_frac * val_old + frac * val_new;
+
+                    /* Cubic Taylor Horner evaluation:
+                     *   U(θ) = U_n + θ*(a1 + θ*(a2 + θ*a3))
+                     * When Taylor buffers are zero (first step), gives U_n.
+                     * Ref: Chombo TimeInterpolatorRK4::intermediate. */
+                    double u_n = coarse_fields_old[src_off + src_idx];
+                    double val;
+                    if (has_taylor) {
+                        double a1 = coarse_taylor_a1[src_off + src_idx];
+                        double a2 = coarse_taylor_a2[src_off + src_idx];
+                        double a3 = coarse_taylor_a3[src_off + src_idx];
+                        val = u_n + frac * (a1 + frac * (a2 + frac * a3));
+                    } else {
+                        val = u_n;  /* no Taylor data: copy pre-step state */
+                    }
 
                     size_t dst_idx = (size_t)kk * Nt_c * Nt_c
                                    + (size_t)jj * Nt_c + ii;

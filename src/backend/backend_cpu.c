@@ -1159,6 +1159,9 @@ int backend_is_gpu(void) { return 0; }
 void backend_free_pack_device(meshblock_pack_t *pack) { (void)pack; }
 void backend_activate_pack(meshblock_pack_t *pack) { (void)pack; }
 void backend_save_old_packed(meshblock_pack_t *pack) { (void)pack; }
+void backend_taylor_accumulate_packed(meshblock_pack_t *pack,
+                                       int stage, double dt)
+{ (void)pack; (void)stage; (void)dt; }
 void backend_cross_level_ghost_fill_packed(
     meshblock_pack_t *fine_pack, meshblock_pack_t *coarse_pack, double frac)
 {

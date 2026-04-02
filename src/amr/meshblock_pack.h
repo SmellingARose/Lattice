@@ -105,6 +105,11 @@ typedef struct {
      * across sub-steps, freed by backend_free_pack_device or meshblock_pack_free.
      * Eliminates hipMalloc/hipFree per sub-step in Berger-Oliger subcycling. */
     void    *device_handle;   /* opaque: backend device memory (NULL on CPU) */
+
+    /* ---- AMR temporal interpolation flag ----
+     * Set to 1 for levels that have finer children (level < max_level).
+     * Controls Taylor coefficient buffer allocation on GPU. */
+    int      has_children;    /* 1 = needs Taylor buffers for temporal interp */
 } meshblock_pack_t;
 
 /* Pack indexing macro:

@@ -244,15 +244,30 @@ void backend_activate_pack(meshblock_pack_t *pack);
 void backend_save_old_packed(meshblock_pack_t *pack);
 
 /*
+ * Accumulate RK4 stage's RHS into Taylor coefficient buffers for cubic
+ * temporal interpolation. Called after RHS+BC at each RK4 stage.
+ * stage: 0-3 (corresponding to k1-k4).
+ * dt: the time step for this level.
+ * No-op if pack has no Taylor buffers (finest level or CPU backend).
+ *
+ * Ref: Chombo TimeInterpolatorRK4::saveRHS coefficient accumulation.
+ */
+void backend_taylor_accumulate_packed(meshblock_pack_t *pack,
+                                       int stage, double dt);
+
+/*
  * Cross-level ghost fill entirely on device. Fills fine_pack's
- * coarse buffer from coarse_pack's data with temporal interpolation.
+ * coarse buffer from coarse_pack's data with cubic Taylor temporal
+ * interpolation: U(θ) = U_n + θ*(a1 + θ*(a2 + θ*a3)).
  * Executes the full 5-phase multilevel ghost exchange:
  *   1. Restrict fine interior → fine's coarse_buf
  *   2. Same-level coarse_buf exchange
- *   3. Cross-level fill (temporal interp from coarse pack)
+ *   3. Cross-level fill (cubic Taylor interp from coarse pack)
  *   4. Boundary extrapolation
  *   5. Prolongation into fine ghosts
  * CPU backend: no-op (CPU path uses ghost_fill_from_coarser).
+ *
+ * Ref: Chombo TimeInterpolatorRK4::intermediate (Horner evaluation).
  */
 void backend_cross_level_ghost_fill_packed(
     meshblock_pack_t *fine_pack,
