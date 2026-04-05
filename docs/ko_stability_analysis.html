@@ -371,16 +371,75 @@ Gives the 8th-order KO stencil a 1-cell margin. Keeps 8th-order KO + &sigma;=1.0
 </div>
 
 <!-- ================================================================== -->
-<h2>5. Recommendation</h2>
+<h2>5. CCZ4 Formulation Mismatch (Critical Finding)</h2>
 <!-- ================================================================== -->
 
-<p><strong>Start with Option A + B combined</strong> (6th-order KO + &sigma;=0.1 on fine levels).
-This fixes the root cause (ghost margin) and matches the industry-standard configuration.
-If the QNM test passes, leave &kappa;1, &eta;, and covariant/non-covariant at current defaults
-and only change them if needed for specific simulations.</p>
+<p>Lattice uses a <strong>hybrid CCZ4 configuration that no production code uses</strong>:</p>
 
-<p>Option C (ghost=5) is architecturally expensive and no code uses it.
-Option D (full BAM match) is the fallback if A+B alone isn't enough.</p>
+<table>
+<tr><th>Configuration</th><th>&kappa;3</th><th>&kappa;1 prescription</th><th>Damping at puncture (&alpha;&rarr;0)</th><th>Used by</th></tr>
+<tr>
+<td><strong>Standard Z4c</strong></td>
+<td>0.5</td>
+<td>&alpha; &times; &kappa;1</td>
+<td class="safe">Vanishes (0.02 &times; 0.01 = 0.0002)</td>
+<td>BAM, AthenaK, CarpetX</td>
+</tr>
+<tr>
+<td><strong>Covariant CCZ4</strong></td>
+<td>1.0</td>
+<td>constant &kappa;1</td>
+<td class="warning">Constant (0.1) &mdash; stable with &kappa;3=1</td>
+<td>GRChombo</td>
+</tr>
+<tr>
+<td class="danger"><strong>Lattice (current)</strong></td>
+<td class="danger">0.5</td>
+<td class="danger">constant &kappa;1</td>
+<td class="danger">Constant (0.1) &mdash; untested with &kappa;3=0.5</td>
+<td class="danger">Nobody else</td>
+</tr>
+</table>
+
+<p>Alic et al. 2013 (arXiv:1307.7391) tested all 4 combinations of (&kappa;3, &kappa;1 prescription).
+All were stable in their tests, but &kappa;3=0.5 + constant &kappa;1 is the <strong>least-tested
+combination</strong> &mdash; no production code adopted it. The concern: constant &kappa;1=0.1
+with &kappa;3=0.5 gives strong damping that doesn't vanish at the puncture, but the
+weak Z coupling (&kappa;3=0.5) may not provide enough constraint propagation to
+balance that damping. With &kappa;3=1.0 (GRChombo), the full covariant Z coupling
+compensates for the strong damping.</p>
+
+<h3>Proven configurations (pick one)</h3>
+
+<div class="option-box option-a">
+<h4>Config 1: Match BAM/AthenaK/CarpetX (Z4c standard)</h4>
+<pre>--kappa1 0.02 --kappa3 0.5 --covariant 0</pre>
+<p>Damping vanishes at puncture. Every Z4c code does this. Safest for puncture evolutions.</p>
+</div>
+
+<div class="option-box option-b">
+<h4>Config 2: Match GRChombo (covariant CCZ4)</h4>
+<pre>--kappa1 0.1 --kappa3 1.0 --covariant 1</pre>
+<p>Constant damping, but &kappa;3=1 provides full covariant Z coupling to balance it.
+Must use &kappa;3=1 with covariant per Alic 2013.</p>
+</div>
+
+<!-- ================================================================== -->
+<h2>6. Recommendation</h2>
+<!-- ================================================================== -->
+
+<p><strong>Fix both the KO margin AND the CCZ4 formulation mismatch.</strong></p>
+
+<p>The KO ghost margin (Section 1) and the CCZ4 hybrid configuration (Section 5) are
+independent problems that compound at the finest AMR level. The recommended approach:</p>
+
+<ol>
+<li><strong>KO fix:</strong> Option A (6th-order KO) or Option B (&sigma;=0.1) &mdash; either gives margin or reduces amplification</li>
+<li><strong>CCZ4 fix:</strong> Config 1 (BAM/AthenaK: non-covariant, &kappa;1=0.02) or Config 2 (GRChombo: covariant, &kappa;3=1.0)</li>
+<li><strong>Gauge fix:</strong> &eta;=2.0 (BAM calibrated) + cap position-dependent &eta; at a reasonable bound</li>
+</ol>
+
+<p>Option C (ghost=5) is architecturally expensive and no code uses it. Skip it.</p>
 
 <!-- ================================================================== -->
 <h2>References</h2>
