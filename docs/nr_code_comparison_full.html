@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Lattice vs. Production NR Codes — Full Line-by-Line Comparison</title>
+<style>
+body { font-family: Georgia, serif; max-width: 1040px; margin: 40px auto; padding: 0 20px; line-height: 1.6; color: #333; }
+h1 { border-bottom: 2px solid #333; padding-bottom: 10px; }
+h2 { color: #444; margin-top: 40px; border-bottom: 1px solid #ccc; padding-bottom: 5px; }
+h3 { color: #555; margin-top: 25px; }
+h4 { color: #666; margin-top: 15px; }
+table { border-collapse: collapse; width: 100%; margin: 15px 0; font-size: 14px; }
+th, td { border: 1px solid #ccc; padding: 6px 10px; text-align: left; vertical-align: top; }
+th { background: #f5f5f5; font-weight: bold; }
+tr:nth-child(even) { background: #fafafa; }
+code { background: #f0f0f0; padding: 1px 4px; border-radius: 3px; font-size: 13px; }
+pre { background: #f5f5f5; padding: 12px; border-radius: 4px; overflow-x: auto; font-size: 13px; }
+details { margin: 10px 0; border: 1px solid #ddd; border-radius: 4px; padding: 0; }
+details > summary { padding: 8px 12px; cursor: pointer; background: #f9f9f9; font-weight: bold; }
+details[open] > summary { border-bottom: 1px solid #ddd; }
+details > div { padding: 12px; }
+.match { color: #2a7; font-weight: bold; }
+.intentional { color: #27a; font-weight: bold; }
+.resolved { color: #597; font-weight: bold; }
+.suspicious { color: #a52; font-weight: bold; }
+.worth-copying { color: #a72; font-weight: bold; }
+.tag { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 12px; font-weight: bold; }
+.tag-match { background: #d4edda; color: #155724; }
+.tag-intentional { background: #cce5ff; color: #004085; }
+.tag-resolved { background: #d1ecf1; color: #0c5460; }
+.tag-suspicious { background: #f8d7da; color: #721c24; }
+.tag-worth { background: #fff3cd; color: #856404; }
+.priority-critical { background: #f8d7da; color: #721c24; font-weight: bold; }
+.priority-high { background: #fff3cd; color: #856404; font-weight: bold; }
+.priority-medium { background: #d1ecf1; color: #0c5460; }
+.priority-low { background: #d4edda; color: #155724; }
+</style>
+</head>
+<body>
+
+<h1>Lattice vs. Production NR Codes &mdash; Full Line-by-Line Comparison</h1>
+<p><em>Generated: 2026-04-05. Post cubic Taylor temporal interpolation + AMR subcycling fixes.</em></p>
+<p>Supersedes: <code>docs/grchombo_comparison_audit.md</code> (2026-03-26) and <code>docs/nr_code_comparison.html</code> (2026-04-02).</p>
+
+<p><strong>Codes compared:</strong> GRChombo (Chombo), BAM, SpEC, CarpetX/Einstein Toolkit (AMReX),
+AthenaK (Kokkos), Dendro-GR (wavelet), NRPy+ (code generation), Lean (Carpet).</p>
+
+<p><strong>Tags:</strong>
+<span class="tag tag-match">MATCH</span>
+<span class="tag tag-intentional">INTENTIONAL DIFFERENCE</span>
+<span class="tag tag-resolved">RESOLVED</span>
+<span class="tag tag-suspicious">SUSPICIOUS</span>
+<span class="tag tag-worth">WORTH COPYING</span>
+</p>
+
+<!-- ================================================================== -->
+<h2>1. Staleness Log</h2>
+<!-- ================================================================== -->
+
+<p>The previous audit (<code>grchombo_comparison_audit.md</code>, 2026-03-26) identified 6 suspicious
+differences (S1&ndash;S6). Three AMR subcycling fixes were applied on 2026-04-02. Current status:</p>
+
+<table>
+<tr><th>ID</th><th>Old Finding</th><th>Old Tag</th><th>Current Evidence</th><th>New Tag</th></tr>
+<tr><td>S1</td><td>Prolongation stencil skip at fi=0</td><td class="suspicious">SUSPICIOUS</td>
+    <td><code>COARSE_BUF_GHOST=5</code> (prolongation.h:40). fi=0 &rarr; ci0=3, stencil [0,6], all in bounds. Verified by audit agent.</td>
+    <td><span class="tag tag-resolved">RESOLVED</span></td></tr>
+<tr><td>S2</td><td>Cross-level ghosts once per step</td><td class="suspicious">SUSPICIOUS</td>
+    <td><code>ghost_fill_from_coarser</code> called 4&times; per RK4 step at rk4.c:501,516,531,546 with stage fractions <code>frac + c_s[stage] * inv_ratio</code>.</td>
+    <td><span class="tag tag-match">MATCH</span> GRChombo</td></tr>
+<tr><td>S3</td><td>Stale ghost data in subcycling</td><td class="suspicious">SUSPICIOUS</td>
+    <td>Same mechanism as S2. Per-stage fill on both CPU and GPU paths.</td>
+    <td><span class="tag tag-resolved">RESOLVED</span></td></tr>
+<tr><td>S4</td><td>No CPU production NaN check</td><td class="suspicious">SUSPICIOUS</td>
+    <td>Still absent. GPU has <code>backend_check_finite_packed()</code> but main.c never calls it on CPU. See Recommendation R1.</td>
+    <td><span class="tag tag-suspicious">STILL OPEN</span></td></tr>
+<tr><td>S5</td><td>Hamiltonian constraint Z contamination</td><td class="suspicious">SUSPICIOUS</td>
+    <td>GRChombo&rsquo;s <code>NewConstraints.impl.hpp</code> also uses standard <code>compute_ricci</code> (with Z). Both codes have the same behavior. Lattice code comments acknowledge the approximation (constraints.c:172&ndash;182).</td>
+    <td><span class="tag tag-match">MATCH</span> (downgraded)</td></tr>
+<tr><td>S6</td><td>Psi4 Ricci Z coefficient</td><td class="suspicious">SUSPICIOUS</td>
+    <td>Both codes include Z terms in Psi4 Ricci. Effect is O(constraint violation), negligible for resolved runs.</td>
+    <td><span class="tag tag-match">MATCH</span> (downgraded)</td></tr>
+</table>
+
+<p><strong>Additional fix:</strong> Post-restriction coarse ghost exchange added to GPU path (rk4.c:1019&ndash;1021),
+matching GRChombo&rsquo;s <code>postTimeStep &rarr; averageToCoarse &rarr; fillBdyGhosts</code> pattern.</p>
+
+<!-- ================================================================== -->
+<h2>2. Executive Summary</h2>
+<!-- ================================================================== -->
+
+<table>
+<tr><th>Subsystem</th><th>Lattice</th><th class="match">Matches</th><th class="intentional">Exceeds</th><th class="suspicious">Falls Short / Open</th></tr>
+<tr><td>CCZ4 RHS</td><td>CCZ4, all terms verified</td><td>GRChombo, BAM, AthenaK</td><td>EM source terms, CAHD, SSL (unique)</td><td>&mdash;</td></tr>
+<tr><td>Finite Differences</td><td>6th-order, fused d1/d2</td><td>GRChombo, AthenaK (6th)</td><td>BAM (default 4th), CarpetX (4th), Lean (4th)</td><td>NRPy+ (arbitrary order), SpEC (spectral)</td></tr>
+<tr><td>KO Dissipation</td><td>8th-order + CAKO + per-field &sigma;</td><td>&mdash;</td><td>All codes (6th-order default, no CAKO)</td><td>&mdash;</td></tr>
+<tr><td>Time Integration</td><td>Classic RK4 + CK45</td><td>GRChombo (RK4)</td><td>CK45 option unique</td><td>&mdash;</td></tr>
+<tr><td>Subcycling</td><td>Berger-Oliger, GPU-resident</td><td>GRChombo, BAM</td><td>AthenaK (none), Dendro-GR (none)</td><td>&mdash;</td></tr>
+<tr><td>Temporal Interp</td><td>Cubic Taylor O(dt<sup>4</sup>)</td><td>GRChombo (Chombo coeffs)</td><td>AthenaK (linear), CarpetX (linear default), Lean (linear)</td><td>&mdash;</td></tr>
+<tr><td>Per-Stage Ghost Fill</td><td>Yes (CPU + GPU)</td><td>GRChombo, BAM</td><td>AthenaK, NRPy+, Lean (per-step only)</td><td>&mdash;</td></tr>
+<tr><td>Ghost Exchange</td><td>5-phase coarse-buffer</td><td>AthenaK (coarse-buffer)</td><td>&mdash;</td><td>&mdash;</td></tr>
+<tr><td>Prolongation</td><td>6th-order Lagrange</td><td>AthenaK (5th&ndash;6th)</td><td>GRChombo (4th), CarpetX (linear default)</td><td>No ENO/minmod fallback (see R2)</td></tr>
+<tr><td>Restriction</td><td>Trilinear cell averaging</td><td>GRChombo, CarpetX</td><td>&mdash;</td><td>Order mismatch with 6th FD (see R4)</td></tr>
+<tr><td>Boundary Conditions</td><td>CP-BCs (BAM-style) + 4th-order Sommerfeld</td><td>BAM (CP-BCs)</td><td>All others (Sommerfeld only, 2nd-order stencils)</td><td>SpEC (more sophisticated GH-based)</td></tr>
+<tr><td>Initial Data</td><td>FAS multigrid, N&le;32, HiSpID, charged</td><td>&mdash;</td><td>All codes (N=2, no HiSpID, no charge)</td><td>&mdash;</td></tr>
+<tr><td>Diagnostics</td><td>Psi4 inline modes, hyperbolic AH, AH-excision norms</td><td>GRChombo (Psi4, AH)</td><td>AthenaK (no AH), Dendro-GR (no AH)</td><td>No CPU NaN check (S4)</td></tr>
+<tr><td>GPU</td><td>HIP, zero-PCIe subcycling</td><td>AthenaK (Kokkos)</td><td>GRChombo, BAM, Lean (no GPU)</td><td>&mdash;</td></tr>
+</table>
+
+<!-- ================================================================== -->
+<h2>3. CCZ4 RHS &mdash; Term-by-Term</h2>
+<!-- ================================================================== -->
+
+<p>All evolution equation terms verified against GRChombo <code>CCZ4RHS.impl.hpp</code>,
+AthenaK (Daszuta 2021), BAM (arXiv:1212.2901). SpEC uses generalized harmonic
+(no direct variable correspondence). NRPy+/Dendro-GR implement BSSN (Z=0).</p>
+
+<details><summary>3.1 Conformal Factor Convention</summary><div>
+<p><strong>Lattice:</strong> <code>chi = &psi;<sup>-4</sup></code> (fields.h:18).
+<strong>GRChombo:</strong> Same. <strong>BAM:</strong> Same.
+<strong>AthenaK:</strong> <code>chi = &gamma;<sup>-1/3</sup></code> (different definition).
+<strong>NRPy+:</strong> Supports chi, W, phi. <strong>Dendro-GR:</strong> <code>chi = W<sup>2</sup></code>.</p>
+<p><span class="tag tag-match">MATCH</span> (Lattice, GRChombo, BAM all use chi = &psi;<sup>-4</sup>)</p>
+</div></details>
+
+<details><summary>3.2 Z Vector Definition</summary><div>
+<p><strong>Lattice:</strong> <code>Z_over_chi[i] = 0.5*(Gamma[i] - chris.contracted[i])</code> (ccz4_rhs.c:230&ndash;233).</p>
+<p><strong>GRChombo:</strong> <code>CCZ4RHS.impl.hpp:82&ndash;84</code> &mdash; identical formula.</p>
+<p><strong>AthenaK/BAM:</strong> Same definition.</p>
+<p><span class="tag tag-match">MATCH</span></p>
+</div></details>
+
+<details><summary>3.3 Covariant vs Non-covariant Z4</summary><div>
+<p><strong>Lattice:</strong> <code>covariant_Z4 = true</code> (default). <code>kappa1_times_lapse = kappa1</code> when covariant, <code>kappa1 * lapse</code> otherwise. (ccz4_rhs.c:402&ndash;405)</p>
+<p><strong>GRChombo:</strong> Same ternary logic (CCZ4RHS.impl.hpp:172).</p>
+<p><strong>AthenaK/BAM:</strong> Non-covariant by default (<code>kappa1 * lapse</code>).</p>
+<p><span class="tag tag-intentional">INTENTIONAL DIFFERENCE</span> &mdash; Lattice defaults to covariant (cleaner formulation from arXiv:1106.2254).</p>
+</div></details>
+
+<details><summary>3.4 dt(chi) &mdash; Conformal Factor</summary><div>
+<pre>// Lattice ccz4_rhs.c:348-349
+out-&gt;chi = advec_chi + (2.0/3.0) * chi * (lapse * K - divshift);</pre>
+<p><strong>GRChombo:</strong> <code>CCZ4RHS.impl.hpp:140&ndash;141</code> &mdash; identical with <code>2.0/GR_SPACEDIM</code>.</p>
+<p><span class="tag tag-match">MATCH</span> &mdash; Universal agreement across all CCZ4/BSSN codes.</p>
+</div></details>
+
+<details><summary>3.5 dt(h_ij) &mdash; Conformal Metric</summary><div>
+<pre>// Lattice ccz4_rhs.c:362-370
+out-&gt;h[i][j] = advec_h[i][j] - 2*lapse*A[i][j]
+    - (2.0/3.0)*h[i][j]*divshift
+    + h[k][i]*d1_shift[k][j] + h[k][j]*d1_shift[k][i];</pre>
+<p><strong>GRChombo:</strong> <code>CCZ4RHS.impl.hpp:142&ndash;149</code> &mdash; identical.</p>
+<p><span class="tag tag-match">MATCH</span></p>
+</div></details>
+
+<details><summary>3.6 dt(A_ij) &mdash; Traceless Extrinsic Curvature</summary><div>
+<p><strong>Lattice:</strong> ccz4_rhs.c:374&ndash;397. TF part (<code>-covd2lapse + chi*lapse*ricci</code>), plus
+<code>A*(lapse*(K-2&Theta;) - 2/3*divshift) + Lie + A<sup>2</sup></code>. Pre-computed <code>A_mixed[k][j]</code> (CSE optimization).</p>
+<p><strong>GRChombo:</strong> <code>CCZ4RHS.impl.hpp:158&ndash;169</code> &mdash; same formula, computes <code>h_UU*A*A</code> inline.</p>
+<p><span class="tag tag-match">MATCH</span> (algebraically identical; Lattice uses CSE for the A<sup>2</sup> contraction).</p>
+</div></details>
+
+<details><summary>3.7 dt(K) &mdash; Trace of Extrinsic Curvature</summary><div>
+<pre>// Lattice ccz4_rhs.c:417-420
+out-&gt;K = advec_K + lapse*(ricci.scalar + K*(K - 2*Theta))
+    - kappa1_times_lapse * 3 * (1 + kappa2) * Theta - tr_covd2lapse;</pre>
+<p><strong>GRChombo:</strong> <code>CCZ4RHS.impl.hpp:182&ndash;185</code> &mdash; identical (uses <code>GR_SPACEDIM</code> for 3).</p>
+<p><span class="tag tag-match">MATCH</span></p>
+</div></details>
+
+<details><summary>3.8 dt(&Theta;) &mdash; CCZ4 Constraint Scalar</summary><div>
+<pre>// Lattice ccz4_rhs.c:407-413
+out-&gt;Theta = advec_Theta
+    + 0.5*lapse*(ricci.scalar - tr_A2 + (2/3)*K*K - 2*Theta*K)
+    - 0.5*Theta*kappa1_times_lapse*((3+1) + kappa2*(3-1))
+    - Z_dot_d1lapse;</pre>
+<p><strong>GRChombo:</strong> <code>CCZ4RHS.impl.hpp:187&ndash;195</code> &mdash; identical (plus cosmological constant term = 0 for vacuum).</p>
+<p><span class="tag tag-match">MATCH</span> (Lattice omits cosmological constant &mdash; zero for vacuum BH spacetimes).</p>
+</div></details>
+
+<details><summary>3.9 dt(&Gamma;<sup>i</sup>) &mdash; Conformal Connection Functions</summary><div>
+<p><strong>Lattice:</strong> ccz4_rhs.c:424&ndash;451. 8 terms: &kappa;3 coupling to Z_over_chi in divshift and Christoffel-contracted,
+&Theta; gradient, A_UU terms, second derivatives of shift (with 4/3 and 1/3 prefactors for d=3).</p>
+<p><strong>GRChombo:</strong> <code>CCZ4RHS.impl.hpp:197&ndash;220</code> &mdash; all 8 terms verified identical.</p>
+<p><span class="tag tag-match">MATCH</span> (most complex equation; all terms match).</p>
+</div></details>
+
+<details><summary>3.10 Ricci Tensor</summary><div>
+<p><strong>Lattice:</strong> Three-part decomposition (ccz4_rhs.c:253&ndash;287): ricci_hat (conformal Christoffel),
+ricci_chi (chi corrections), z_terms (Z&middot;d1_chi coupling). Final: <code>R_ij = (ricci_chi + chi*ricci_hat + z_terms)/chi</code>.</p>
+<p><strong>GRChombo:</strong> <code>CCZ4Geometry.hpp:75&ndash;101</code> &mdash; identical decomposition.</p>
+<p><span class="tag tag-match">MATCH</span> &mdash; Lattice exploits Ricci symmetry (6 vs 9 components) as a performance optimization.</p>
+</div></details>
+
+<details><summary>3.11 Gauge Conditions</summary><div>
+<h4>Lapse (1+log)</h4>
+<pre>out-&gt;lapse = advec_coeff * advec_lapse - c * lapse^p * (K - 2*Theta);</pre>
+<p>Defaults: c=2, p=1. <strong>GRChombo:</strong> identical (MovingPunctureGauge.hpp:54&ndash;57).</p>
+
+<h4>Shift (Gamma-driver with B<sup>i</sup>)</h4>
+<pre>out-&gt;shift[i] = advec_coeff * advec_shift[i] + F * B[i];</pre>
+<p>F=0.75. <strong>GRChombo:</strong> identical.</p>
+<p><strong>AthenaK/BAM:</strong> Use 1st-order form (no B<sup>i</sup> auxiliary). Mathematically equivalent but different variables.</p>
+
+<h4>Position-dependent &eta;</h4>
+<pre>eta_eff = eta / max(sqrt(max(chi, 1e-4)), 1e-2);</pre>
+<p><span class="tag tag-intentional">INTENTIONAL DIFFERENCE</span> &mdash; Lattice-unique feature (arXiv:1003.0859). No other code implements it natively.</p>
+</div></details>
+
+<details><summary>3.12 &kappa; Parameter Comparison</summary><div>
+<table>
+<tr><th>Parameter</th><th>Lattice</th><th>GRChombo</th><th>AthenaK</th><th>BAM</th></tr>
+<tr><td>&kappa;1</td><td>0.1</td><td>user-set</td><td>0.02</td><td>0.02&ndash;0.1</td></tr>
+<tr><td>&kappa;2</td><td>0.0</td><td>user-set</td><td>0.0</td><td>0.0</td></tr>
+<tr><td>&kappa;3</td><td>0.5</td><td>user-set</td><td>N/A</td><td>N/A</td></tr>
+<tr><td>covariant</td><td>true</td><td>user-set</td><td>false</td><td>false</td></tr>
+</table>
+<p><span class="tag tag-intentional">INTENTIONAL DIFFERENCE</span> &mdash; Lattice &kappa;1=0.1 is stronger than AthenaK/BAM&rsquo;s 0.02.</p>
+</div></details>
+
+<details><summary>3.13 EM Source Terms (Lattice-only)</summary><div>
+<p><strong>Lattice:</strong> ccz4_rhs.c:464&ndash;487. Standard 3+1 stress-energy coupling (B&amp;S Eq. 2.106&ndash;2.112)
+with chi<sup>2</sup> regularization near punctures. Disabled by default.</p>
+<p><span class="tag tag-intentional">INTENTIONAL DIFFERENCE</span> &mdash; No other surveyed code has EM coupling in vacuum CCZ4.</p>
+</div></details>
+
+<!-- ================================================================== -->
+<h2>4. Finite Differences</h2>
+<!-- ================================================================== -->
+
+<details><summary>4.1 Stencil Coefficients</summary><div>
+<table>
+<tr><th>Stencil</th><th>Lattice (6th-order)</th><th>GRChombo</th><th>Status</th></tr>
+<tr><td>d1 (1st deriv)</td><td><code>[-1/60, 3/20, -3/4, 0, 3/4, -3/20, 1/60]</code></td><td>Same</td><td><span class="tag tag-match">MATCH</span></td></tr>
+<tr><td>d2 (2nd deriv)</td><td><code>[1/90, -3/20, 3/2, -49/18, 3/2, -3/20, 1/90]</code></td><td>Same</td><td><span class="tag tag-match">MATCH</span></td></tr>
+<tr><td>Mixed d2</td><td>7&times;7 tensor product of d1 weights (6 magnitudes)</td><td>Same</td><td><span class="tag tag-match">MATCH</span></td></tr>
+<tr><td>Advection (upwind)</td><td><code>[1/30, -2/5, -7/12, 4/3, -1/2, 2/15, -1/60]</code></td><td>Same</td><td><span class="tag tag-match">MATCH</span></td></tr>
+</table>
+<p>All coefficients are standard Fornberg (1998) weights. AthenaK uses the same 6th-order stencils.</p>
+</div></details>
+
+<details><summary>4.2 Lattice Optimizations</summary><div>
+<ul>
+<li><strong>Fused d1/d2:</strong> <code>fd_d1_d2()</code> loads 7 points once, returns both derivatives. ~40% fewer cache misses. (finite_diff.h:87&ndash;103). <span class="tag tag-intentional">INTENTIONAL DIFFERENCE</span></li>
+<li><strong>Pre-computed inv_dx:</strong> All FD functions take <code>inv_dx</code> and multiply instead of dividing by dx. Eliminates ~20 divisions per grid point. <span class="tag tag-intentional">INTENTIONAL DIFFERENCE</span></li>
+<li><strong>Hoisted advection sign:</strong> Function pointer selected once per direction, not per field. <span class="tag tag-intentional">INTENTIONAL DIFFERENCE</span></li>
+</ul>
+</div></details>
+
+<details><summary>4.3 Ghost Width</summary><div>
+<table>
+<tr><th>Code</th><th>Ghost Width</th><th>Reason</th></tr>
+<tr><td><strong>Lattice</strong></td><td>4</td><td>6th-order FD (3) + 8th-order KO (4) + upwind (4)</td></tr>
+<tr><td>GRChombo</td><td>3</td><td>4th-order FD (2) + 6th-order KO (3)</td></tr>
+<tr><td>AthenaK</td><td>4</td><td>Same as Lattice for 6th-order</td></tr>
+<tr><td>BAM</td><td>3</td><td>4th-order default</td></tr>
+</table>
+<p><span class="tag tag-match">MATCH</span> with AthenaK (ghost=4 for 6th-order).</p>
+</div></details>
+
+<!-- ================================================================== -->
+<h2>5. KO Dissipation</h2>
+<!-- ================================================================== -->
+
+<details><summary>5.1 Dissipation Order and Stencils</summary><div>
+<table>
+<tr><th>Code</th><th>FD Order</th><th>KO Order</th><th>Stencil Points</th></tr>
+<tr><td><strong>Lattice</strong></td><td>6th</td><td><strong>8th</strong></td><td>9</td></tr>
+<tr><td>GRChombo</td><td>6th</td><td>6th (8th commented-out)</td><td>7 (9)</td></tr>
+<tr><td>AthenaK</td><td>6th</td><td>6th</td><td>7</td></tr>
+<tr><td>BAM</td><td>4th</td><td>6th</td><td>7</td></tr>
+</table>
+<p><span class="tag tag-intentional">INTENTIONAL DIFFERENCE</span> &mdash; Lattice enables 8th-order KO by default.
+GRChombo has the same coefficients commented out in source (SixthOrderDerivatives.hpp:411&ndash;423).
+Both use binomial(8,k)/256 weights.</p>
+</div></details>
+
+<details><summary>5.2 Sigma and CAKO</summary><div>
+<table>
+<tr><th>Code</th><th>Default &sigma;</th><th>Per-field?</th><th>Chi-adjusted?</th></tr>
+<tr><td><strong>Lattice</strong></td><td>1.0</td><td>Optional (0.99 gauge / 0.3 phys)</td><td>Optional (CAKO)</td></tr>
+<tr><td>GRChombo</td><td>1.0</td><td>No</td><td>No</td></tr>
+<tr><td>AthenaK</td><td>0.5</td><td>No</td><td>No</td></tr>
+<tr><td>BAM</td><td>~0.5</td><td>No</td><td>No</td></tr>
+<tr><td>Dendro-GR</td><td>user-set</td><td>Yes</td><td>Yes (CAKO)</td></tr>
+</table>
+<p>CAKO formula: <code>&sigma;_eff = sqrt(chi) &times; &sigma;</code> with floor 0.04 (dissipation.c:57&ndash;61).
+Per-field &sigma; from arXiv:2404.01137. <span class="tag tag-intentional">INTENTIONAL DIFFERENCE</span> &mdash; only Lattice and Dendro-GR implement CAKO.</p>
+</div></details>
+
+<!-- ================================================================== -->
+<h2>6. Time Integration &amp; Subcycling</h2>
+<!-- ================================================================== -->
+
+<details><summary>6.1 RK Methods</summary><div>
+<table>
+<tr><th>Code</th><th>Integrator</th><th>CFL</th></tr>
+<tr><td><strong>Lattice</strong></td><td>Classic RK4 + CK45 (runtime switch)</td><td>0.25</td></tr>
+<tr><td>GRChombo</td><td>RK4</td><td>0.25</td></tr>
+<tr><td>AthenaK</td><td>RK1&ndash;4 + SSP + IMEX</td><td>0.25</td></tr>
+<tr><td>BAM</td><td>RK4</td><td>0.25</td></tr>
+<tr><td>SpEC</td><td>Dormand-Prince (adaptive)</td><td>variable</td></tr>
+</table>
+<p><span class="tag tag-intentional">INTENTIONAL DIFFERENCE</span> &mdash; CK45 low-storage option (25% less memory, 25% more compute) is unique to Lattice.</p>
+</div></details>
+
+<details><summary>6.2 Berger-Oliger Subcycling</summary><div>
+<table>
+<tr><th>Code</th><th>Subcycling</th><th>Post-restrict ghost exchange</th><th>Per-stage ghost fill</th></tr>
+<tr><td><strong>Lattice</strong></td><td>Yes (CPU + GPU)</td><td>Yes</td><td>Yes (4&times;/step)</td></tr>
+<tr><td>GRChombo</td><td>Yes (Chombo)</td><td>Yes</td><td>Yes</td></tr>
+<tr><td>BAM</td><td>Yes</td><td>Yes</td><td>Yes</td></tr>
+<tr><td>AthenaK</td><td><strong>No</strong> (global dt)</td><td>N/A</td><td>N/A</td></tr>
+<tr><td>CarpetX</td><td>WIP</td><td>WIP</td><td>WIP</td></tr>
+<tr><td>Dendro-GR</td><td>No</td><td>N/A</td><td>N/A</td></tr>
+</table>
+<p><span class="tag tag-match">MATCH</span> with GRChombo and BAM. Lattice&rsquo;s GPU-resident subcycling is novel.</p>
+</div></details>
+
+<details><summary>6.3 Temporal Interpolation (Cubic Taylor)</summary><div>
+<p><strong>Lattice:</strong> block.c:255&ndash;316. Chombo TimeInterpolatorRK4 coefficient matrix:</p>
+<pre>
+coeffs[3][4] = {
+    { 1,      0,      0,      0     },   // a1
+    {-3/2,    1,      1,     -1/2   },   // a2
+    { 2/3,   -2/3,   -2/3,    2/3   }    // a3
+}
+</pre>
+<p>Evaluation: <code>U(&theta;) = U_n + &theta;*(a1 + &theta;*(a2 + &theta;*a3))</code> (Horner form). 3rd-degree polynomial, O(dt<sup>4</sup>) accurate.</p>
+<p>At &theta;=1: U_n + a1+a2+a3 = U_n + dt/6*(k1+2k2+2k3+k4) = U_{n+1}. Verified.</p>
+<table>
+<tr><th>Code</th><th>Method</th><th>Order</th><th>Storage</th></tr>
+<tr><td><strong>Lattice</strong></td><td>Cubic Taylor (Chombo)</td><td>O(dt<sup>4</sup>)</td><td>U_n + 3 Taylor buffers</td></tr>
+<tr><td>GRChombo</td><td>Cubic Taylor (Chombo)</td><td>O(dt<sup>4</sup>)</td><td>Same</td></tr>
+<tr><td>CarpetX</td><td>Cubic dense output</td><td>O(dt<sup>4</sup>)</td><td>Same basis functions</td></tr>
+<tr><td>AthenaK</td><td>Linear</td><td>O(dt<sup>2</sup>)</td><td>old + new</td></tr>
+<tr><td>Lean</td><td>Linear (Carpet)</td><td>O(dt<sup>2</sup>)</td><td>2 time levels</td></tr>
+</table>
+<p><span class="tag tag-match">MATCH</span> with GRChombo &mdash; exact coefficient matrix correspondence verified.</p>
+<p><span class="tag tag-resolved">RESOLVED</span> (old audit &sect;2.4 listed &ldquo;quartic&rdquo; &mdash; now cubic Taylor matching Chombo).</p>
+</div></details>
+
+<!-- ================================================================== -->
+<h2>7. Ghost Exchange &amp; AMR Infrastructure</h2>
+<!-- ================================================================== -->
+
+<details><summary>7.1 Architecture Comparison</summary><div>
+<table>
+<tr><th>Code</th><th>Architecture</th><th>Phases</th></tr>
+<tr><td><strong>Lattice</strong></td><td>AthenaK-style coarse-buffer</td><td>5: same-level, restrict, fill coarse_buf ghosts, extrapolate, prolongate</td></tr>
+<tr><td>GRChombo</td><td>Chombo FillPatch</td><td>2: inter-level prolongate, intra-level exchange</td></tr>
+<tr><td>AthenaK</td><td>Coarse-buffer</td><td>Same conceptual design as Lattice</td></tr>
+<tr><td>CarpetX</td><td>AMReX FillPatch</td><td>Framework-managed</td></tr>
+</table>
+<p><span class="tag tag-match">MATCH</span> with AthenaK. <span class="tag tag-intentional">INTENTIONAL DIFFERENCE</span> from GRChombo (more GPU-friendly).</p>
+<p>Lattice&rsquo;s Phase 3.5 (boundary extrapolation) is a unique addition for domain-boundary coarse_buf ghost cells.</p>
+</div></details>
+
+<details><summary>7.2 Same-Level Priority</summary><div>
+<p>All codes prioritize same-level data over prolongated data. Lattice: Phase 4 skips same-level
+directions (<code>ghost_exchange.c:488&ndash;489</code>: <code>if (nlev == b-&gt;loc.level) continue;</code>).</p>
+<p><span class="tag tag-match">MATCH</span></p>
+</div></details>
+
+<!-- ================================================================== -->
+<h2>8. Prolongation (Coarse &rarr; Fine)</h2>
+<!-- ================================================================== -->
+
+<details><summary>8.1 Order and Method</summary><div>
+<table>
+<tr><th>Code</th><th>Order</th><th>Method</th></tr>
+<tr><td><strong>Lattice</strong></td><td><strong>6th</strong></td><td>Cell-centered Lagrange, 7-point tensor product, pre-computed weight tables</td></tr>
+<tr><td>GRChombo</td><td>4th</td><td>Chombo FourthOrderFillPatch</td></tr>
+<tr><td>AthenaK</td><td>5th</td><td>Lagrange polynomial (n=Ng+1)</td></tr>
+<tr><td>CarpetX</td><td>Configurable</td><td>Polynomial, Hermite, ENO, minmod</td></tr>
+<tr><td>BAM</td><td>5th</td><td>Lagrange polynomial</td></tr>
+</table>
+<p><span class="tag tag-intentional">INTENTIONAL DIFFERENCE</span> &mdash; Lattice&rsquo;s 6th-order is the highest among production NR codes.</p>
+</div></details>
+
+<details><summary>8.2 Stencil Bounds at fi=0 (Staleness S1)</summary><div>
+<p>With <code>COARSE_BUF_GHOST=5</code> (prolongation.h:40), fi=0 maps to ci0=3 with stencil [0,6].
+All indices valid. Verified by audit agent.</p>
+<p><span class="tag tag-resolved">RESOLVED</span></p>
+</div></details>
+
+<details><summary>8.3 Negative Weights</summary><div>
+<p>6th-order Lagrange has negative weights (w[1]=-0.039, w[4]=-0.138, w[6]=-0.004).
+Can produce Gibbs-like oscillations near puncture singularities. No ENO/minmod fallback.
+See Recommendation R2.</p>
+<p>CarpetX offers ENO/minmod prolongation as alternatives. <span class="tag tag-worth">WORTH COPYING</span></p>
+</div></details>
+
+<!-- ================================================================== -->
+<h2>9. Restriction (Fine &rarr; Coarse)</h2>
+<!-- ================================================================== -->
+
+<details><summary>9.1 Method</summary><div>
+<pre>// restriction.c — trilinear cell averaging
+val = 0; for dk,dj,di in [0,1]^3: val += src[fine]; return val * 0.125;</pre>
+<table>
+<tr><th>Code</th><th>Method</th></tr>
+<tr><td><strong>Lattice</strong></td><td>Trilinear cell averaging (2&times;2&times;2, weight 1/8)</td></tr>
+<tr><td>GRChombo</td><td>Cell averaging (CoarseAverage)</td></tr>
+<tr><td>CarpetX</td><td>Cell averaging (AMReX average_down)</td></tr>
+<tr><td>AthenaK</td><td>High-order Lagrange (matches FD order)</td></tr>
+</table>
+<p><span class="tag tag-match">MATCH</span> with GRChombo/CarpetX.</p>
+<p>ExaHyPE (arXiv:2504.15814) provides evidence that restriction order should match FD order.
+Order mismatch (2nd-order restriction with 6th-order FD) may dominate AMR boundary error.
+See Recommendation R4.</p>
+</div></details>
+
+<!-- ================================================================== -->
+<h2>10. Boundary Conditions</h2>
+<!-- ================================================================== -->
+
+<details><summary>10.1 Sommerfeld BCs</summary><div>
+<p>Formula: <code>rhs(f) = -x<sup>i</sup>/r &middot; d_i(f) + (f_asymp - f)/r</code></p>
+<table>
+<tr><th>Code</th><th>Stencil Order</th></tr>
+<tr><td><strong>Lattice</strong></td><td><strong>4th-order</strong> adaptive (5 variants)</td></tr>
+<tr><td>GRChombo</td><td>2nd-order (3 variants)</td></tr>
+<tr><td>AthenaK</td><td>2nd-order</td></tr>
+<tr><td>BAM</td><td>2nd-order</td></tr>
+<tr><td>CarpetX</td><td>2nd-order (NewRad)</td></tr>
+</table>
+<p><span class="tag tag-intentional">INTENTIONAL DIFFERENCE</span> &mdash; Lattice&rsquo;s 4th-order Sommerfeld stencils are unique among all surveyed codes.
+Reduces boundary reflections by O(dx<sup>2</sup>).</p>
+</div></details>
+
+<details><summary>10.2 Constraint-Preserving BCs</summary><div>
+<p><strong>Lattice:</strong> constraint_preserving.h:31&ndash;74. BAM-style (arXiv:1212.2901).
+Replaces Sommerfeld on constraint fields with outgoing-wave equations at characteristic speeds:</p>
+<table>
+<tr><th>Field</th><th>Speed</th></tr>
+<tr><td>&Theta;</td><td>1.0</td></tr>
+<tr><td>K</td><td>sqrt(2/&alpha;)</td></tr>
+<tr><td>A_ij</td><td>1.0</td></tr>
+<tr><td>&Gamma;<sup>s</sup> (normal)</td><td>sqrt(3/4)</td></tr>
+<tr><td>&Gamma;<sup>A</sup> (tangential)</td><td>1.0</td></tr>
+</table>
+<p>Only Lattice, BAM, and SpEC have CP-BCs. GRChombo, CarpetX, AthenaK, Lean use Sommerfeld only.</p>
+<p><span class="tag tag-intentional">INTENTIONAL DIFFERENCE</span> (advantage shared only with BAM and SpEC).</p>
+</div></details>
+
+<!-- ================================================================== -->
+<h2>11. Initial Data</h2>
+<!-- ================================================================== -->
+
+<details><summary>11.1 Bowen-York A_ij</summary><div>
+<p><strong>Lattice:</strong> bowen_york.c:34&ndash;84. Momentum (B&amp;S Eq. 3.43) + Spin (B&amp;S Eq. 3.44) for N punctures.</p>
+<p><strong>GRChombo:</strong> BoostedBH.impl.hpp &mdash; momentum ONLY, no spin term.</p>
+<p><span class="tag tag-intentional">INTENTIONAL DIFFERENCE</span></p>
+</div></details>
+
+<details><summary>11.2 Solver Methods</summary><div>
+<table>
+<tr><th>Code</th><th>Solver</th><th>N-body</th><th>High-spin</th></tr>
+<tr><td><strong>Lattice</strong></td><td>Covering grid FAS multigrid</td><td>N &le; 32</td><td>HiSpID 4-field coupled</td></tr>
+<tr><td>GRChombo</td><td>Analytic superposition (no solver)</td><td>N=25 (no constraint solve)</td><td>No</td></tr>
+<tr><td>AthenaK / BAM / CarpetX</td><td>TwoPunctures (spectral)</td><td>N=2</td><td>No</td></tr>
+<tr><td>SpEC</td><td>Spectral elliptic</td><td>N=2</td><td>Yes (spectral)</td></tr>
+<tr><td>NRPy+</td><td>NRPyElliptic (multigrid)</td><td>N &ge; 2</td><td>No</td></tr>
+</table>
+<p><span class="tag tag-intentional">INTENTIONAL DIFFERENCE</span> &mdash; Lattice&rsquo;s solve-on-evolution-mesh approach eliminates interpolation error.
+HiSpID 4-field coupled solver for high-spin data is unique among open-source codes.</p>
+</div></details>
+
+<details><summary>11.3 Charged Punctures (Lattice-only)</summary><div>
+<p>Coulomb E<sup>i</sup> for charged BHs: <code>E<sup>i</sup><sub>conf</sub> = &psi;<sup>-6</sup> Q/(4&pi;r<sup>2</sup>) n<sup>i</sup></code> (arXiv:1903.01036).
+No other surveyed code has charged puncture capability.</p>
+<p><span class="tag tag-intentional">INTENTIONAL DIFFERENCE</span></p>
+</div></details>
+
+<!-- ================================================================== -->
+<h2>12. Diagnostics</h2>
+<!-- ================================================================== -->
+
+<details><summary>12.1 Hamiltonian Constraint</summary><div>
+<p><strong>Lattice:</strong> constraints.c:196&ndash;200. <code>H = R + (2/3)K<sup>2</sup> - A<sup>ij</sup>A<sub>ij</sub></code>.
+Uses field Gamma (includes Z contribution) &mdash; same as GRChombo.</p>
+<p><span class="tag tag-match">MATCH</span> (S5 downgraded &mdash; both codes have Z in constraint Ricci).</p>
+</div></details>
+
+<details><summary>12.2 Psi4 Extraction</summary><div>
+<p><strong>Electric Weyl:</strong> <code>E_ij = R_ij + (K - &Theta;) K_ij - K_ik K<sup>k</sup><sub>j</sub></code>.
+<span class="tag tag-match">MATCH</span> with GRChombo (both use K&minus;&Theta;, not K&minus;2&Theta;).</p>
+<p><strong>Magnetic Weyl:</strong> Lattice uses 3D Levi-Civita; GRChombo uses 4D contraction.
+Mathematically equivalent. <span class="tag tag-match">MATCH</span></p>
+<p><strong>Tetrad:</strong> Different Gram-Schmidt ordering. Produces documented sign flip on Re(Psi4)
+(psi4.c:564&ndash;565). |Psi4| unchanged. <span class="tag tag-intentional">INTENTIONAL DIFFERENCE</span></p>
+<p><strong>Mode decomposition:</strong> Inline via Wigner d-matrix (Lattice) vs post-processing (GRChombo).
+<span class="tag tag-intentional">INTENTIONAL DIFFERENCE</span></p>
+</div></details>
+
+<details><summary>12.3 AH Finder</summary><div>
+<table>
+<tr><th>Code</th><th>Algorithm</th><th>Interpolation Order</th></tr>
+<tr><td><strong>Lattice</strong></td><td>Hyperbolic flow (BHaHAHA)</td><td>6th-order</td></tr>
+<tr><td>GRChombo</td><td>Fast flow (parabolic)</td><td>4th-order</td></tr>
+<tr><td>CarpetX</td><td>AHFinderDirect (Thornburg)</td><td>varies</td></tr>
+<tr><td>SpEC</td><td>Spectral AH finder</td><td>exponential</td></tr>
+<tr><td>AthenaK / Dendro-GR</td><td>None</td><td>&mdash;</td></tr>
+</table>
+<p><span class="tag tag-intentional">INTENTIONAL DIFFERENCE</span> &mdash; Hyperbolic flow is more robust than parabolic for distorted horizons.</p>
+</div></details>
+
+<details><summary>12.4 NaN Checking</summary><div>
+<p><strong>Lattice:</strong> GPU has <code>backend_check_finite_packed()</code>. CPU has NO production check.
+<strong>GRChombo:</strong> <code>NanCheck.hpp</code> runs every step with full diagnostics.</p>
+<p><span class="tag tag-suspicious">SUSPICIOUS (S4 &mdash; still open)</span> &mdash; See Recommendation R1.</p>
+</div></details>
+
+<!-- ================================================================== -->
+<h2>13. Recommendations &mdash; Worth Copying</h2>
+<!-- ================================================================== -->
+
+<table>
+<tr><th>Rank</th><th>Feature</th><th>Source</th><th>Priority</th><th>Complexity</th><th>Action</th></tr>
+<tr><td>R1</td><td>Production NaN/Inf check</td><td>GRChombo (NanCheck.hpp)</td>
+    <td><span class="priority-critical">Critical</span></td><td>Trivial (&lt;20 lines)</td>
+    <td>Wire existing <code>backend_check_finite_packed()</code> into main.c with <code>--nan_check_every</code></td></tr>
+<tr><td>R2</td><td>ENO/minmod prolongation fallback</td><td>CarpetX</td>
+    <td><span class="priority-high">High</span></td><td>Moderate (~150 lines)</td>
+    <td>Detect chi&lt;threshold, fall back from 6th-order Lagrange to non-oscillatory interpolant</td></tr>
+<tr><td>R3</td><td>Test &kappa;1=0.02 default</td><td>AthenaK/BAM</td>
+    <td><span class="priority-medium">Medium</span></td><td>Trivial (0 lines)</td>
+    <td>Run comparison simulations with <code>--kappa1 0.02</code> vs 0.1, compare Psi4 phase</td></tr>
+<tr><td>R4</td><td>Higher-order restriction</td><td>AthenaK, ExaHyPE (arXiv:2504.15814)</td>
+    <td><span class="priority-medium">Medium</span></td><td>Moderate (~200 lines)</td>
+    <td>Hybrid: high-order in smooth regions, trilinear near punctures</td></tr>
+<tr><td>R5</td><td>8th-order FD + 9th-order KO</td><td>arXiv:2404.01137</td>
+    <td><span class="priority-low">Low</span></td><td>Substantial (500+ lines)</td>
+    <td>Ghost width change ripples through many subsystems</td></tr>
+</table>
+
+<details><summary>R1: Production NaN/Inf Check (Critical)</summary><div>
+<p>The backend API <code>backend_check_finite_packed()</code> already exists for both CPU and GPU.
+Tests call it. But <code>main.c</code> never calls it in production. Without runtime NaN checking,
+a blown-up simulation writes garbage for many steps before detection. Early detection
+saves hours of wasted GPU time on HPC allocations.</p>
+<p><strong>Implementation:</strong> Add <code>--nan_check_every N</code> CLI parameter (default 10). Call existing API every N steps. Zero performance impact.</p>
+</div></details>
+
+<details><summary>R2: ENO/Minmod Prolongation Fallback (High)</summary><div>
+<p>Lattice switched restriction to trilinear specifically because 6th-order Lagrange
+negative weights caused Gibbs oscillations near punctures. The same problem exists
+in prolongation &mdash; 6th-order Lagrange has negative weights that can produce
+undershoots near the 1/r singularity in chi.</p>
+<p><strong>Implementation:</strong> Detect cells where chi &lt; threshold (e.g., 0.1). Fall back to minmod
+or ENO for those cells. Smooth regions keep 6th-order. The 1D tensor-product structure
+makes this straightforward.</p>
+</div></details>
+
+<details><summary>R3: Test &kappa;1=0.02 (Medium)</summary><div>
+<p>AthenaK and BAM default to &kappa;1=0.02, which is 5&times; less constraint damping than
+Lattice&rsquo;s 0.1. With Lattice&rsquo;s strong KO dissipation (per-field &sigma;, CAKO, CP-BCs),
+lower &kappa;1 may improve waveform phase accuracy. The parameter already exists &mdash;
+this is a tuning task, not a code change.</p>
+</div></details>
+
+<details><summary>R4: Higher-Order Restriction (Medium)</summary><div>
+<p>Current setup: 6th-order FD, 6th-order prolongation, 2nd-order restriction.
+ExaHyPE (arXiv:2504.15814) shows this mismatch introduces O(dx<sup>2</sup>) error at AMR
+boundaries. A hybrid approach (high-order in smooth regions, trilinear near punctures)
+would match AthenaK while preserving robustness near singularities.</p>
+</div></details>
+
+<details><summary>R5: 8th-Order FD (Low Priority)</summary><div>
+<p>Would roughly double accuracy at same grid spacing, or allow ~20% coarser grids.
+But requires ghost width 5 (currently 4), which ripples through ghost exchange,
+boundary conditions, memory layout, and all AMR operations. Large architectural
+change for incremental benefit over 6th-order (convergence order already ~6.5).</p>
+</div></details>
+
+<h3>NOT Worth Copying</h3>
+
+<table>
+<tr><th>Feature</th><th>Code</th><th>Why Not</th></tr>
+<tr><td>No subcycling (global dt)</td><td>AthenaK</td><td>32&ndash;128&times; more fine-level work for 5&ndash;7 AMR levels. Lattice already has working subcycling.</td></tr>
+<tr><td>Spectral AH finder</td><td>SpEC</td><td>Requires spectral infrastructure Lattice doesn&rsquo;t have. Hyperbolic flow is well-matched to FD.</td></tr>
+<tr><td>Wavelet AMR</td><td>Dendro-GR</td><td>Architecturally incompatible with block-structured AMR.</td></tr>
+<tr><td>Code generation</td><td>NRPy+</td><td>Adds Python dependency, makes debugging harder. Hand-written CSE already optimized.</td></tr>
+<tr><td>1st-order Gamma-driver (no B<sup>i</sup>)</td><td>AthenaK/BAM</td><td>Saves 3 fields but breaks CP-BCs (which need B<sup>i</sup> characteristic speeds).</td></tr>
+<tr><td>Multistep RK4 dense output</td><td>CarpetX (arXiv:2603.05763)</td><td>Research paper, not production-validated. Lattice&rsquo;s cubic Taylor is proven by GRChombo.</td></tr>
+</table>
+
+<!-- ================================================================== -->
+<h2>References</h2>
+<!-- ================================================================== -->
+<ul>
+<li>arXiv:1106.2254 &mdash; CCZ4 formulation (Alic et al. 2012)</li>
+<li>arXiv:1212.2901 &mdash; BAM constraint-preserving BCs (Hilditch et al.)</li>
+<li>arXiv:2409.16053 &mdash; AthenaK (Daszuta et al. 2024)</li>
+<li>arXiv:2409.10383 &mdash; GR-Athena++ Z4c (Cook et al. 2024)</li>
+<li>arXiv:2503.09629 &mdash; CarpetX GPU subcycling (Ji et al. 2025)</li>
+<li>arXiv:2603.05763 &mdash; CarpetX multistep RK4 (Schnetter et al. 2026)</li>
+<li>arXiv:2504.15814 &mdash; ExaHyPE high-order prolongation (Dumbser et al. 2025)</li>
+<li>arXiv:2404.01137 &mdash; Improved KO dissipation + constraint damping</li>
+<li>arXiv:2505.15912 &mdash; BHaHAHA hyperbolic AH flow</li>
+<li>arXiv:2505.01495 &mdash; GRChombo 25-BH cluster simulation</li>
+<li>arXiv:1003.0859 &mdash; Position-dependent eta (Muller &amp; Brugmann)</li>
+<li>arXiv:1903.01036 &mdash; Charged puncture initial data (Bozzola &amp; Paschalidis)</li>
+<li>arXiv:0909.3557 &mdash; SpEC generalized harmonic (Lindblom et al.)</li>
+<li>arXiv:2112.10567 &mdash; GRChombo AMR lessons</li>
+<li>Chombo TimeInterpolatorRK4.cpp &mdash; Cubic Taylor temporal interpolation</li>
+<li>Fornberg, SIAM Review 40 (1998) &mdash; Finite difference weight generation</li>
+</ul>
+
+</body>
+</html>

@@ -1,3 +1,5 @@
+# SUPERSEDED — See docs/nr_code_comparison_full.html (2026-04-05)
+
 # Lattice vs GRChombo: Comprehensive Code Audit
 
 **Date:** 2026-03-26
