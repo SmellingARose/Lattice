@@ -329,6 +329,13 @@ work on AMR meshes.
 - **Parallelized cross-level ghost fill kernel:** `hip_cross_level_ghost_fill`
   parallelized over `(entry, field)` instead of just `entry` — 25x more GPU
   threads per launch, eliminating the serial field loop bottleneck.
+- **Phase-3b-only cross-level ghost fill:** `backend_cross_level_ghost_fill_packed`
+  stripped from 7 kernel launches (restrict, same-level fill, cross-level fill,
+  extrap×3, prolong) down to 1 (cross-level fill only). Phases 2, 3a, 3.5, 4
+  are redundant with the subsequent `backend_ghost_exchange_packed` which already
+  does the full 5-phase exchange. Eliminates 381 redundant prolong launches per
+  base step (the most expensive kernel: 7³=343-point stencil per ghost cell).
+  QNM publication benchmark: **400s → 100s/step on H100** (7 AMR levels, 344 blocks).
 - **HiSpID solver bug fixes:** (1) `mg_level_init` received domain length `Lcov`
   instead of grid spacing `Lcov/N_l` — all FD stencils off by N², solver never
   actually solved on covering grid. (2) Hamiltonian constraint R_tilde term had

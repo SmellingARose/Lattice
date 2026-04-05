@@ -23,7 +23,13 @@
   kernel launches per base step (7 AMR levels).
 - Parallelized `hip_cross_level_ghost_fill` over `(entry, field)`: 25x more
   threads, eliminates serial field loop bottleneck.
+- Phase-3b-only `backend_cross_level_ghost_fill_packed`: stripped from 7
+  kernel launches to 1. Phases 2/3a/3.5/4 removed — redundant with the
+  subsequent `backend_ghost_exchange_packed`. Eliminates 381 redundant prolong
+  launches per base step.
 - CPU path: same interior-only + stage 3 skip.
+- **QNM publication benchmark: 400s → 100s/step on H100** (was 130s before
+  per-stage ghost fill, now faster due to interior-only RK4 + Phase-3b-only).
 
 **Production NaN/Inf check (R1 from comparison doc).**
 
