@@ -494,6 +494,25 @@ __global__ void hip_cross_level_ghost_fill(
  * from both packs' device handles.
  */
 extern "C"
+/* Cross-level ghost fill: ONLY Phase 3b (temporal interpolation from coarser pack).
+ *
+ * Writes temporally interpolated coarse data into fine pack's coarse_buf ghost
+ * cells at cross-level (refinement boundary) positions. All other phases
+ * (restrict, same-level fill, extrap, prolong) are handled by the subsequent
+ * backend_ghost_exchange_packed call, which already does the full 5-phase exchange.
+ *
+ * This design avoids redundant work: the old 7-kernel cross_level_ghost_fill
+ * duplicated restrict + same-level fill + extrap + prolong that ghost_exchange
+ * immediately redid. Reducing to 1 kernel per call (down from 7) eliminates
+ * the main GPU performance bottleneck for deep AMR subcycling.
+ *
+ * Correctness: cross-level ghost cells in coarse_buf survive through
+ * ghost_exchange because no phase overwrites cross-level positions:
+ *   Phase 2 (restrict) → writes coarse_buf INTERIOR only
+ *   Phase 3a (same-level fill) → writes same-level ghost positions only
+ *   Phase 3.5 (extrap) → writes domain-boundary ghosts only
+ *   Phase 4 (prolong) → READS coarse_buf (including cross-level data) → fine ghosts
+ */
 void backend_cross_level_ghost_fill_packed(
     meshblock_pack_t *fine_pack,
     meshblock_pack_t *coarse_pack,
@@ -503,119 +522,44 @@ void backend_cross_level_ghost_fill_packed(
     hip_device_ptrs_t *cdp = (hip_device_ptrs_t *)coarse_pack->device_handle;
     if (!fdp || !cdp) return;
     if (fine_pack->n_refined == 0) return;
+    if (!fdp->cross_level_map || fdp->n_cross_entries == 0) return;
 
     int nb = fine_pack->n_blocks;
-    int ghost = fine_pack->ghost;
-    int N_f = fine_pack->N;
-    int Nt_f = fine_pack->Ntotal;
-    size_t npts = fine_pack->npts;
     int nf = fine_pack->n_fields;
     int ghost_c = (fine_pack->coarse_Ntotal - fine_pack->coarse_N) / 2;
     int N_c = fine_pack->coarse_N;
     int Nt_c = fine_pack->coarse_Ntotal;
     size_t cnpts = fine_pack->coarse_npts;
+
+    /* Single kernel: cubic Taylor temporal interpolation from coarser pack
+     * into fine pack's coarse_buf ghost cells.
+     * U(θ) = U_n + θ*(a1 + θ*(a2 + θ*a3))   [Horner form]
+     * Parallelized over (entry, field) for 25x more GPU threads.
+     * Ref: Chombo TimeInterpolatorRK4::intermediate. */
+    int n_entries = fdp->n_cross_entries;
+    int total_cross = n_entries * nf;
     int bs = 256;
+    int gs = (total_cross + bs - 1) / bs;
 
-    /* Phase 2: Restrict fine interior → fine's coarse_buf.
-     * Uses fine pack's data and coarse_data on device. */
-    {
-        /* Activate fine pack's device state */
-        d_ptrs = *fdp;
-        d_ptrs_valid = 1;
-
-        int total = nb * nf * N_c * N_c;
-        int gs = (total + bs - 1) / bs;
-        hipLaunchKernelGGL(hip_ghost_restrict, gs, bs, 0, gpu_stream,
-                           fdp->data, fdp->coarse_data, fdp->refined_map,
-                           nb, ghost, Nt_f, ghost_c, N_c, Nt_c,
-                           npts, cnpts, nf);
-    }
-
-    /* Phase 3a: Same-level coarse_buf exchange among siblings.
-     * Re-launches hip_ghost_coarse_fill with fine pack's pointers only
-     * for the same-level branch (nlev == blk_level). */
-    {
-        int total = nb * NUM_NEIGHBORS;
-        int gs = (total + bs - 1) / bs;
-        hipLaunchKernelGGL(hip_ghost_coarse_fill, gs, bs, 0, gpu_stream,
-                           fdp->data, fdp->coarse_data,
-                           fdp->refined_map, fdp->levels,
-                           fdp->nblevel_table, fdp->neighbor_table,
-                           fdp->coarse_neighbor_table,
-                           fdp->origins, fdp->dx_per_block,
-                           nb, ghost, N_c, Nt_c, Nt_f,
-                           npts, cnpts, nf);
-    }
-
-    /* Phase 3b: Cross-level fill from coarser pack.
-     * For fine blocks with coarser-level neighbors, copy from coarse pack's
-     * data (or temporally interpolate with fields_old) into fine's coarse_buf.
-     *
-     * This reuses hip_ghost_coarse_fill's coarser-neighbor branch (nlev ==
-     * blk_level - 1) but reads from the coarse pack's data. Since that
-     * branch reads from pk_data at pack_nbr, and the coarser-level neighbors
-     * are NOT in the fine pack, this branch doesn't fire. Instead we need
-     * a dedicated cross-pack kernel.
-     *
-     * For now, the cross-level fill entries are recorded in the cross_level_map.
-     * If no map is built, skip (the CPU path handles this case). */
-    if (fdp->cross_level_map && fdp->n_cross_entries > 0) {
-        /* Launch cross-level ghost fill kernel.
-         * Each entry: (fine_block, direction, coarse_block).
-         * We copy a slab from coarse_pack's data (temporally interpolated)
-         * into fine_pack's coarse_data. */
-        int n_entries = fdp->n_cross_entries;
-        int total_cross = n_entries * nf;  /* parallelized over (entry, field) */
-        int gs = (total_cross + bs - 1) / bs;
-
-        /* Cubic Taylor temporal interpolation (Chombo TimeInterpolatorRK4):
-         * U(θ) = U_n + θ*(a1 + θ*(a2 + θ*a3))   [Horner form]
-         * When Taylor buffers are zero (first step), gives U_n.
-         * Ref: Chombo TimeInterpolatorRK4::intermediate. */
-        hipLaunchKernelGGL(hip_cross_level_ghost_fill, gs, bs, 0, gpu_stream,
-                           fdp->coarse_data,
-                           cdp->fields_old,
-                           cdp->taylor_a1,
-                           cdp->taylor_a2,
-                           cdp->taylor_a3,
-                           cdp->has_taylor,
-                           fdp->cross_level_map,
-                           n_entries,
-                           fdp->refined_map,
-                           fdp->origins,
-                           cdp->origins,
-                           cdp->dx_per_block,
-                           frac,
-                           nb, cdp->nb,
-                           ghost_c, N_c, Nt_c,
-                           coarse_pack->Ntotal,
-                           cnpts, coarse_pack->npts,
-                           nf);
-    }
-
-    /* Phase 3.5: Boundary extrapolation on fine's coarse_data (X, Y, Z) */
-    {
-        int total = nb * nf * Nt_c * Nt_c;
-        int gs = (total + bs - 1) / bs;
-        for (int dim = 0; dim < 3; dim++) {
-            hipLaunchKernelGGL(hip_ghost_extrap, gs, bs, 0, gpu_stream,
-                               fdp->coarse_data, fdp->refined_map,
-                               fdp->nblevel_table,
-                               nb, ghost_c, N_c, Nt_c, cnpts, nf, dim);
-        }
-    }
-
-    /* Phase 4: Prolongate fine's coarse_data → fine ghosts */
-    {
-        int total = nb * Nt_f * Nt_f * Nt_f;
-        int gs = (total + bs - 1) / bs;
-        hipLaunchKernelGGL(hip_ghost_prolong, gs, bs, 0, gpu_stream,
-                           fdp->data, fdp->coarse_data,
-                           fdp->refined_map, fdp->levels,
-                           fdp->nblevel_table,
-                           nb, ghost, N_f, Nt_f, ghost_c, Nt_c,
-                           npts, cnpts, nf);
-    }
+    hipLaunchKernelGGL(hip_cross_level_ghost_fill, gs, bs, 0, gpu_stream,
+                       fdp->coarse_data,
+                       cdp->fields_old,
+                       cdp->taylor_a1,
+                       cdp->taylor_a2,
+                       cdp->taylor_a3,
+                       cdp->has_taylor,
+                       fdp->cross_level_map,
+                       n_entries,
+                       fdp->refined_map,
+                       fdp->origins,
+                       cdp->origins,
+                       cdp->dx_per_block,
+                       frac,
+                       nb, cdp->nb,
+                       ghost_c, N_c, Nt_c,
+                       coarse_pack->Ntotal,
+                       cnpts, coarse_pack->npts,
+                       nf);
 }
 
 /*
