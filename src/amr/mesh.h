@@ -97,6 +97,9 @@ static inline block_t *mesh_get_block(const mesh_t *m, int id)
 /* Number of leaf (active) blocks */
 int mesh_num_leaves(const mesh_t *m);
 
+/* Check all leaf block interior cells for NaN/Inf. Returns 1 if all finite, 0 if not. */
+int mesh_check_finite(const mesh_t *m);
+
 /*
  * Find a block by logical location. Linear scan of blocks[].
  * Returns NULL if not found. Fine for <1000 blocks.

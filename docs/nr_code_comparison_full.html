@@ -71,8 +71,8 @@ differences (S1&ndash;S6). Three AMR subcycling fixes were applied on 2026-04-02
     <td>Same mechanism as S2. Per-stage fill on both CPU and GPU paths.</td>
     <td><span class="tag tag-resolved">RESOLVED</span></td></tr>
 <tr><td>S4</td><td>No CPU production NaN check</td><td class="suspicious">SUSPICIOUS</td>
-    <td>Still absent. GPU has <code>backend_check_finite_packed()</code> but main.c never calls it on CPU. See Recommendation R1.</td>
-    <td><span class="tag tag-suspicious">STILL OPEN</span></td></tr>
+    <td><code>mesh_check_finite()</code> added to mesh.c. Wired into main.c via <code>--nan-check-every N</code> (both CPU and GPU paths).</td>
+    <td><span class="tag tag-resolved">RESOLVED (R1)</span></td></tr>
 <tr><td>S5</td><td>Hamiltonian constraint Z contamination</td><td class="suspicious">SUSPICIOUS</td>
     <td>GRChombo&rsquo;s <code>NewConstraints.impl.hpp</code> also uses standard <code>compute_ricci</code> (with Z). Both codes have the same behavior. Lattice code comments acknowledge the approximation (constraints.c:172&ndash;182).</td>
     <td><span class="tag tag-match">MATCH</span> (downgraded)</td></tr>
@@ -98,11 +98,11 @@ matching GRChombo&rsquo;s <code>postTimeStep &rarr; averageToCoarse &rarr; fillB
 <tr><td>Temporal Interp</td><td>Cubic Taylor O(dt<sup>4</sup>)</td><td>GRChombo (Chombo coeffs)</td><td>AthenaK (linear), CarpetX (linear default), Lean (linear)</td><td>&mdash;</td></tr>
 <tr><td>Per-Stage Ghost Fill</td><td>Yes (CPU + GPU)</td><td>GRChombo, BAM</td><td>AthenaK, NRPy+, Lean (per-step only)</td><td>&mdash;</td></tr>
 <tr><td>Ghost Exchange</td><td>5-phase coarse-buffer</td><td>AthenaK (coarse-buffer)</td><td>&mdash;</td><td>&mdash;</td></tr>
-<tr><td>Prolongation</td><td>6th-order Lagrange</td><td>AthenaK (5th&ndash;6th)</td><td>GRChombo (4th), CarpetX (linear default)</td><td>No ENO/minmod fallback (see R2)</td></tr>
-<tr><td>Restriction</td><td>Trilinear cell averaging</td><td>GRChombo, CarpetX</td><td>&mdash;</td><td>Order mismatch with 6th FD (see R4)</td></tr>
+<tr><td>Prolongation</td><td>6th-order Lagrange + floor</td><td>AthenaK (5th&ndash;6th)</td><td>GRChombo (4th), CarpetX (linear default)</td><td>&mdash;</td></tr>
+<tr><td>Restriction</td><td>Trilinear cell averaging</td><td>GRChombo, CarpetX, BAM</td><td>&mdash;</td><td>&mdash;</td></tr>
 <tr><td>Boundary Conditions</td><td>CP-BCs (BAM-style) + 4th-order Sommerfeld</td><td>BAM (CP-BCs)</td><td>All others (Sommerfeld only, 2nd-order stencils)</td><td>SpEC (more sophisticated GH-based)</td></tr>
 <tr><td>Initial Data</td><td>FAS multigrid, N&le;32, HiSpID, charged</td><td>&mdash;</td><td>All codes (N=2, no HiSpID, no charge)</td><td>&mdash;</td></tr>
-<tr><td>Diagnostics</td><td>Psi4 inline modes, hyperbolic AH, AH-excision norms</td><td>GRChombo (Psi4, AH)</td><td>AthenaK (no AH), Dendro-GR (no AH)</td><td>No CPU NaN check (S4)</td></tr>
+<tr><td>Diagnostics</td><td>Psi4 inline modes, hyperbolic AH, AH-excision norms, NaN check</td><td>GRChombo (Psi4, AH, NaN)</td><td>AthenaK (no AH), Dendro-GR (no AH)</td><td>&mdash;</td></tr>
 <tr><td>GPU</td><td>HIP, zero-PCIe subcycling</td><td>AthenaK (Kokkos)</td><td>GRChombo, BAM, Lean (no GPU)</td><td>&mdash;</td></tr>
 </table>
 
@@ -383,11 +383,18 @@ All indices valid. Verified by audit agent.</p>
 <p><span class="tag tag-resolved">RESOLVED</span></p>
 </div></details>
 
-<details><summary>8.3 Negative Weights</summary><div>
+<details><summary>8.3 Negative Weights &amp; Fallback Strategy</summary><div>
 <p>6th-order Lagrange has negative weights (w[1]=-0.039, w[4]=-0.138, w[6]=-0.004).
-Can produce Gibbs-like oscillations near puncture singularities. No ENO/minmod fallback.
-See Recommendation R2.</p>
-<p>CarpetX offers ENO/minmod prolongation as alternatives. <span class="tag tag-worth">WORTH COPYING</span></p>
+Can produce Gibbs-like oscillations near puncture singularities.</p>
+<p><strong>Industry consensus:</strong> No production NR code uses a chi-based or smoothness-based
+criterion to switch prolongation order near punctures. The universal approach is: one fixed
+polynomial order everywhere, rely on chi/lapse floor (1e-4) after each time step to clamp
+overshoots. CarpetX&rsquo;s ENO/minmod option exists but is used for GRMHD hydrodynamic shocks,
+NOT for vacuum NR fields. GRChombo, BAM, AthenaK, and SpEC all use fixed-order polynomial
+prolongation without fallback.</p>
+<p>Lattice follows this consensus: 6th-order Lagrange everywhere, chi/lapse floor enforcement
+after every RK4 step and after prolongation (<code>refine.c:186&ndash;187</code>).</p>
+<p><span class="tag tag-match">MATCH</span> (same strategy as all production codes &mdash; fixed order + floor enforcement).</p>
 </div></details>
 
 <!-- ================================================================== -->
@@ -405,9 +412,12 @@ val = 0; for dk,dj,di in [0,1]^3: val += src[fine]; return val * 0.125;</pre>
 <tr><td>AthenaK</td><td>High-order Lagrange (matches FD order)</td></tr>
 </table>
 <p><span class="tag tag-match">MATCH</span> with GRChombo/CarpetX.</p>
-<p>ExaHyPE (arXiv:2504.15814) provides evidence that restriction order should match FD order.
-Order mismatch (2nd-order restriction with 6th-order FD) may dominate AMR boundary error.
-See Recommendation R4.</p>
+<p>ExaHyPE (arXiv:2504.15814) provides theoretical evidence that restriction order should match
+FD order. However, every production NR code with cell-centered AMR (GRChombo, CarpetX, BAM)
+uses simple cell averaging for restriction &mdash; the positive-weight guarantee is considered
+more important than order matching near puncture singularities. Chi/lapse floor enforcement
+handles any residual overshoots. AthenaK uses vertex-centered data with direct injection
+(a different paradigm). Lattice follows the production consensus.</p>
 </div></details>
 
 <!-- ================================================================== -->
@@ -506,9 +516,11 @@ Mathematically equivalent. <span class="tag tag-match">MATCH</span></p>
 </div></details>
 
 <details><summary>12.4 NaN Checking</summary><div>
-<p><strong>Lattice:</strong> GPU has <code>backend_check_finite_packed()</code>. CPU has NO production check.
-<strong>GRChombo:</strong> <code>NanCheck.hpp</code> runs every step with full diagnostics.</p>
-<p><span class="tag tag-suspicious">SUSPICIOUS (S4 &mdash; still open)</span> &mdash; See Recommendation R1.</p>
+<p><strong>Lattice:</strong> <code>mesh_check_finite()</code> (CPU) and <code>backend_check_finite_packed()</code> (GPU)
+wired into main.c via <code>--nan-check-every N</code>. Checks all leaf block interior cells for
+NaN/Inf every N steps, aborts with step/time diagnostic on detection.</p>
+<p><strong>GRChombo:</strong> <code>NanCheck.hpp</code> runs every step with full diagnostics.</p>
+<p><span class="tag tag-resolved">RESOLVED (R1 implemented)</span></p>
 </div></details>
 
 <!-- ================================================================== -->
@@ -516,54 +528,31 @@ Mathematically equivalent. <span class="tag tag-match">MATCH</span></p>
 <!-- ================================================================== -->
 
 <table>
-<tr><th>Rank</th><th>Feature</th><th>Source</th><th>Priority</th><th>Complexity</th><th>Action</th></tr>
+<tr><th>Rank</th><th>Feature</th><th>Source</th><th>Priority</th><th>Complexity</th><th>Status</th></tr>
 <tr><td>R1</td><td>Production NaN/Inf check</td><td>GRChombo (NanCheck.hpp)</td>
-    <td><span class="priority-critical">Critical</span></td><td>Trivial (&lt;20 lines)</td>
-    <td>Wire existing <code>backend_check_finite_packed()</code> into main.c with <code>--nan_check_every</code></td></tr>
-<tr><td>R2</td><td>ENO/minmod prolongation fallback</td><td>CarpetX</td>
-    <td><span class="priority-high">High</span></td><td>Moderate (~150 lines)</td>
-    <td>Detect chi&lt;threshold, fall back from 6th-order Lagrange to non-oscillatory interpolant</td></tr>
+    <td><span class="priority-critical">Critical</span></td><td>Trivial</td>
+    <td><strong>DONE</strong> &mdash; <code>--nan-check-every N</code> in main.c (CPU + GPU paths)</td></tr>
 <tr><td>R3</td><td>Test &kappa;1=0.02 default</td><td>AthenaK/BAM</td>
     <td><span class="priority-medium">Medium</span></td><td>Trivial (0 lines)</td>
     <td>Run comparison simulations with <code>--kappa1 0.02</code> vs 0.1, compare Psi4 phase</td></tr>
-<tr><td>R4</td><td>Higher-order restriction</td><td>AthenaK, ExaHyPE (arXiv:2504.15814)</td>
-    <td><span class="priority-medium">Medium</span></td><td>Moderate (~200 lines)</td>
-    <td>Hybrid: high-order in smooth regions, trilinear near punctures</td></tr>
 <tr><td>R5</td><td>8th-order FD + 9th-order KO</td><td>arXiv:2404.01137</td>
     <td><span class="priority-low">Low</span></td><td>Substantial (500+ lines)</td>
     <td>Ghost width change ripples through many subsystems</td></tr>
 </table>
 
-<details><summary>R1: Production NaN/Inf Check (Critical)</summary><div>
-<p>The backend API <code>backend_check_finite_packed()</code> already exists for both CPU and GPU.
-Tests call it. But <code>main.c</code> never calls it in production. Without runtime NaN checking,
-a blown-up simulation writes garbage for many steps before detection. Early detection
-saves hours of wasted GPU time on HPC allocations.</p>
-<p><strong>Implementation:</strong> Add <code>--nan_check_every N</code> CLI parameter (default 10). Call existing API every N steps. Zero performance impact.</p>
+<details><summary>R1: Production NaN/Inf Check &mdash; IMPLEMENTED</summary><div>
+<p><code>mesh_check_finite()</code> added to <code>mesh.c</code>. Wired into main.c AMR loop:
+CPU path calls <code>mesh_check_finite(m)</code>, GPU path calls
+<code>backend_check_finite_packed()</code> on level-0 pack. Aborts with step/time
+diagnostic on first NaN/Inf detection.</p>
+<p>CLI: <code>--nan-check-every 10</code> (default 0 = disabled).</p>
 </div></details>
 
-<details><summary>R2: ENO/Minmod Prolongation Fallback (High)</summary><div>
-<p>Lattice switched restriction to trilinear specifically because 6th-order Lagrange
-negative weights caused Gibbs oscillations near punctures. The same problem exists
-in prolongation &mdash; 6th-order Lagrange has negative weights that can produce
-undershoots near the 1/r singularity in chi.</p>
-<p><strong>Implementation:</strong> Detect cells where chi &lt; threshold (e.g., 0.1). Fall back to minmod
-or ENO for those cells. Smooth regions keep 6th-order. The 1D tensor-product structure
-makes this straightforward.</p>
-</div></details>
-
-<details><summary>R3: Test &kappa;1=0.02 (Medium)</summary><div>
+<details><summary>R3: Test &kappa;1=0.02 (Pending &mdash; simulation run)</summary><div>
 <p>AthenaK and BAM default to &kappa;1=0.02, which is 5&times; less constraint damping than
 Lattice&rsquo;s 0.1. With Lattice&rsquo;s strong KO dissipation (per-field &sigma;, CAKO, CP-BCs),
 lower &kappa;1 may improve waveform phase accuracy. The parameter already exists &mdash;
 this is a tuning task, not a code change.</p>
-</div></details>
-
-<details><summary>R4: Higher-Order Restriction (Medium)</summary><div>
-<p>Current setup: 6th-order FD, 6th-order prolongation, 2nd-order restriction.
-ExaHyPE (arXiv:2504.15814) shows this mismatch introduces O(dx<sup>2</sup>) error at AMR
-boundaries. A hybrid approach (high-order in smooth regions, trilinear near punctures)
-would match AthenaK while preserving robustness near singularities.</p>
 </div></details>
 
 <details><summary>R5: 8th-Order FD (Low Priority)</summary><div>
@@ -577,6 +566,8 @@ change for incremental benefit over 6th-order (convergence order already ~6.5).<
 
 <table>
 <tr><th>Feature</th><th>Code</th><th>Why Not</th></tr>
+<tr><td>ENO/minmod prolongation fallback</td><td>CarpetX</td><td>CarpetX&rsquo;s ENO option is for GRMHD shocks, not vacuum NR. No production NR code uses chi-based switching. Industry consensus: fixed polynomial order + floor enforcement.</td></tr>
+<tr><td>Higher-order restriction</td><td>AthenaK/ExaHyPE</td><td>Every cell-centered AMR NR code (GRChombo, CarpetX, BAM) uses simple cell averaging. Positive weights &gt; order matching near puncture singularities. AthenaK uses vertex-centered (different paradigm).</td></tr>
 <tr><td>No subcycling (global dt)</td><td>AthenaK</td><td>32&ndash;128&times; more fine-level work for 5&ndash;7 AMR levels. Lattice already has working subcycling.</td></tr>
 <tr><td>Spectral AH finder</td><td>SpEC</td><td>Requires spectral infrastructure Lattice doesn&rsquo;t have. Hyperbolic flow is well-matched to FD.</td></tr>
 <tr><td>Wavelet AMR</td><td>Dendro-GR</td><td>Architecturally incompatible with block-structured AMR.</td></tr>

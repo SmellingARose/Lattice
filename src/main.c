@@ -219,6 +219,9 @@ int main(int argc, char **argv)
     int tracker_enabled = 0;
     int tracker_every = -1;  /* -1 = use ah_every or default 10 */
 
+    /* NaN/Inf checking */
+    int nan_check_every = 0;  /* 0 = disabled; >0 = check every N steps */
+
     /* Checkpoint/restart */
     int checkpoint_every = 0;
     const char *restart_file = NULL;
@@ -413,6 +416,8 @@ int main(int argc, char **argv)
             tracker_every = atoi(argv[++a]);
             tracker_enabled = 1;
         /* Checkpoint/restart */
+        } else if (strcmp(argv[a], "--nan-check-every") == 0 && a + 1 < argc) {
+            nan_check_every = atoi(argv[++a]);
         } else if (strcmp(argv[a], "--checkpoint-every") == 0 && a + 1 < argc) {
             checkpoint_every = atoi(argv[++a]);
         } else if (strcmp(argv[a], "--restart") == 0 && a + 1 < argc) {
@@ -616,6 +621,8 @@ int main(int argc, char **argv)
                              step % psi4_every == 0);
             int need_checkpoint = (checkpoint_every > 0 &&
                                    step % checkpoint_every == 0);
+            int need_nan_check = (nan_check_every > 0 &&
+                                  step % nan_check_every == 0);
 #ifdef LATTICE_HDF5
             int need_cce = (cce_ws && cce_every > 0 &&
                             step % cce_every == 0);
@@ -647,6 +654,18 @@ int main(int argc, char **argv)
                        step, re22, im22);
             }
 
+            /* --- GPU-native NaN/Inf check (no sync needed) --- */
+            if (need_nan_check && gpu_resident) {
+                meshblock_pack_t *lpk = m->level_packs[0];
+                backend_activate_pack(lpk);
+                if (!backend_check_finite_packed(lpk)) {
+                    fprintf(stderr,
+                        "\n*** NaN/Inf detected at step %d (t=%.4f) ***\n",
+                        step, p.time);
+                    break;
+                }
+            }
+
             /* --- GPU-native BH tracker position update (no sync) --- */
             if (need_tracker && gpu_resident) {
                 bh_tracker_update_positions_packed(tracker, m);
@@ -671,6 +690,16 @@ int main(int argc, char **argv)
 
             if (need_output)
                 output_mesh_1d_slice(m, step, p.time);
+
+            /* CPU NaN/Inf check (non-GPU path) */
+            if (need_nan_check && !gpu_resident) {
+                if (!mesh_check_finite(m)) {
+                    fprintf(stderr,
+                        "\n*** NaN/Inf detected at step %d (t=%.4f) ***\n",
+                        step, p.time);
+                    break;
+                }
+            }
 
             /* CPU constraint check (non-GPU path only) */
             if (need_ham100 && !gpu_resident) {

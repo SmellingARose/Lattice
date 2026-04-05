@@ -16,6 +16,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
+#include <math.h>
 
 /*
  * Hash table for O(1) block lookup by (level, lx1, lx2, lx3).
@@ -196,6 +197,23 @@ int mesh_num_leaves(const mesh_t *m)
             count++;
     }
     return count;
+}
+
+int mesh_check_finite(const mesh_t *m)
+{
+    for (int bid = 0; bid < m->num_blocks; bid++) {
+        block_t *b = m->blocks[bid];
+        if (!b || !b->is_leaf) continue;
+        grid_t *g = b->grid;
+        int lo = g->ghost, hi = g->ghost + g->N;
+        for (int f = 0; f < g->n_fields; f++)
+            for (int k = lo; k < hi; k++)
+                for (int j = lo; j < hi; j++)
+                    for (int i = lo; i < hi; i++)
+                        if (!isfinite(g->fields[f][IDX(g, i, j, k)]))
+                            return 0;
+    }
+    return 1;
 }
 
 block_t *mesh_find_block(const mesh_t *m, int level, int lx1, int lx2, int lx3)
