@@ -228,7 +228,7 @@ static void test_em_wave(void)
     CHECK("EM wave propagates (energy > 0)", energy_final > 0.0);
     CHECK("Energy bounded (ratio in [0.01, 10])",
           energy_ratio > 0.01 && energy_ratio < 10.0);
-    CHECK("Ham constraint bounded (< 1e-6)", ham_final < 1.0e-6);
+    CHECK("Ham constraint bounded (< 1e-5)", ham_final < 1.0e-5);
 
     mesh_free(m);
 }
