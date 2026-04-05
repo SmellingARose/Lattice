@@ -180,6 +180,14 @@ void backend_rk4_final_packed(meshblock_pack_t *pack, double weight, double dt);
  */
 void backend_ghost_exchange_packed(meshblock_pack_t *pack);
 
+/* Combined ghost exchange + cross-level fill (GRChombo/Athena++ ordering).
+ * Injects Phase 3b (cross-level temporal interpolation) after Phase 3a and
+ * before Phase 3.5/4. Cross-level data has final word at refinement boundaries.
+ * If coarser_pack is NULL, behaves identically to backend_ghost_exchange_packed.
+ * Saves 6 kernel launches vs separate cross_level_ghost_fill + ghost_exchange. */
+void backend_ghost_exchange_cross_level_packed(
+    meshblock_pack_t *pack, meshblock_pack_t *coarser_pack, double frac);
+
 /*
  * Enforce algebraic constraints on packed data: det(h)=1, tr(A)=0,
  * chi > 0, lapse > 0. Operates on ALL points (interior + ghost).

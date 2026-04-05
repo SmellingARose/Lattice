@@ -1682,7 +1682,137 @@ __global__ void hip_cross_level_ghost_fill(
     }
 }
 
-/* Kernel 14: Ghost exchange orchestrator */
+/* Combined ghost exchange + cross-level fill (GRChombo/Athena++ ordering).
+ *
+ * Ordering: Phase 0+1 (same-level) → Phase 2 (restrict) → Phase 3a (coarse
+ * fill) → Phase 3b (cross-level temporal interp) → Phase 3.5 (extrap) →
+ * Phase 4 (prolong). Cross-level fill runs AFTER same-level (Phase 3a) so
+ * it has the final word at refinement boundaries, matching GRChombo evalRHS:
+ *   exchange() → fillInterp() → fillBdyGhosts()
+ * and Athena++ SETB_HYD → PROLONG ordering.
+ *
+ * If coarser_pack is NULL, behaves identically to backend_ghost_exchange_packed.
+ * Saves 6 redundant kernel launches per call vs separate cross_level + exchange. */
+extern "C"
+void backend_ghost_exchange_cross_level_packed(
+    meshblock_pack_t *pack, meshblock_pack_t *coarser_pack, double frac)
+{
+    hip_device_ptrs_t *dp = (hip_device_ptrs_t *)pack->device_handle;
+    if (!dp) return;
+    d_ptrs = *dp;
+    d_ptrs_valid = 1;
+
+    int nb = pack->n_blocks;
+    int ghost = pack->ghost;
+    int N = pack->N;
+    int Nt = pack->Ntotal;
+    size_t npts = pack->npts;
+    int nf = pack->n_fields;
+
+    /* Phase 0+1: Same-level exchange */
+    {
+        int total = nb * Nt * Nt * Nt;
+        int bs = 256;
+        int gs = (total + bs - 1) / bs;
+        hipLaunchKernelGGL(hip_ghost_same_level, gs, bs, 0, gpu_stream,
+                           d_ptrs.data, d_ptrs.neighbor_table, d_ptrs.levels,
+                           nb, ghost, N, Nt, npts, nf);
+    }
+
+    if (pack->n_refined == 0) return;
+
+    int ghost_c = (pack->coarse_Ntotal - pack->coarse_N) / 2;
+    int N_c = pack->coarse_N;
+    int Nt_c = pack->coarse_Ntotal;
+    size_t cnpts = pack->coarse_npts;
+
+    /* Phase 2: Restrict fine → coarse_buf */
+    {
+        int total = nb * nf * N_c * N_c;
+        int bs = 256;
+        int gs = (total + bs - 1) / bs;
+        hipLaunchKernelGGL(hip_ghost_restrict, gs, bs, 0, gpu_stream,
+                           d_ptrs.data, d_ptrs.coarse_data,
+                           d_ptrs.refined_map,
+                           nb, ghost, Nt, ghost_c, N_c, Nt_c,
+                           npts, cnpts, nf);
+    }
+
+    /* Phase 3a: Fill coarse_buf ghosts from same-level + intra-pack coarser */
+    {
+        int total = nb * NUM_NEIGHBORS;
+        int bs = 256;
+        int gs = (total + bs - 1) / bs;
+        hipLaunchKernelGGL(hip_ghost_coarse_fill, gs, bs, 0, gpu_stream,
+                           d_ptrs.data, d_ptrs.coarse_data,
+                           d_ptrs.refined_map, d_ptrs.levels,
+                           d_ptrs.nblevel_table, d_ptrs.neighbor_table,
+                           d_ptrs.coarse_neighbor_table,
+                           d_ptrs.origins, d_ptrs.dx_per_block,
+                           nb, ghost, N_c, Nt_c, Nt,
+                           npts, cnpts, nf);
+    }
+
+    /* Phase 3b: Cross-level fill from coarser pack (temporal interpolation).
+     * Runs AFTER Phase 3a so cross-level data has final word at refinement
+     * boundaries. Skipped when coarser_pack is NULL (level 0). */
+    if (coarser_pack) {
+        hip_device_ptrs_t *cdp = (hip_device_ptrs_t *)coarser_pack->device_handle;
+        if (cdp && dp->cross_level_map && dp->n_cross_entries > 0) {
+            int n_entries = dp->n_cross_entries;
+            int total_cross = n_entries * nf;
+            int bs = 256;
+            int gs = (total_cross + bs - 1) / bs;
+            hipLaunchKernelGGL(hip_cross_level_ghost_fill, gs, bs, 0, gpu_stream,
+                               dp->coarse_data,
+                               cdp->fields_old,
+                               cdp->taylor_a1,
+                               cdp->taylor_a2,
+                               cdp->taylor_a3,
+                               cdp->has_taylor,
+                               dp->cross_level_map,
+                               n_entries,
+                               dp->refined_map,
+                               dp->origins,
+                               cdp->origins,
+                               cdp->dx_per_block,
+                               frac,
+                               nb, cdp->nb,
+                               ghost_c, N_c, Nt_c,
+                               coarser_pack->Ntotal,
+                               cnpts, coarser_pack->npts,
+                               nf);
+        }
+    }
+
+    /* Phase 3.5: Boundary extrapolation (3 sub-kernels: X, Y, Z) */
+    {
+        int total = nb * nf * Nt_c * Nt_c;
+        int bs = 256;
+        int gs = (total + bs - 1) / bs;
+        for (int dim = 0; dim < 3; dim++) {
+            hipLaunchKernelGGL(hip_ghost_extrap, gs, bs, 0, gpu_stream,
+                               d_ptrs.coarse_data, d_ptrs.refined_map,
+                               d_ptrs.nblevel_table,
+                               nb, ghost_c, N_c, Nt_c, cnpts, nf, dim);
+        }
+    }
+
+    /* Phase 4: Prolongate → fine ghosts */
+    {
+        int total = nb * Nt * Nt * Nt;
+        int bs = 256;
+        int gs = (total + bs - 1) / bs;
+        hipLaunchKernelGGL(hip_ghost_prolong, gs, bs, 0, gpu_stream,
+                           d_ptrs.data, d_ptrs.coarse_data,
+                           d_ptrs.refined_map, d_ptrs.levels,
+                           d_ptrs.nblevel_table,
+                           nb, ghost, N, Nt, ghost_c, Nt_c,
+                           npts, cnpts, nf);
+    }
+}
+
+/* Kernel 14: Ghost exchange orchestrator (no cross-level fill) */
 extern "C"
 void backend_ghost_exchange_packed(meshblock_pack_t *pack)
 {

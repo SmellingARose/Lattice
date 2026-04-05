@@ -1075,6 +1075,19 @@ void backend_ghost_exchange_packed(meshblock_pack_t *pack)
     packed_prolongate_fine_ghosts(pack);
 }
 
+/* CPU stub: combined ghost exchange + cross-level fill.
+ * On CPU, cross-level fill is handled by ghost_fill_from_coarser() at the
+ * mesh level (block-by-block), not via packed kernels. This stub just
+ * delegates to the standard ghost exchange. The caller (step_level in rk4.c)
+ * handles cross-level fill separately for the CPU path. */
+void backend_ghost_exchange_cross_level_packed(
+    meshblock_pack_t *pack, meshblock_pack_t *coarser_pack, double frac)
+{
+    (void)coarser_pack;
+    (void)frac;
+    backend_ghost_exchange_packed(pack);
+}
+
 /*
  * Enforce algebraic constraints on packed data: det(h)=1, tr(A)=0.
  * Flattened (block, k, j) outer loop with single OMP parallel region.

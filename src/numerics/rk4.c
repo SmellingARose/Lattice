@@ -664,7 +664,7 @@ static void subcycle_level(mesh_t *m, const sim_params_t *p,
  * stays resident across all sub-steps, downloaded once for output.
  *
  * Key differences from CPU subcycling:
- *   - Cross-level ghosts filled on device (backend_cross_level_ghost_fill_packed)
+ *   - Cross-level ghosts filled on device (backend_ghost_exchange_cross_level_packed)
  *   - Pack switching via backend_activate_pack (no memcpy)
  *   - Temporal interp state saved on device (backend_save_old_packed)
  *   - Single host sync after all levels done (gpu_sync_all_to_host)
@@ -887,22 +887,21 @@ static void step_level_gpu(mesh_t *m, const sim_params_t *p,
     backend_zero_packed(pack, PACK_BUF_ACCUM);
     backend_zero_packed(pack, PACK_BUF_RHS);
 
-    /* Stage 1: evaluate at t (c=0) */
-    if (coarser)
-        backend_cross_level_ghost_fill_packed(pack, coarser, frac);
+    /* Stage 1: evaluate at t (c=0)
+     * Combined ghost exchange + cross-level fill (GRChombo/Athena++ ordering):
+     * same-level first, cross-level second, prolong last. Cross-level temporal
+     * interpolation has the final word at refinement boundaries. */
     backend_enforce_algebraic_packed(pack);
-    backend_ghost_exchange_packed(pack);
+    backend_ghost_exchange_cross_level_packed(pack, coarser, frac);
     backend_compute_rhs_packed(pack, p);
     backend_sommerfeld_packed(pack, p);
     backend_taylor_accumulate_packed(pack, 0, dt_level);
     backend_rk4_stage_packed(pack, 1.0/6.0, 0.5, dt_level);
 
     /* Stage 2: evaluate at t + dt/2 (c=0.5) */
-    if (coarser)
-        backend_cross_level_ghost_fill_packed(pack, coarser,
-                                              frac + 0.5 * inv_ratio);
     backend_enforce_algebraic_packed(pack);
-    backend_ghost_exchange_packed(pack);
+    backend_ghost_exchange_cross_level_packed(pack, coarser,
+                                              frac + 0.5 * inv_ratio);
     backend_compute_rhs_packed(pack, p);
     backend_sommerfeld_packed(pack, p);
     backend_taylor_accumulate_packed(pack, 1, dt_level);
@@ -911,22 +910,19 @@ static void step_level_gpu(mesh_t *m, const sim_params_t *p,
     /* Stage 3: evaluate at t + dt/2 (c=0.5)
      * Cross-level ghost fill SKIPPED: stages 2 and 3 share frac=0.5
      * (c_s[1] = c_s[2] = 0.5 in classic RK4). Interior-only rk4_stage
-     * preserves coarse_data ghost cells from stage 2's fill. The ghost
-     * data at cross-level positions is identical (same frac, same coarse
-     * Taylor coefficients). Ref: Chombo TimeInterpolatorRK4. */
+     * preserves coarse_data ghost cells from stage 2's fill. */
     backend_enforce_algebraic_packed(pack);
-    backend_ghost_exchange_packed(pack);
+    backend_ghost_exchange_cross_level_packed(pack, coarser,
+                                              frac + 0.5 * inv_ratio);
     backend_compute_rhs_packed(pack, p);
     backend_sommerfeld_packed(pack, p);
     backend_taylor_accumulate_packed(pack, 2, dt_level);
     backend_rk4_stage_packed(pack, 1.0/3.0, 1.0, dt_level);
 
     /* Stage 4: evaluate at t + dt (c=1.0) */
-    if (coarser)
-        backend_cross_level_ghost_fill_packed(pack, coarser,
-                                              frac + 1.0 * inv_ratio);
     backend_enforce_algebraic_packed(pack);
-    backend_ghost_exchange_packed(pack);
+    backend_ghost_exchange_cross_level_packed(pack, coarser,
+                                              frac + 1.0 * inv_ratio);
     backend_compute_rhs_packed(pack, p);
     backend_sommerfeld_packed(pack, p);
     backend_taylor_accumulate_packed(pack, 3, dt_level);
@@ -1003,8 +999,7 @@ static void subcycle_level_gpu(mesh_t *m, const sim_params_t *p,
              * Ref: ExaHyPE arXiv:2504.15814 — restriction order must match
              * FD order to avoid Ham violations at AMR boundaries. */
             backend_activate_pack(fpk);
-            backend_ghost_exchange_packed(fpk);
-            backend_cross_level_ghost_fill_packed(fpk, cpk, 1.0);
+            backend_ghost_exchange_cross_level_packed(fpk, cpk, 1.0);
             backend_restrict_to_buffers_packed(fpk, cpk);
 
             /* Post-restriction coarse ghost exchange.
