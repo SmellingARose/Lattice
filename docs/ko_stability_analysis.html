@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>KO Dissipation Stability Analysis — Ghost Margin Problem</title>
+<style>
+body { font-family: Georgia, serif; max-width: 1000px; margin: 40px auto; padding: 0 20px; line-height: 1.6; color: #333; }
+h1 { border-bottom: 2px solid #333; padding-bottom: 10px; }
+h2 { color: #444; margin-top: 40px; border-bottom: 1px solid #ccc; padding-bottom: 5px; }
+h3 { color: #555; }
+table { border-collapse: collapse; width: 100%; margin: 15px 0; font-size: 14px; }
+th, td { border: 1px solid #ccc; padding: 8px 12px; text-align: center; vertical-align: middle; }
+th { background: #f5f5f5; font-weight: bold; }
+code { background: #f0f0f0; padding: 1px 4px; border-radius: 3px; font-size: 13px; }
+pre { background: #f5f5f5; padding: 16px; border-radius: 4px; overflow-x: auto; font-size: 14px; line-height: 1.4; }
+.danger { background: #f8d7da; color: #721c24; font-weight: bold; }
+.warning { background: #fff3cd; color: #856404; font-weight: bold; }
+.safe { background: #d4edda; color: #155724; font-weight: bold; }
+.neutral { background: #d1ecf1; color: #0c5460; }
+.cell-ghost { background: #ffcccc; }
+.cell-interior { background: #ccffcc; }
+.cell-read { background: #ffffaa; border: 2px solid #c00; }
+.cell-safe { background: #ccffcc; }
+.cell-noread { background: #eee; }
+.stencil-diagram { font-family: monospace; font-size: 15px; line-height: 2.0; }
+.option-box { border: 2px solid #999; border-radius: 8px; padding: 20px; margin: 20px 0; }
+.option-a { border-color: #28a745; }
+.option-b { border-color: #007bff; }
+.option-c { border-color: #ffc107; }
+.option-d { border-color: #6f42c1; }
+.tag { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 12px; font-weight: bold; margin-right: 5px; }
+.tag-easy { background: #d4edda; color: #155724; }
+.tag-medium { background: #fff3cd; color: #856404; }
+.tag-hard { background: #f8d7da; color: #721c24; }
+.tag-code { background: #d1ecf1; color: #0c5460; }
+.tag-param { background: #e2d5f1; color: #4a235a; }
+.pros-cons { display: flex; gap: 20px; }
+.pros, .cons { flex: 1; }
+.pros h4 { color: #155724; }
+.cons h4 { color: #721c24; }
+</style>
+</head>
+<body>
+
+<h1>KO Dissipation Stability Analysis</h1>
+<p><em>Why the QNM publication test NaN's at t=14M, and how to fix it.</em></p>
+
+<!-- ================================================================== -->
+<h2>1. The Problem: Zero Ghost Margin</h2>
+<!-- ================================================================== -->
+
+<p>Kreiss-Oliger dissipation at the first interior cell reads ghost zone data.
+With 8th-order KO and 4 ghost cells, the stencil reaches the <strong>very first
+ghost cell</strong> &mdash; the one with the most interpolation error from AMR prolongation.</p>
+
+<h3>8th-order KO stencil at first interior cell (current &mdash; ZERO margin)</h3>
+<div class="stencil-diagram">
+<table>
+<tr>
+<th colspan="4">Ghost Zone (prolongated data)</th>
+<th colspan="9">Interior (evolved data)</th>
+</tr>
+<tr>
+<td class="cell-read">g0</td>
+<td class="cell-read">g1</td>
+<td class="cell-read">g2</td>
+<td class="cell-read">g3</td>
+<td class="cell-read" style="border: 3px solid #060; background: #aaffaa;"><strong>i0</strong></td>
+<td class="cell-read">i1</td>
+<td class="cell-read">i2</td>
+<td class="cell-read">i3</td>
+<td class="cell-read">i4</td>
+<td class="cell-noread">i5</td>
+<td class="cell-noread">i6</td>
+<td class="cell-noread">&hellip;</td>
+<td class="cell-noread">iN</td>
+</tr>
+<tr>
+<td class="danger" colspan="1">&larr; worst</td>
+<td colspan="3">interpolation quality &rarr;</td>
+<td class="safe" colspan="1">exact</td>
+<td colspan="8"></td>
+</tr>
+</table>
+<p><span class="danger">&nbsp; 9-point stencil reads ALL 4 ghost cells including g0 (lowest quality) &nbsp;</span></p>
+</div>
+
+<h3>6th-order KO stencil at first interior cell (1-cell margin)</h3>
+<div class="stencil-diagram">
+<table>
+<tr>
+<th colspan="4">Ghost Zone (prolongated data)</th>
+<th colspan="9">Interior (evolved data)</th>
+</tr>
+<tr>
+<td class="cell-noread">g0</td>
+<td class="cell-read">g1</td>
+<td class="cell-read">g2</td>
+<td class="cell-read">g3</td>
+<td class="cell-read" style="border: 3px solid #060; background: #aaffaa;"><strong>i0</strong></td>
+<td class="cell-read">i1</td>
+<td class="cell-read">i2</td>
+<td class="cell-read">i3</td>
+<td class="cell-noread">i4</td>
+<td class="cell-noread">i5</td>
+<td class="cell-noread">i6</td>
+<td class="cell-noread">&hellip;</td>
+<td class="cell-noread">iN</td>
+</tr>
+<tr>
+<td class="safe" colspan="1">not read</td>
+<td colspan="3">7-point stencil &rarr;</td>
+<td colspan="1"></td>
+<td colspan="8"></td>
+</tr>
+</table>
+<p><span class="safe">&nbsp; 7-point stencil skips g0 &mdash; outermost ghost cell never touched &nbsp;</span></p>
+</div>
+
+<h3>The feedback loop (why it causes NaN)</h3>
+<pre>
+Step N:  Prolongation fills g0 with interpolation error &epsilon;
+         &darr;
+         KO dissipation at i0 reads g0 &rarr; amplifies &epsilon; by factor &sigma;
+         &darr;
+Step N+1: Restriction sends amplified error to coarser level
+         &darr;
+         Prolongation re-interpolates &rarr; error grows as &sigma;^N
+         &darr;
+         At &sigma;=1.0, error doubles every ~few steps &rarr; NaN by t=14M
+</pre>
+
+<!-- ================================================================== -->
+<h2>2. What Every Code Does</h2>
+<!-- ================================================================== -->
+
+<table>
+<tr>
+<th>Code</th>
+<th>FD Order</th>
+<th>KO Order</th>
+<th>KO Half-Width</th>
+<th>Ghost Width</th>
+<th>Margin</th>
+<th>&sigma; (fine levels)</th>
+<th>Z4 Variant</th>
+<th>&kappa;1</th>
+<th>&eta;</th>
+</tr>
+<tr>
+<td><strong>Lattice</strong></td>
+<td>6th</td>
+<td class="danger">8th</td>
+<td class="danger">4</td>
+<td>4</td>
+<td class="danger">0</td>
+<td class="danger">1.0</td>
+<td>Covariant</td>
+<td>0.1</td>
+<td>1.0</td>
+</tr>
+<tr>
+<td><strong>GRChombo</strong></td>
+<td>4th</td>
+<td class="safe">6th</td>
+<td class="safe">3</td>
+<td>3&ndash;4</td>
+<td class="safe">1</td>
+<td class="warning">1.0</td>
+<td>Covariant</td>
+<td>0.1</td>
+<td>1.0</td>
+</tr>
+<tr>
+<td><strong>BAM</strong></td>
+<td>4th</td>
+<td class="safe">6th</td>
+<td class="safe">3</td>
+<td>6</td>
+<td class="safe">3</td>
+<td class="safe">0.1 (fine)</td>
+<td>Non-covariant</td>
+<td>0.02</td>
+<td>2.0</td>
+</tr>
+<tr>
+<td><strong>AthenaK</strong></td>
+<td>6th</td>
+<td class="safe">6th</td>
+<td class="safe">3</td>
+<td>4</td>
+<td class="safe">1</td>
+<td class="safe">0.5</td>
+<td>Non-covariant</td>
+<td>0.02</td>
+<td>&mdash;</td>
+</tr>
+<tr>
+<td><strong>CarpetX</strong></td>
+<td>4th</td>
+<td class="safe">5th</td>
+<td class="safe">3</td>
+<td>3+</td>
+<td class="safe">1+</td>
+<td class="safe">0.32</td>
+<td>Z4c</td>
+<td>0.02</td>
+<td>&mdash;</td>
+</tr>
+</table>
+
+<p><strong>Lattice is the only code with zero ghost margin AND &sigma;=1.0 on fine levels.</strong></p>
+
+<!-- ================================================================== -->
+<h2>3. Additional Issues Found</h2>
+<!-- ================================================================== -->
+
+<table>
+<tr><th>Issue</th><th>Lattice</th><th>BAM (reference)</th><th>Severity</th></tr>
+<tr>
+<td>Constraint damping near puncture (&alpha;&rarr;0)</td>
+<td class="danger">&kappa;1=0.1 constant (covariant)</td>
+<td class="safe">&kappa;1&times;&alpha; = 0.006 (non-covariant)</td>
+<td><strong>17&times; stronger</strong> near puncture</td>
+</tr>
+<tr>
+<td>Position-dependent &eta; divergence</td>
+<td class="danger">&eta;/&radic;chi &rarr; 100 at floor</td>
+<td class="safe">constant &eta;=2.0</td>
+<td>Shift can blow up at finest level</td>
+</tr>
+<tr>
+<td>AMR levels for dx=M/16</td>
+<td class="warning">7 levels</td>
+<td class="safe">5 levels</td>
+<td>More noise at more boundaries</td>
+</tr>
+</table>
+
+<!-- ================================================================== -->
+<h2>4. Fix Options</h2>
+<!-- ================================================================== -->
+
+<!-- Option A -->
+<div class="option-box option-a">
+<h3>Option A: Drop KO to 6th order for AMR runs</h3>
+<p><span class="tag tag-code">Code change</span> <span class="tag tag-easy">Easy</span></p>
+
+<p>Already supported: <code>make FD_ORDER=4</code> selects 6th-order KO.
+Add a runtime flag <code>--ko-order 6</code> or compile-time <code>KO_ORDER=6</code>
+that uses the 6th-order KO stencil (7-point, half-width=3) with 6th-order FD.
+The 6th-order KO weights are already in <code>finite_diff.h</code> (lines 382&ndash;397).</p>
+
+<p><strong>Ghost margin: 1 cell.</strong> Matches GRChombo and AthenaK exactly.</p>
+
+<div class="pros-cons">
+<div class="pros">
+<h4>Pros</h4>
+<ul>
+<li>Matches GRChombo/AthenaK/BAM &mdash; proven stable</li>
+<li>1-cell ghost margin eliminates the feedback loop</li>
+<li>6th-order FD with 6th-order KO is the industry standard</li>
+<li>Can keep &sigma;=1.0 (GRChombo does this successfully)</li>
+<li>Tiny code change (select existing stencil)</li>
+</ul>
+</div>
+<div class="cons">
+<h4>Cons</h4>
+<ul>
+<li>Slightly less high-frequency damping than 8th-order</li>
+<li>GRChombo has 8th-order commented out, suggesting they considered it</li>
+</ul>
+</div>
+</div>
+</div>
+
+<!-- Option B -->
+<div class="option-box option-b">
+<h3>Option B: Level-dependent &sigma; (BAM approach)</h3>
+<p><span class="tag tag-param">Parameter change</span> <span class="tag tag-easy">Easy</span></p>
+
+<p>CLI: <code>--sigma 0.1</code> (or add level-dependent sigma: 0.1 on fine levels, 0.5 on coarse).
+No code change needed for uniform &sigma;=0.1. Level-dependent requires ~20 lines.</p>
+
+<p><strong>Ghost margin: still 0.</strong> But the amplification factor drops 10&times;, so the
+feedback loop grows much slower and may not reach NaN in the simulation time.</p>
+
+<div class="pros-cons">
+<div class="pros">
+<h4>Pros</h4>
+<ul>
+<li>Zero code change for uniform &sigma;=0.1 (CLI flag only)</li>
+<li>Matches BAM's proven configuration</li>
+<li>Keeps 8th-order KO (better spectral properties)</li>
+<li>Can test immediately without recompiling</li>
+</ul>
+</div>
+<div class="cons">
+<h4>Cons</h4>
+<ul>
+<li>Doesn't fix the root cause (zero margin)</li>
+<li>&sigma;=0.1 may under-damp noise on coarse levels</li>
+<li>May need fine-tuning per simulation</li>
+</ul>
+</div>
+</div>
+</div>
+
+<!-- Option C -->
+<div class="option-box option-c">
+<h3>Option C: Increase ghost width to 5</h3>
+<p><span class="tag tag-code">Code change</span> <span class="tag tag-hard">Hard</span></p>
+
+<p>Change <code>GHOST_WIDTH</code> from 4 to 5 in <code>grid.h</code>.
+Gives the 8th-order KO stencil a 1-cell margin. Keeps 8th-order KO + &sigma;=1.0.</p>
+
+<div class="pros-cons">
+<div class="pros">
+<h4>Pros</h4>
+<ul>
+<li>Keeps 8th-order KO + high &sigma; (maximum damping capability)</li>
+<li>1-cell margin, same as GRChombo with 6th-order</li>
+</ul>
+</div>
+<div class="cons">
+<h4>Cons</h4>
+<ul>
+<li><strong>Ripples through entire codebase</strong>: ghost exchange, prolongation
+    (COARSE_BUF_GHOST changes), boundary conditions, memory layout</li>
+<li>~25% more memory per block (ghost volume grows)</li>
+<li>More communication in ghost exchange</li>
+<li>No other code uses ghost=5</li>
+</ul>
+</div>
+</div>
+</div>
+
+<!-- Option D -->
+<div class="option-box option-d">
+<h3>Option D: All parameter fixes (match BAM exactly)</h3>
+<p><span class="tag tag-param">Parameter change</span> <span class="tag tag-easy">Easy</span> + <span class="tag tag-code">Code change</span> <span class="tag tag-easy">Easy</span></p>
+
+<p>Combine Option A or B with constraint damping + gauge fixes:</p>
+<pre>
+--sigma 0.1          # BAM fine-level dissipation
+--covariant 0        # non-covariant Z4 (kappa1*alpha near puncture)
+--kappa1 0.02        # BAM/AthenaK constraint damping
+--eta 2.0            # BAM Gamma-driver damping
+</pre>
+<p>Plus either drop KO to 6th (Option A) or keep 8th with low &sigma; (Option B).</p>
+
+<div class="pros-cons">
+<div class="pros">
+<h4>Pros</h4>
+<ul>
+<li>Matches BAM's exact proven configuration</li>
+<li>Addresses ALL identified issues, not just KO</li>
+<li>Non-covariant + &kappa;1=0.02 = 17&times; less damping near puncture</li>
+<li>&eta;=2.0 = faster gauge settling (BAM-calibrated)</li>
+<li>Most likely to "just work" since BAM demonstrated stability</li>
+</ul>
+</div>
+<div class="cons">
+<h4>Cons</h4>
+<ul>
+<li>Changes multiple parameters at once (harder to isolate effect)</li>
+<li>Non-covariant Z4 is less clean mathematically than covariant</li>
+<li>Lower &sigma; may need CAKO/per-field sigma for binary inspirals</li>
+</ul>
+</div>
+</div>
+</div>
+
+<!-- ================================================================== -->
+<h2>5. Recommendation</h2>
+<!-- ================================================================== -->
+
+<p><strong>Start with Option A + B combined</strong> (6th-order KO + &sigma;=0.1 on fine levels).
+This fixes the root cause (ghost margin) and matches the industry-standard configuration.
+If the QNM test passes, leave &kappa;1, &eta;, and covariant/non-covariant at current defaults
+and only change them if needed for specific simulations.</p>
+
+<p>Option C (ghost=5) is architecturally expensive and no code uses it.
+Option D (full BAM match) is the fallback if A+B alone isn't enough.</p>
+
+<!-- ================================================================== -->
+<h2>References</h2>
+<!-- ================================================================== -->
+<ul>
+<li>arXiv:1212.2901 &mdash; BAM Z4c: &sigma;=0.1 (fine), &kappa;1=0.02, &eta;=2/M, 6th KO, 6 buffer pts</li>
+<li>arXiv:gr-qc/0610128 &mdash; BAM calibration: level-dependent &sigma;, &eta;=2/M optimal</li>
+<li>arXiv:1307.7391 &mdash; Alic 2013: CCZ4 stability (&kappa;3=1 + const &kappa;1 unstable)</li>
+<li>arXiv:2409.10383 &mdash; AthenaK: &kappa;1=0.02, &sigma;=0.5, 6th KO</li>
+<li>arXiv:2112.10567 &mdash; GRChombo AMR lessons: &sigma;=1.0, 6th KO, ghost=3&ndash;4</li>
+<li>Einstein Toolkit Dissipation docs: stability bound &sigma; &lt; 2&times;CFL</li>
+</ul>
+
+</body>
+</html>
