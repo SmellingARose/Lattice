@@ -480,25 +480,36 @@ void backend_apply_accum_packed(meshblock_pack_t *pack)
  *   data[i]   = scratch[i] + alpha * dt * rhs[i]
  * Saves 1 pass over rhs[] compared to separate accum_add + axpy.
  */
+/* Interior-only RK4 stage: writes only [ghost,ghost+N)^3 of evolve blocks.
+ * Ghost zones and buffer blocks untouched — preserves cross-level fill data
+ * between stages, enabling stage 3 cross-level fill skip (same frac as stage 2). */
 void backend_rk4_stage_packed(meshblock_pack_t *pack,
                                double weight, double alpha, double dt)
 {
     if (!pack->accum) return;
 
-    size_t total = (size_t)pack->n_fields * pack->n_blocks * pack->npts;
     double *data    = pack->data;
     double *accum   = pack->accum;
     const double *scratch = pack->scratch;
     const double *rhs     = pack->rhs;
     double w_dt = weight * dt;
     double a_dt = alpha * dt;
+    int nf = pack->n_fields, ne = pack->n_evolve, nb = pack->n_blocks;
+    int N = pack->N, ghost = pack->ghost, Nt = pack->Ntotal;
+    size_t npts = pack->npts;
 
-    #pragma omp parallel for schedule(static)
-    for (size_t i = 0; i < total; i++) {
-        double r = rhs[i];
-        accum[i] += w_dt * r;
-        data[i]   = scratch[i] + a_dt * r;
-    }
+    #pragma omp parallel for collapse(2) schedule(static)
+    for (int b = 0; b < ne; b++)
+        for (int f = 0; f < nf; f++)
+            for (int k = ghost; k < ghost + N; k++)
+                for (int j = ghost; j < ghost + N; j++)
+                    for (int i = ghost; i < ghost + N; i++) {
+                        size_t idx = (size_t)f * nb * npts + (size_t)b * npts
+                                   + (size_t)k * Nt * Nt + j * Nt + i;
+                        double r = rhs[idx];
+                        accum[idx] += w_dt * r;
+                        data[idx]   = scratch[idx] + a_dt * r;
+                    }
 }
 
 /*
@@ -506,20 +517,30 @@ void backend_rk4_stage_packed(meshblock_pack_t *pack,
  *   data[i] = scratch[i] + accum[i] + weight * dt * rhs[i]
  * Replaces accum_add + copy + apply_accum (3 passes → 1).
  */
+/* Interior-only RK4 final: same interior-only pattern as stage. */
 void backend_rk4_final_packed(meshblock_pack_t *pack, double weight, double dt)
 {
     if (!pack->accum) return;
 
-    size_t total = (size_t)pack->n_fields * pack->n_blocks * pack->npts;
     double *data    = pack->data;
     const double *accum   = pack->accum;
     const double *scratch = pack->scratch;
     const double *rhs     = pack->rhs;
     double w_dt = weight * dt;
+    int nf = pack->n_fields, ne = pack->n_evolve, nb = pack->n_blocks;
+    int N = pack->N, ghost = pack->ghost, Nt = pack->Ntotal;
+    size_t npts = pack->npts;
 
-    #pragma omp parallel for schedule(static)
-    for (size_t i = 0; i < total; i++)
-        data[i] = scratch[i] + accum[i] + w_dt * rhs[i];
+    #pragma omp parallel for collapse(2) schedule(static)
+    for (int b = 0; b < ne; b++)
+        for (int f = 0; f < nf; f++)
+            for (int k = ghost; k < ghost + N; k++)
+                for (int j = ghost; j < ghost + N; j++)
+                    for (int i = ghost; i < ghost + N; i++) {
+                        size_t idx = (size_t)f * nb * npts + (size_t)b * npts
+                                   + (size_t)k * Nt * Nt + j * Nt + i;
+                        data[idx] = scratch[idx] + accum[idx] + w_dt * rhs[idx];
+                    }
 }
 
 /* ========================================================================

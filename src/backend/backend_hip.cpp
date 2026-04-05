@@ -565,7 +565,8 @@ void backend_cross_level_ghost_fill_packed(
          * We copy a slab from coarse_pack's data (temporally interpolated)
          * into fine_pack's coarse_data. */
         int n_entries = fdp->n_cross_entries;
-        int gs = (n_entries + bs - 1) / bs;
+        int total_cross = n_entries * nf;  /* parallelized over (entry, field) */
+        int gs = (total_cross + bs - 1) / bs;
 
         /* Cubic Taylor temporal interpolation (Chombo TimeInterpolatorRK4):
          * U(θ) = U_n + θ*(a1 + θ*(a2 + θ*a3))   [Horner form]
@@ -1144,15 +1145,31 @@ void backend_apply_accum_packed(meshblock_pack_t *pack)
  * Replaces separate accum_add + axpy, saves 1 kernel launch + 1 rhs read.
  * ======================================================================== */
 
+/* Interior-only RK4 stage: writes only [ghost,ghost+N)^3 of evolve blocks.
+ * Ghost zones and buffer blocks are untouched, preserving cross-level fill
+ * data between RK4 stages (enables skipping stage 3 cross-level fill). */
 __global__ void hip_rk4_stage(double *data_buf, const double *scratch_buf,
                                double *accum_buf, const double *rhs_buf,
-                               double w_dt, double a_dt, size_t total)
+                               double w_dt, double a_dt,
+                               int nf, int n_evolve, int n_blocks,
+                               int N, int ghost, int Nt,
+                               size_t npts, size_t total)
 {
     size_t tid = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
     if (tid >= total) return;
-    double r = rhs_buf[tid];
-    accum_buf[tid] += w_dt * r;
-    data_buf[tid]   = scratch_buf[tid] + a_dt * r;
+    int N3 = N * N * N;
+    int f   = (int)(tid / ((size_t)n_evolve * N3));
+    int rem = (int)(tid % ((size_t)n_evolve * N3));
+    int b   = rem / N3;
+    int cell = rem % N3;
+    int i = ghost + cell % N;
+    int j = ghost + (cell / N) % N;
+    int k = ghost + cell / (N * N);
+    size_t idx = (size_t)f * n_blocks * npts + (size_t)b * npts
+               + (size_t)k * Nt * Nt + j * Nt + i;
+    double r = rhs_buf[idx];
+    accum_buf[idx] += w_dt * r;
+    data_buf[idx]   = scratch_buf[idx] + a_dt * r;
 }
 
 extern "C"
@@ -1161,7 +1178,8 @@ void backend_rk4_stage_packed(meshblock_pack_t *pack,
 {
     if (!d_ptrs.accum) return;
 
-    size_t total = (size_t)pack->n_fields * pack->n_blocks * pack->npts;
+    int nf = pack->n_fields, ne = pack->n_evolve, N = pack->N;
+    size_t total = (size_t)nf * ne * N * N * N;
     double w_dt = weight * dt;
     double a_dt = alpha * dt;
 
@@ -1169,7 +1187,10 @@ void backend_rk4_stage_packed(meshblock_pack_t *pack,
     int grid_size = (int)((total + block_size - 1) / block_size);
     hipLaunchKernelGGL(hip_rk4_stage, grid_size, block_size, 0, gpu_stream,
                        d_ptrs.data, d_ptrs.scratch, d_ptrs.accum, d_ptrs.rhs,
-                       w_dt, a_dt, total);
+                       w_dt, a_dt,
+                       nf, ne, pack->n_blocks,
+                       N, pack->ghost, pack->Ntotal,
+                       pack->npts, total);
 }
 
 /* ========================================================================
@@ -1178,13 +1199,27 @@ void backend_rk4_stage_packed(meshblock_pack_t *pack,
  * Replaces accum_add + copy + apply_accum, saves 2 kernel launches.
  * ======================================================================== */
 
+/* Interior-only RK4 final: same decode as hip_rk4_stage. */
 __global__ void hip_rk4_final(double *data_buf, const double *scratch_buf,
                                const double *accum_buf, const double *rhs_buf,
-                               double w_dt, size_t total)
+                               double w_dt,
+                               int nf, int n_evolve, int n_blocks,
+                               int N, int ghost, int Nt,
+                               size_t npts, size_t total)
 {
     size_t tid = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
     if (tid >= total) return;
-    data_buf[tid] = scratch_buf[tid] + accum_buf[tid] + w_dt * rhs_buf[tid];
+    int N3 = N * N * N;
+    int f   = (int)(tid / ((size_t)n_evolve * N3));
+    int rem = (int)(tid % ((size_t)n_evolve * N3));
+    int b   = rem / N3;
+    int cell = rem % N3;
+    int i = ghost + cell % N;
+    int j = ghost + (cell / N) % N;
+    int k = ghost + cell / (N * N);
+    size_t idx = (size_t)f * n_blocks * npts + (size_t)b * npts
+               + (size_t)k * Nt * Nt + j * Nt + i;
+    data_buf[idx] = scratch_buf[idx] + accum_buf[idx] + w_dt * rhs_buf[idx];
 }
 
 extern "C"
@@ -1192,14 +1227,18 @@ void backend_rk4_final_packed(meshblock_pack_t *pack, double weight, double dt)
 {
     if (!d_ptrs.accum) return;
 
-    size_t total = (size_t)pack->n_fields * pack->n_blocks * pack->npts;
+    int nf = pack->n_fields, ne = pack->n_evolve, N = pack->N;
+    size_t total = (size_t)nf * ne * N * N * N;
     double w_dt = weight * dt;
 
     int block_size = 256;
     int grid_size = (int)((total + block_size - 1) / block_size);
     hipLaunchKernelGGL(hip_rk4_final, grid_size, block_size, 0, gpu_stream,
                        d_ptrs.data, d_ptrs.scratch, d_ptrs.accum, d_ptrs.rhs,
-                       w_dt, total);
+                       w_dt,
+                       nf, ne, pack->n_blocks,
+                       N, pack->ghost, pack->Ntotal,
+                       pack->npts, total);
 }
 
 /* ========================================================================
@@ -1623,8 +1662,13 @@ __global__ void hip_cross_level_ghost_fill(
     size_t fine_cnpts, size_t coarse_npts,
     int nf)
 {
-    int e = blockIdx.x * blockDim.x + threadIdx.x;
-    if (e >= n_entries) return;
+    /* Parallelized over (entry, field): 25x more threads than entry-only.
+     * Each thread handles one field for one cross-level map entry. */
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = n_entries * nf;
+    if (tid >= total) return;
+    int e = tid / nf;
+    int f = tid % nf;
 
     int fb = cross_map[e * 3 + 0];    /* fine pack block index */
     int dir = cross_map[e * 3 + 1];   /* neighbor direction 0-25 */
@@ -1654,43 +1698,41 @@ __global__ void hip_cross_level_ghost_fill(
     ghost_range_pack(oy, ghost_c, N_c, Nt_c, &dy_lo, &dy_hi, &dummy3, &dummy4);
     ghost_range_pack(oz, ghost_c, N_c, Nt_c, &dz_lo, &dz_hi, &dummy5, &dummy6);
 
-    for (int f = 0; f < nf; f++) {
-        size_t dst_off = (size_t)r * nf * fine_cnpts + (size_t)f * fine_cnpts;
-        size_t src_off = (size_t)f * coarse_nb * coarse_npts
-                       + (size_t)cb * coarse_npts;
+    /* f comes from thread decode (was: for-loop over nf) */
+    size_t dst_off = (size_t)r * nf * fine_cnpts + (size_t)f * fine_cnpts;
+    size_t src_off = (size_t)f * coarse_nb * coarse_npts
+                   + (size_t)cb * coarse_npts;
 
-        for (int kk = dz_lo; kk < dz_hi; kk++) {
-            int sk = kk + off_k;
-            if (sk < 0 || sk >= Nt_coarse_full) continue;
-            for (int jj = dy_lo; jj < dy_hi; jj++) {
-                int sj = jj + off_j;
-                if (sj < 0 || sj >= Nt_coarse_full) continue;
-                for (int ii = dx_lo; ii < dx_hi; ii++) {
-                    int si = ii + off_i;
-                    if (si < 0 || si >= Nt_coarse_full) continue;
+    for (int kk = dz_lo; kk < dz_hi; kk++) {
+        int sk = kk + off_k;
+        if (sk < 0 || sk >= Nt_coarse_full) continue;
+        for (int jj = dy_lo; jj < dy_hi; jj++) {
+            int sj = jj + off_j;
+            if (sj < 0 || sj >= Nt_coarse_full) continue;
+            for (int ii = dx_lo; ii < dx_hi; ii++) {
+                int si = ii + off_i;
+                if (si < 0 || si >= Nt_coarse_full) continue;
 
-                    size_t src_idx = (size_t)sk * Nt_coarse_full * Nt_coarse_full
-                                   + (size_t)sj * Nt_coarse_full + si;
+                size_t src_idx = (size_t)sk * Nt_coarse_full * Nt_coarse_full
+                               + (size_t)sj * Nt_coarse_full + si;
 
-                    /* Cubic Taylor Horner evaluation:
-                     *   U(θ) = U_n + θ*(a1 + θ*(a2 + θ*a3))
-                     * When Taylor buffers are zero (first step), gives U_n.
-                     * Ref: Chombo TimeInterpolatorRK4::intermediate. */
-                    double u_n = coarse_fields_old[src_off + src_idx];
-                    double val;
-                    if (has_taylor) {
-                        double a1 = coarse_taylor_a1[src_off + src_idx];
-                        double a2 = coarse_taylor_a2[src_off + src_idx];
-                        double a3 = coarse_taylor_a3[src_off + src_idx];
-                        val = u_n + frac * (a1 + frac * (a2 + frac * a3));
-                    } else {
-                        val = u_n;  /* no Taylor data: copy pre-step state */
-                    }
-
-                    size_t dst_idx = (size_t)kk * Nt_c * Nt_c
-                                   + (size_t)jj * Nt_c + ii;
-                    fine_coarse_data[dst_off + dst_idx] = val;
+                /* Cubic Taylor Horner evaluation:
+                 *   U(θ) = U_n + θ*(a1 + θ*(a2 + θ*a3))
+                 * Ref: Chombo TimeInterpolatorRK4::intermediate. */
+                double u_n = coarse_fields_old[src_off + src_idx];
+                double val;
+                if (has_taylor) {
+                    double a1 = coarse_taylor_a1[src_off + src_idx];
+                    double a2 = coarse_taylor_a2[src_off + src_idx];
+                    double a3 = coarse_taylor_a3[src_off + src_idx];
+                    val = u_n + frac * (a1 + frac * (a2 + frac * a3));
+                } else {
+                    val = u_n;
                 }
+
+                size_t dst_idx = (size_t)kk * Nt_c * Nt_c
+                               + (size_t)jj * Nt_c + ii;
+                fine_coarse_data[dst_off + dst_idx] = val;
             }
         }
     }

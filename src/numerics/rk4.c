@@ -525,14 +525,10 @@ static void step_level(mesh_t *m, const sim_params_t *p,
         accumulate_taylor_from_pack(pack, m->blocks, 1, dt_level);
         backend_rk4_stage_packed(pack, 1.0/3.0, 0.5, dt_level);
 
-        /* Stage 3: evaluate at t + dt/2 (c=0.5) */
-        if (level > 0) {
-            meshblock_pack_sync_to_blocks(pack, m->blocks);
-            ghost_fill_from_coarser(m, level, frac + c_s[2] * inv_ratio);
-            meshblock_pack_sync_from_blocks(pack, m->blocks);
-            if (pack->n_refined > 0)
-                meshblock_pack_load_coarse(pack, m->blocks);
-        }
+        /* Stage 3: evaluate at t + dt/2 (c=0.5)
+         * Cross-level ghost fill SKIPPED: stages 2 and 3 share frac=0.5
+         * (c_s[1] = c_s[2] = 0.5). Interior-only rk4_stage preserves
+         * ghost data from stage 2's fill. See GPU path comment. */
         backend_enforce_algebraic_packed(pack);
         backend_ghost_exchange_packed(pack);
         backend_compute_rhs_packed(pack, p);
@@ -912,10 +908,12 @@ static void step_level_gpu(mesh_t *m, const sim_params_t *p,
     backend_taylor_accumulate_packed(pack, 1, dt_level);
     backend_rk4_stage_packed(pack, 1.0/3.0, 0.5, dt_level);
 
-    /* Stage 3: evaluate at t + dt/2 (c=0.5) */
-    if (coarser)
-        backend_cross_level_ghost_fill_packed(pack, coarser,
-                                              frac + 0.5 * inv_ratio);
+    /* Stage 3: evaluate at t + dt/2 (c=0.5)
+     * Cross-level ghost fill SKIPPED: stages 2 and 3 share frac=0.5
+     * (c_s[1] = c_s[2] = 0.5 in classic RK4). Interior-only rk4_stage
+     * preserves coarse_data ghost cells from stage 2's fill. The ghost
+     * data at cross-level positions is identical (same frac, same coarse
+     * Taylor coefficients). Ref: Chombo TimeInterpolatorRK4. */
     backend_enforce_algebraic_packed(pack);
     backend_ghost_exchange_packed(pack);
     backend_compute_rhs_packed(pack, p);

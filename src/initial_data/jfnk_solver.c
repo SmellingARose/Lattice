@@ -346,8 +346,10 @@ static void compute_operator_level(mesh_t *m, int level, int four_field)
                     double p4 = p2 * p2;
                     double p7 = p4 * p2 * psi_tot;
                     if (four_field)
+                        /* D²ψ - (R̃/8)ψ + A²/(8ψ⁷) = 0
+                         * Ref: arXiv:1410.8607 Eq. (13) */
                         L_psi[idx] = lap
-                            + g->fields[BG_RTILDE][idx] * 0.125 * psi_tot
+                            - g->fields[BG_RTILDE][idx] * 0.125 * psi_tot
                             + A2[idx] * 0.125 / p7;
                     else
                         L_psi[idx] = lap + 0.125 * A2[idx] / p7;
@@ -649,8 +651,10 @@ static void mg_compute_operator(mg_level_t *lev, int four_field)
                 double p7 = p4 * p2 * psi_tot;
 
                 if (four_field) {
+                    /* D²ψ - (R̃/8)ψ + A²/(8ψ⁷) = 0
+                     * Ref: arXiv:1410.8607 Eq. (13) */
                     lev->L_psi[idx] = lap
-                        + lev->R_tilde[idx] * 0.125 * psi_tot
+                        - lev->R_tilde[idx] * 0.125 * psi_tot
                         + lev->A2[idx] * 0.125 / p7;
                 } else {
                     lev->L_psi[idx] = lap + 0.125 * lev->A2[idx] / p7;
@@ -733,9 +737,13 @@ static void mg_gs_sweep_4field(mg_level_t *lev)
                                + fd_d2(lev->psi, idx, sz, inv_dx);
                     double p2 = psi_tot * psi_tot, p4 = p2 * p2;
                     double p7 = p4 * p2 * psi_tot, p8 = p7 * psi_tot;
-                    double src = lev->R_tilde[idx] * 0.125 * psi_tot
+                    /* D²ψ - (R̃/8)ψ + A²/(8ψ⁷) = 0
+                     * src = -(R̃/8)ψ + A²/(8ψ⁷)
+                     * dS  = -(R̃/8)  - (7/8)A²/ψ⁸
+                     * Ref: arXiv:1410.8607 Eq. (13) */
+                    double src = -lev->R_tilde[idx] * 0.125 * psi_tot
                                + lev->A2[idx] * 0.125 / p7;
-                    double dS = 0.125 * lev->R_tilde[idx]
+                    double dS = -0.125 * lev->R_tilde[idx]
                               - 0.875 * lev->A2[idx] / p8;
                     lev->psi[idx] -= (lap + src - lev->f_psi[idx]) / (J_lap + dS);
 
@@ -951,7 +959,7 @@ static double fas_solve_level(mesh_t *m, int amr_level, int four_field,
     mg_level_t *levels = calloc(n_mg_levels, sizeof(mg_level_t));
     for (int l = 0; l < n_mg_levels; l++) {
         int N_l = Ncov / (1 << l);
-        mg_level_init(&levels[l], N_l, Lcov, four_field);
+        mg_level_init(&levels[l], N_l, Lcov / (double)N_l, four_field);
     }
 
     /* Precompute backgrounds on covering grid.
