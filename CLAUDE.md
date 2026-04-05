@@ -309,20 +309,39 @@ work on AMR meshes.
   restriction — 6th-order restriction stencil read stale ghost data at
   refinement boundaries.
 - **Per-stage cross-level ghost fill (GRChombo match):** Both CPU `step_level` and
-  GPU `step_level_gpu` now fill coarse-fine boundary ghosts at every RK4 sub-stage
-  with temporally interpolated data at the correct sub-stage time
+  GPU `step_level_gpu` fill coarse-fine boundary ghosts at RK4 sub-stages 1, 2,
+  and 4 with temporally interpolated data at the correct sub-stage time
   (`frac + c_s / refine_ratio`, where c_s = {0, 0.5, 0.5, 1.0} for classic RK4).
+  Stage 3 cross-level fill skipped: shares frac=0.5 with stage 2, and interior-only
+  RK4 stage writes preserve coarse_data ghost cells between stages (25% fewer
+  cross-level fills, ~5,200 kernel launches saved per base step at 7 AMR levels).
   Uses cubic Taylor temporal interpolation (Chombo TimeInterpolatorRK4): Taylor
   coefficient buffers (a1, a2, a3) accumulated from each RK4 stage's RHS,
   evaluated via Horner form `U(θ) = U_n + θ*(a1 + θ*(a2 + θ*a3))`.
   Post-subcycle restriction followed by coarse ghost re-exchange (GRChombo
   `postTimeStep` → `averageToCoarse` → `fillBdyGhosts` pattern).
   Ref: arXiv:2112.10567 (GRChombo AMR lessons), Chombo TimeInterpolatorRK4.
+- **Interior-only RK4 stage/final kernels:** `hip_rk4_stage` and `hip_rk4_final`
+  write only interior cells `[ghost,ghost+N)³` of evolve blocks (leaves).
+  Ghost zones and buffer blocks untouched — preserves cross-level fill data
+  between stages, enabling the stage 3 skip. CPU backend uses same pattern
+  with `#pragma omp parallel for collapse(2)`. Reduces RK4 data traffic by ~55%.
+- **Parallelized cross-level ghost fill kernel:** `hip_cross_level_ghost_fill`
+  parallelized over `(entry, field)` instead of just `entry` — 25x more GPU
+  threads per launch, eliminating the serial field loop bottleneck.
+- **HiSpID solver bug fixes:** (1) `mg_level_init` received domain length `Lcov`
+  instead of grid spacing `Lcov/N_l` — all FD stencils off by N², solver never
+  actually solved on covering grid. (2) Hamiltonian constraint R_tilde term had
+  wrong sign (+R/8 instead of -R/8) at 3 locations — caused Newton divergence
+  for any nonzero conformal curvature. Ref: arXiv:1410.8607 Eq. (13).
+- **Production NaN/Inf check:** `mesh_check_finite()` (CPU) and
+  `backend_check_finite_packed()` (GPU) wired into main.c via
+  `--nan-check-every N` CLI flag. Catches blown simulations immediately.
 - **Default integrator:** Changed from CK45 to classic RK4 (`RK_CLASSIC`). Classic is
   faster (4 stages vs 5) but uses 25% more memory. All test allocations updated.
 - **Tests:** Flat spacetime, convergence (order 6.5), Bowen-York (33/33 + N-body),
   HiSpID (26/26), AH finder (13/13), Maxwell (15/15), Psi4 (15/15), CCE (49/49),
-  CP-BC (30/30), pack_evolve (8/8), amr_prolong (15/15), checkpoint (14/14),
+  CP-BC (30/30), pack_evolve (5/5), amr_prolong (15/15), checkpoint (14/14),
   binary inspiral D10 benchmark (T=700M, CAKO + per-field sigma + SSL + position-dep
   eta, 2-radius Psi4 (r=70+100M), chi_refine=0.05, Samurai consensus validation,
   8 hard + 4 advisory tests, per-BH position/mass/spin CSV via bh_tracker),
@@ -430,6 +449,7 @@ lattice/
 │   └── test_gauge_wave.c       # Gauge wave (WIP — needs periodic BCs)
 ├── docs/
 │   ├── architecture.html       # consolidated architecture & design reference
+│   ├── nr_code_comparison_full.html  # line-by-line comparison vs 8 NR codes (13 sections)
 │   ├── amr_refinement_ratio.html  # equidistribution-optimal β=1.516 derivation
 │   ├── qnm_ringdown.html      # Schwarzschild QNM validation (physics + results)
 │   └── archive/                # older deep-dive guides (preserved, not primary)

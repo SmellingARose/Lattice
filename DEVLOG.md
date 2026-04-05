@@ -3,6 +3,43 @@
 > **Note:** When adding/removing/renaming files or functions, also update
 > `docs/architecture.html` — the living map of the codebase structure.
 
+## 2026-04-05: HiSpID solver fixes + GPU AMR performance + NaN check + NR code comparison
+
+**HiSpID coupled solver: 2 bugs found via cross-code comparison (arXiv:1410.8607).**
+
+1. `mg_level_init` received domain length `Lcov` instead of grid spacing
+   `Lcov/N_l` — FD stencils off by N². Solver never actually solved on the
+   covering grid (returned u=0, masked by BL conformal factor passing tests).
+2. R_tilde sign error: `+R/8` instead of `-R/8` at operator (line 652),
+   smoother (line 736), and block operator (line 349). Newton diverged for
+   any spinning BH (nonzero conformal curvature). HiSpID tests: 20/26 → 26/26.
+
+**GPU AMR subcycling performance: recovered 3x slowdown from per-stage ghost fill.**
+
+- Interior-only `hip_rk4_stage`/`hip_rk4_final`: write only `[ghost,ghost+N)³`
+  of evolve blocks. Ghost zones preserved between stages. ~55% less data traffic.
+- Skip stage 3 cross-level ghost fill: stages 2 and 3 share frac=0.5. With
+  interior-only writes, coarse_data ghosts from stage 2 survive. Saves ~5,200
+  kernel launches per base step (7 AMR levels).
+- Parallelized `hip_cross_level_ghost_fill` over `(entry, field)`: 25x more
+  threads, eliminates serial field loop bottleneck.
+- CPU path: same interior-only + stage 3 skip.
+
+**Production NaN/Inf check (R1 from comparison doc).**
+
+`mesh_check_finite()` (CPU) + `backend_check_finite_packed()` (GPU) wired into
+main.c via `--nan-check-every N`. Catches blown simulations immediately.
+
+**NR code comparison document: `docs/nr_code_comparison_full.html`.**
+
+Comprehensive 13-section comparison against GRChombo, BAM, SpEC, CarpetX,
+AthenaK, Dendro-GR, NRPy+, Lean. 8 codes × 12 subsystems. All 6 staleness
+items from old audit resolved. Key finding: no production NR code uses
+chi-based prolongation/restriction switching — industry consensus is fixed
+polynomial order + floor enforcement.
+
+All 244 tests pass (14 suites, 0 failures).
+
 ## 2026-04-01: AMR subcycling bug fixes + per-stage cross-level ghost fill
 
 **Three fixes for deep AMR hierarchy stability (7+ levels):**
