@@ -147,7 +147,7 @@ static inline sim_params_t default_params(void)
     p.CFL          = 0.25;
     p.num_steps    = 1000;
     p.output_every = 0;
-    p.sigma        = 1.0;  /* GRChombo default (uniform, all fields) */
+    p.sigma        = 0.5;  /* AthenaK default for 6th-order FD + 6th-order KO */
     p.rk_method    = RK_CLASSIC;
 
     p.dx = p.L / p.N;
