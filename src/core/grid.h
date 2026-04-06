@@ -4,7 +4,7 @@
  *
  * SoA layout: each field is a contiguous double* array.
  * x is the innermost (unit-stride) index.
- * Ghost zone width = 4 (4th-order stencils + 6th-order KO dissipation).
+ * Ghost zone width = 4 (6th-order FD needs 3, 6th-order KO needs 3, advection needs 4).
  */
 
 #ifndef LATTICE_GRID_H

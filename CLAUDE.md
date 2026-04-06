@@ -90,8 +90,9 @@ work on AMR meshes.
 **Current status: Phase 2 complete, Phase 3 in progress.**
 
 **Phase 3 progress:**
-- **6th-order operators:** FD stencils, KO dissipation, AMR prolongation (7-point)
-  all upgraded from 4th to 6th order. Restriction changed from 6th-order Lagrange
+- **6th-order operators:** FD stencils, AMR prolongation (7-point)
+  all upgraded from 4th to 6th order. KO dissipation decoupled via `KO_ORDER`
+  macro (default 6th-order, 7-point; optional 8th-order, 9-point). Restriction changed from 6th-order Lagrange
   to trilinear cell averaging (GRChombo match — positive weights only, no Gibbs
   oscillations near puncture singularities). 6th-order off-grid
   Lagrange interpolation (7-point stencil, half-width 3). 4th-order Sommerfeld
@@ -148,6 +149,10 @@ work on AMR meshes.
     functions (`fd_d1`, `fd_d2`, `fd_d1_d2`, `fd_d2_mixed`, `fd_adv`, `fd_ko`)
     take `inv_dx` and multiply instead of dividing by `dx`. Eliminates ~20
     divisions per grid point per RHS evaluation.
+  - *Decoupled KO order (`KO_ORDER` macro):* KO dissipation order independent of
+    FD order. Default `KO_ORDER=6` (7-point stencil, half-width 3) gives 1-cell
+    ghost margin with GHOST=4, matching GRChombo/AthenaK. `make KO_ORDER=8` for
+    legacy 8th-order (9-point, half-width 4, zero margin — unstable on AMR).
   - Dense output subcycling deferred.
 - **Tier 4 optimizations (GPU, all complete):**
   - *Compact Sommerfeld kernel:* Boundary-only block ID list eliminates 70-90%
@@ -625,7 +630,7 @@ constant `GR_SPACEDIM = 3`.
 |---|---|---|
 | `kappa1` | 0.1 | Constraint damping (Theta + Z_i). BAM uses 0.1, AthenaK uses 0.02. |
 | `kappa2` | 0.0 | Controls mix of Theta damping in K equation |
-| `kappa3` | 0.5 | Z contribution in Gamma equation. **kappa3=1 is UNSTABLE** with constant kappa1 (Alic 2013, arXiv:1307.7391). BAM/AthenaK/ET all use 0.5. GRChombo uses 1.0 but with kappa1/alpha prescription. |
+| `kappa3` | 1.0 | Z contribution in Gamma equation. GRChombo covariant CCZ4 (kappa3=1 + constant kappa1). BAM/AthenaK use 0.5 with non-covariant (kappa1×alpha). Ref: arXiv:1106.2254 (Alic 2012). |
 | `sigma` | 1.0 | Kreiss-Oliger dissipation strength (GRChombo default) |
 | `lapse_coeff` | 2.0 | Coefficient c in 1+log slicing: dt(alpha) = -c * alpha * (K - 2*Theta) |
 | `lapse_power` | 1.0 | Power p in Bona-Masso: f(alpha) = c * alpha^(p-2) |

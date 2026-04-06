@@ -2,12 +2,16 @@
  * Lattice — 3D Numerical Relativity
  * Finite difference stencils (all static inline).
  *
- * Order controlled by FD_ORDER macro:
- *   FD_ORDER=4: 4th-order FD + 6th-order KO (5-point / 7-point)
- *   FD_ORDER=6: 6th-order FD + 8th-order KO (7-point / 9-point)  [default]
+ * FD order controlled by FD_ORDER macro:
+ *   FD_ORDER=4: 4th-order FD (5-point stencils, ghost >= 2)
+ *   FD_ORDER=6: 6th-order FD (7-point stencils, ghost >= 3)  [default]
+ *
+ * KO dissipation order controlled by KO_ORDER macro (decoupled from FD):
+ *   KO_ORDER=6: 6th-order KO (7-point, half-width 3, ghost margin=1)  [default]
+ *   KO_ORDER=8: 8th-order KO (9-point, half-width 4, ghost margin=0)
  *
  * All derivatives go through these functions — no hand-coded stencils.
- * Ghost width = 4 supports both orders (6th FD needs 3, 8th KO needs 4).
+ * Ghost width = 4 supports all combinations (6th FD needs 3, advection needs 4).
  *
  * Ref: GRChombo Source/BoxUtils/FourthOrderDerivatives.hpp (4th-order)
  * Ref: GRChombo Source/BoxUtils/SixthOrderDerivatives.hpp (6th-order)
@@ -215,42 +219,6 @@ static inline double fd_adv(const double *f, int idx, int s, double vel,
         return vel * fd_adv_down(f, idx, s, inv_dx);
 }
 
-/*
- * 8th-order Kreiss-Oliger dissipation operator.
- * 9-point stencil, divided by dx (not dx^8) following GRChombo convention.
- * Half-stencil = 4 = GHOST_WIDTH, fits exactly.
- *
- * Sign convention: returns NEGATIVE central weight (dissipative when added
- * with positive sigma), matching the 6th-order convention.
- * GRChombo's 8th-order has positive central weight and notes "change sign"
- * in add_dissipation — we absorb the sign flip here.
- *
- * Ref: GRChombo SixthOrderDerivatives.hpp lines 398-422 (commented-out 8th)
- * Ref: arXiv:2404.01137 — higher-order KO paired with higher-order FD
- */
-LATTICE_DEVICE
-static inline double fd_ko(const double *f, int idx, int s, double inv_dx)
-{
-    /* Raw 8th-order coefficients (positive central weight): */
-    /* 1/256, 8/256, 28/256, 56/256, 70/256, 56/256, 28/256, 8/256, 1/256 */
-    /* Negate all to get negative central weight (match 6th-order convention) */
-    double wvvf =  1.0 / 256.0;   /* 3.9063e-3 */
-    double wvf  =  8.0 / 256.0;   /* 3.1250e-2 */
-    double wf   = 28.0 / 256.0;   /* 1.0938e-1 */
-    double wn   = 56.0 / 256.0;   /* 2.1875e-1 */
-    double wl   = 70.0 / 256.0;   /* 2.7344e-1 */
-
-    return (-wvvf * f[idx - 4*s]
-            + wvf * f[idx - 3*s]
-            - wf  * f[idx - 2*s]
-            + wn  * f[idx -   s]
-            - wl  * f[idx]
-            + wn  * f[idx +   s]
-            - wf  * f[idx + 2*s]
-            + wvf * f[idx + 3*s]
-            -wvvf * f[idx + 4*s]) * inv_dx;
-}
-
 #elif FD_ORDER == 4
 
 /* ========================================================================
@@ -374,9 +342,35 @@ static inline double fd_adv(const double *f, int idx, int s, double vel,
     }
 }
 
+#else
+#error "FD_ORDER must be 4 or 6"
+#endif
+
+/* ========================================================================
+ * Kreiss-Oliger dissipation — decoupled from FD order.
+ *
+ * KO_ORDER=6: 7-point stencil, half-width 3. With GHOST=4, margin=1.
+ *   GRChombo/AthenaK default. Safe for AMR (avoids worst ghost cell).
+ * KO_ORDER=8: 9-point stencil, half-width 4. With GHOST=4, margin=0.
+ *   Zero margin — first interior cell reads outermost ghost cell (g0).
+ *
+ * Sign convention: negative central weight (dissipative when added with
+ * positive sigma). Both orders use this convention.
+ *
+ * Ref: GRChombo FourthOrderDerivatives.hpp lines 361-378 (6th-order)
+ * Ref: GRChombo SixthOrderDerivatives.hpp lines 398-422 (8th-order)
+ * Ref: arXiv:2404.01137 — higher-order KO paired with higher-order FD
+ * ======================================================================== */
+
+#ifndef KO_ORDER
+#define KO_ORDER 6
+#endif
+
+#if KO_ORDER == 6
+
 /*
  * 6th-order Kreiss-Oliger dissipation operator.
- * 7-point stencil, divided by dx following GRChombo convention.
+ * 7-point stencil (half-width 3), divided by dx.
  * Ref: GRChombo FourthOrderDerivatives.hpp lines 361-378
  */
 LATTICE_DEVICE
@@ -396,8 +390,37 @@ static inline double fd_ko(const double *f, int idx, int s, double inv_dx)
            + wvf * f[idx + 3*s] ) * inv_dx;
 }
 
+#elif KO_ORDER == 8
+
+/*
+ * 8th-order Kreiss-Oliger dissipation operator.
+ * 9-point stencil (half-width 4), divided by dx.
+ * WARNING: With GHOST=4 this gives zero ghost margin — the stencil at the
+ * first interior cell reads the outermost ghost cell (lowest quality data).
+ * Ref: GRChombo SixthOrderDerivatives.hpp lines 398-422 (commented-out 8th)
+ */
+LATTICE_DEVICE
+static inline double fd_ko(const double *f, int idx, int s, double inv_dx)
+{
+    double wvvf =  1.0 / 256.0;   /* 3.9063e-3 */
+    double wvf  =  8.0 / 256.0;   /* 3.1250e-2 */
+    double wf   = 28.0 / 256.0;   /* 1.0938e-1 */
+    double wn   = 56.0 / 256.0;   /* 2.1875e-1 */
+    double wl   = 70.0 / 256.0;   /* 2.7344e-1 */
+
+    return (-wvvf * f[idx - 4*s]
+            + wvf * f[idx - 3*s]
+            - wf  * f[idx - 2*s]
+            + wn  * f[idx -   s]
+            - wl  * f[idx]
+            + wn  * f[idx +   s]
+            - wf  * f[idx + 2*s]
+            + wvf * f[idx + 3*s]
+            -wvvf * f[idx + 4*s]) * inv_dx;
+}
+
 #else
-#error "FD_ORDER must be 4 or 6"
+#error "KO_ORDER must be 6 or 8"
 #endif
 
 #endif /* LATTICE_FINITE_DIFF_H */

@@ -442,12 +442,35 @@ independent problems that compound at the finest AMR level. The recommended appr
 <p>Option C (ghost=5) is architecturally expensive and no code uses it. Skip it.</p>
 
 <!-- ================================================================== -->
+<h2>Resolution (2026-04-06)</h2>
+<!-- ================================================================== -->
+
+<p><strong>GRChombo route chosen</strong> &mdash; targeting multi-body simulations (25+ BH).
+GRChombo is the only code proven at that scale (arXiv:2505.01495).</p>
+
+<h3>Changes applied:</h3>
+<ol>
+<li><strong>Option A: 6th-order KO (IMPLEMENTED)</strong> &mdash; <code>KO_ORDER</code> macro
+decoupled from <code>FD_ORDER</code>. Default <code>KO_ORDER=6</code> (7-point stencil,
+half-width 3). Ghost margin = 1 cell with GHOST=4. Legacy 8th-order available
+via <code>make KO_ORDER=8</code>.</li>
+<li><strong>&kappa;3 = 1.0</strong> &mdash; covariant CCZ4 formulation (GRChombo match).
+With <code>covariant_Z4=true</code> (constant &kappa;1), &kappa;3=1.0 is the
+mathematically consistent choice per Alic 2012 (arXiv:1106.2254).
+The previous &kappa;3=0.5 + covariant was an untested hybrid used by no
+production code.</li>
+</ol>
+
+<p>Other parameters unchanged: &kappa;1=0.1, &sigma;=1.0, &eta;=1.0.
+All CPU tests pass (convergence order 5.8&ndash;6.3, threshold &ge;4).</p>
+
+<!-- ================================================================== -->
 <h2>References</h2>
 <!-- ================================================================== -->
 <ul>
 <li>arXiv:1212.2901 &mdash; BAM Z4c: &sigma;=0.1 (fine), &kappa;1=0.02, &eta;=2/M, 6th KO, 6 buffer pts</li>
 <li>arXiv:gr-qc/0610128 &mdash; BAM calibration: level-dependent &sigma;, &eta;=2/M optimal</li>
-<li>arXiv:1307.7391 &mdash; Alic 2013: CCZ4 stability (&kappa;3=1 + const &kappa;1 unstable)</li>
+<li>arXiv:1307.7391 &mdash; Alic 2013: CCZ4 stability (&kappa;3=0.5 requires &kappa;1&times;&alpha;; &kappa;3=1.0 requires const &kappa;1)</li>
 <li>arXiv:2409.10383 &mdash; AthenaK: &kappa;1=0.02, &sigma;=0.5, 6th KO</li>
 <li>arXiv:2112.10567 &mdash; GRChombo AMR lessons: &sigma;=1.0, 6th KO, ghost=3&ndash;4</li>
 <li>Einstein Toolkit Dissipation docs: stability bound &sigma; &lt; 2&times;CFL</li>

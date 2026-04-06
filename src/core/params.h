@@ -155,7 +155,7 @@ static inline sim_params_t default_params(void)
 
     p.ccz4.kappa1       = 0.1;  /* BAM default. AthenaK uses 0.02 */
     p.ccz4.kappa2       = 0.0;
-    p.ccz4.kappa3       = 0.5;  /* non-covariant. kappa3=1 is UNSTABLE (Alic 2013) */
+    p.ccz4.kappa3       = 1.0;  /* covariant CCZ4 (GRChombo match). Ref: arXiv:1106.2254 */
     p.ccz4.covariant_Z4 = true;
 
     p.gauge.lapse_coeff       = 2.0;

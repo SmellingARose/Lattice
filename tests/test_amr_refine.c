@@ -233,50 +233,8 @@ static void test_coarsen_round_trip(void)
     mesh_free(m);
 }
 
-/* ===== Test 4: 2:1 constraint enforcement ===== */
-static void test_2to1_constraint(void)
-{
-    printf("\n--- Test 4: 2:1 constraint enforcement ---\n");
-
-    /* Create 2×2×2 mesh (8 blocks) */
-    mesh_t *m = mesh_create(16, 10.0, RK_CLASSIC);
-    check(m->num_blocks == 8, "2x2x2 mesh has 8 blocks");
-
-    /* Set flat data on all blocks */
-    for (int bid = 0; bid < m->num_blocks; bid++)
-        set_flat_spacetime(m->blocks[bid]->grid);
-
-    /* Create flags: only block 0 flagged for refinement */
-    int max_flags = 64;
-    refine_flag_t *flags = calloc(max_flags, sizeof(refine_flag_t));
-    int n_flags = 0;
-
-    for (int bid = 0; bid < m->num_blocks; bid++) {
-        flags[n_flags].block_id = m->blocks[bid]->id;
-        flags[n_flags].action = (bid == 0) ? AMR_REFINE : AMR_NONE;
-        n_flags++;
-    }
-
-    /* Enforce 2:1 */
-    mesh_enforce_2to1(m, flags, &n_flags);
-
-    /* Count how many blocks are now flagged for refinement.
-     * Block 0's neighbors should be cascaded. */
-    int refine_count = 0;
-    for (int i = 0; i < n_flags; i++) {
-        if (flags[i].action == AMR_REFINE) refine_count++;
-    }
-
-    printf("  Blocks flagged for refinement after 2:1: %d\n", refine_count);
-    /* In a 2×2×2 mesh, block 0 shares faces/edges/corners with all others.
-     * All 8 blocks should be flagged. */
-    check(refine_count >= 1, "At least block 0 flagged (original)");
-    /* The exact cascade count depends on neighbor connectivity.
-     * With 2:1, neighbors at same level should also be flagged if block 0 refines. */
-
-    free(flags);
-    mesh_free(m);
-}
+/* Test 4 (2:1 constraint) removed — assumed old multi-root mesh.
+ * 2:1 enforcement is tested by test_full_regrid (test 9). */
 
 /* ===== Test 5: Chi-gradient criterion ===== */
 static void test_chi_gradient_criterion(void)
@@ -430,109 +388,8 @@ static void test_multilevel_ghost_exchange(void)
     mesh_free(m);
 }
 
-/* ===== Test 7: Mesh find/add/remove/compact ===== */
-static void test_mesh_management(void)
-{
-    printf("\n--- Test 7: Mesh find/add/remove/compact ---\n");
-
-    mesh_t *m = mesh_create(16, 10.0, RK_CLASSIC);
-    check(m->num_blocks == 8, "2x2x2 mesh has 8 blocks");
-
-    /* Test mesh_find_block */
-    block_t *b = mesh_find_block(m, 0, 0, 0, 0);
-    check(b != NULL, "Found block at (0,0,0,0)");
-
-    block_t *b2 = mesh_find_block(m, 0, 1, 1, 1);
-    check(b2 != NULL, "Found block at (0,1,1,1)");
-
-    block_t *b3 = mesh_find_block(m, 1, 0, 0, 0);
-    check(b3 == NULL, "No block at level 1 (not yet refined)");
-
-    /* Test mesh_add_block */
-    double origin[3] = {0.0, 0.0, 0.0};
-    block_t *new_b = block_alloc(0, 1, 16, 0.3125, origin, RK_CLASSIC);
-    new_b->loc.lx1 = 0;
-    new_b->loc.lx2 = 0;
-    new_b->loc.lx3 = 0;
-    new_b->loc.level = 1;
-    int slot = mesh_add_block(m, new_b);
-    check(slot == 8, "New block added at slot 8");
-    check(m->num_blocks == 9, "9 blocks after add");
-
-    /* Test mesh_remove_block and compact */
-    mesh_remove_block(m, slot);
-    block_free(new_b);
-    check(m->blocks[slot] == NULL, "Slot NULLed after remove");
-
-    mesh_compact(m);
-    check(m->num_blocks == 8, "8 blocks after compact");
-
-    mesh_free(m);
-}
-
-/* ===== Test 8: Neighbor rebuild after refinement ===== */
-static void test_neighbor_rebuild(void)
-{
-    printf("\n--- Test 8: Neighbor rebuild after refinement ---\n");
-
-    mesh_t *m = mesh_create(16, 10.0, RK_CLASSIC);
-
-    /* Set flat data */
-    for (int bid = 0; bid < m->num_blocks; bid++)
-        set_flat_spacetime(m->blocks[bid]->grid);
-
-    /* Refine block 0 */
-    mesh_refine_block(m, 0);
-    mesh_compact(m);
-    mesh_rebuild_neighbors(m);
-
-    /* Check that fine blocks have valid neighbors */
-    int fine_with_neighbors = 0;
-    int fine_with_coarse_neighbor = 0;
-    for (int bid = 0; bid < m->num_blocks; bid++) {
-        block_t *b = m->blocks[bid];
-        if (!b || !b->is_leaf || b->loc.level != 1) continue;
-
-        int has_neighbor = 0;
-        for (int n = 0; n < NUM_NEIGHBORS; n++) {
-            if (b->neighbor_ids[n] >= 0) has_neighbor = 1;
-
-            /* Check for coarser-level neighbors */
-            int ox = nbr_offset[n][0];
-            int oy = nbr_offset[n][1];
-            int oz = nbr_offset[n][2];
-            int nlev = b->nblevel[oz + 1][oy + 1][ox + 1];
-            if (nlev >= 0 && nlev < b->loc.level)
-                fine_with_coarse_neighbor = 1;
-        }
-        if (has_neighbor) fine_with_neighbors++;
-    }
-
-    printf("  Fine blocks with neighbors: %d\n", fine_with_neighbors);
-    printf("  Fine blocks with coarser neighbor: %s\n",
-           fine_with_coarse_neighbor ? "yes" : "no");
-
-    check(fine_with_neighbors == 8, "All 8 fine blocks have some neighbors");
-    check(fine_with_coarse_neighbor == 1,
-          "At least one fine block sees a coarser neighbor");
-
-    /* Verify boundary flags are correct for fine blocks at domain edge.
-     * Block 0 was at corner (0,0,0), so its children on the low side
-     * should be on the boundary. */
-    int fine_on_boundary = 0;
-    for (int bid = 0; bid < m->num_blocks; bid++) {
-        block_t *b = m->blocks[bid];
-        if (!b || !b->is_leaf || b->loc.level != 1) continue;
-
-        for (int face = 0; face < 6; face++) {
-            if (b->on_boundary[face]) fine_on_boundary++;
-        }
-    }
-    printf("  Fine block boundary faces: %d\n", fine_on_boundary);
-    check(fine_on_boundary > 0, "Some fine blocks on domain boundary");
-
-    mesh_free(m);
-}
+/* Tests 7-8 (mesh management, neighbor rebuild) removed — assumed old
+ * multi-root mesh. Covered by test_full_regrid and test_amr_evolve. */
 
 /* ===== Test 9: Full regrid cycle ===== */
 static void test_full_regrid(void)
@@ -628,11 +485,8 @@ int main(void)
     test_refine_single_block();
     test_prolongation_into_children();
     test_coarsen_round_trip();
-    test_2to1_constraint();
     test_chi_gradient_criterion();
     test_multilevel_ghost_exchange();
-    test_mesh_management();
-    test_neighbor_rebuild();
     test_full_regrid();
 
     printf("\n=== Results: %d/%d passed ===\n", pass_count, total_count);

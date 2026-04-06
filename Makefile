@@ -13,6 +13,7 @@
 
 BACKEND ?= cpu
 FD_ORDER ?= 6
+KO_ORDER ?= 6
 EM ?= off
 HDF5 ?= off
 
@@ -112,7 +113,7 @@ endif
 
 # Compiler flags
 INCLUDES = -I src
-CFLAGS_BASE = -std=c17 -Wall -Wextra -Werror -D_GNU_SOURCE -Wno-unused-but-set-variable -DFD_ORDER=$(FD_ORDER) $(EM_FLAGS) $(HDF5_FLAGS) $(INCLUDES) $(BACKEND_FLAGS)
+CFLAGS_BASE = -std=c17 -Wall -Wextra -Werror -D_GNU_SOURCE -Wno-unused-but-set-variable -DFD_ORDER=$(FD_ORDER) -DKO_ORDER=$(KO_ORDER) $(EM_FLAGS) $(HDF5_FLAGS) $(INCLUDES) $(BACKEND_FLAGS)
 HOST_OPT ?= -O3
 CFLAGS_OPT  = $(CFLAGS_BASE) $(HOST_OPT) -ffast-math -march=native $(LTO_FLAGS)
 CFLAGS_DBG  = $(CFLAGS_BASE) -O0 -g -fsanitize=address,undefined -DDEBUG
@@ -138,14 +139,14 @@ DEVICE_CXX_OBJS = $(BUILD)/device/src/backend/backend_hip.o
 
 # NVIDIA hipcc wraps nvcc which has different flag syntax
 ifeq ($(HIP_PLATFORM),nvidia)
-    HIP_CXXFLAGS = -std=c++17 -O3 -DFD_ORDER=$(FD_ORDER) $(EM_FLAGS) $(HDF5_FLAGS) $(INCLUDES) $(HIP_FLAGS) \
+    HIP_CXXFLAGS = -std=c++17 -O3 -DFD_ORDER=$(FD_ORDER) -DKO_ORDER=$(KO_ORDER) $(EM_FLAGS) $(HDF5_FLAGS) $(INCLUDES) $(HIP_FLAGS) \
                    -I$(ROCM_PATH)/include -D__HIP_PLATFORM_NVIDIA__ -rdc=true \
                    --compiler-options -Wall,-Wextra,-Wno-unused-parameter,-Wno-unused-but-set-variable
     HIP_LANG_FLAG = -x cu
     # Use nvcc directly (hipcc wrapper adds flags that break with Ubuntu CUDA toolkit)
     HIPCC := nvcc
 else
-    HIP_CXXFLAGS = -std=c++17 -Wall -Wextra -O3 -DFD_ORDER=$(FD_ORDER) $(EM_FLAGS) $(HDF5_FLAGS) $(INCLUDES) $(HIP_FLAGS) \
+    HIP_CXXFLAGS = -std=c++17 -Wall -Wextra -O3 -DFD_ORDER=$(FD_ORDER) -DKO_ORDER=$(KO_ORDER) $(EM_FLAGS) $(HDF5_FLAGS) $(INCLUDES) $(HIP_FLAGS) \
                    -Wno-unused-parameter -Wno-unused-but-set-variable
     HIP_LANG_FLAG = -x hip
 endif

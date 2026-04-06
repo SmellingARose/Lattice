@@ -23,6 +23,7 @@
 #include "../src/evolution/ccz4_rhs.h"
 #include "../src/numerics/rk4.h"
 #include "../src/diagnostics/constraints.h"
+#include "../src/amr/refine.h"
 #include "../src/backend/backend.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -251,33 +252,43 @@ static void test_meshblock_pack(void)
 }
 
 /* ======================================================================
- * Test 5: Multi-block pack with 8 blocks
+ * Test 5: Multi-block pack with 8 blocks (via AMR refinement)
+ * Single root block refined once → 8 leaf children.
  * ====================================================================== */
 static void test_multiblock_pack(void)
 {
     printf("\n--- Test: MeshBlockPack with 8 blocks ---\n");
 
     mesh_t *m = mesh_create(16, 10.0, RK_CLASSIC);
+    set_flat_spacetime(m->blocks[0]->grid);
 
-    check(m->num_blocks == 8, "8 blocks created (2^3)");
+    /* Refine root block → 8 leaf children */
+    mesh_refine_block(m, 0);
+    int nleaves = 0;
+    for (int i = 0; i < m->num_blocks; i++)
+        if (m->blocks[i]->is_leaf) nleaves++;
+    check(nleaves == 8, "8 leaf blocks after refinement");
 
-    /* Set flat spacetime on all blocks */
-    for (int i = 0; i < m->num_blocks; i++) {
-        set_flat_spacetime(m->blocks[i]->grid);
-    }
+    /* Set flat spacetime on all leaf blocks */
+    for (int i = 0; i < m->num_blocks; i++)
+        if (m->blocks[i]->is_leaf)
+            set_flat_spacetime(m->blocks[i]->grid);
 
-    /* Pack all 8 blocks */
+    /* Collect leaf block IDs */
     int ids[8];
-    for (int i = 0; i < 8; i++) ids[i] = i;
+    int cnt = 0;
+    for (int i = 0; i < m->num_blocks; i++)
+        if (m->blocks[i]->is_leaf)
+            ids[cnt++] = i;
 
-    size_t npts = m->blocks[0]->grid->npoints;
-    meshblock_pack_t *pack = meshblock_pack_create(8, npts, ids, 0,
+    size_t npts = m->blocks[ids[0]]->grid->npoints;
+    meshblock_pack_t *pack = meshblock_pack_create(cnt, npts, ids, 0,
                                                     RK_CLASSIC, NUM_FIELDS);
     meshblock_pack_load(pack, m->blocks);
 
-    /* Verify pack layout: block 3's chi should be at correct offset */
+    /* Verify pack layout: every leaf block's data matches */
     double max_err = 0.0;
-    for (int b = 0; b < 8; b++) {
+    for (int b = 0; b < cnt; b++) {
         for (int f = 0; f < NUM_FIELDS; f++) {
             for (size_t i = 0; i < npts; i++) {
                 double pack_val = pack->data[PACK_IDX(pack, f, b, i)];
