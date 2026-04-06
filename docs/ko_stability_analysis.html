@@ -208,7 +208,8 @@ Step N+1: Restriction sends amplified error to coarser level
 </tr>
 </table>
 
-<p><strong>Lattice is the only code with zero ghost margin AND &sigma;=1.0 on fine levels.</strong></p>
+<p><strong>Lattice was the only code with zero ghost margin AND &sigma;=1.0 on fine levels.</strong>
+(Resolved: KO dropped to 6th order, &sigma; reduced to 0.5.)</p>
 
 <!-- ================================================================== -->
 <h2>3. Additional Issues Found</h2>
@@ -461,7 +462,16 @@ The previous &kappa;3=0.5 + covariant was an untested hybrid used by no
 production code.</li>
 </ol>
 
-<p>Other parameters unchanged: &kappa;1=0.1, &sigma;=1.0, &eta;=1.0.
+<li><strong>&sigma; = 0.5</strong> &mdash; AthenaK default for 6th-order FD + 6th-order KO.
+GRChombo&rsquo;s &sigma;=1.0 works because their 6th-order KO is 2 orders above
+their 4th-order FD (only damps unresolved noise). With our 6th-order FD,
+KO operates at the same order as the truncation error &mdash; &sigma;=1.0 is
+too aggressive and causes constraint growth at fine AMR levels.
+The Einstein Toolkit stability bound is &sigma; &lt; 2&times;CFL = 0.5.
+Ref: arXiv:2409.10383 (AthenaK).</li>
+</ol>
+
+<p>Other parameters unchanged: &kappa;1=0.1, &eta;=1.0.
 All CPU tests pass (convergence order 5.8&ndash;6.3, threshold &ge;4).</p>
 
 <!-- ================================================================== -->

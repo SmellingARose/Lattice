@@ -3,6 +3,38 @@
 > **Note:** When adding/removing/renaming files or functions, also update
 > `docs/architecture.html` — the living map of the codebase structure.
 
+## 2026-04-06: GRChombo CCZ4 configuration + KO stability fix
+
+**QNM publication test NaN at t=14M: root cause analysis and fix.**
+
+Three independent problems identified and fixed:
+
+1. **CCZ4 formulation mismatch** — kappa3=0.5 + covariant_Z4=true (constant kappa1)
+   was used by no production code. Alic 2012 proves kappa3=1.0 is the correct
+   pairing with constant kappa1 (covariant CCZ4). Changed kappa3 default to 1.0
+   (GRChombo match). Ref: arXiv:1106.2254.
+
+2. **KO ghost margin = 0** — 8th-order KO (half-width 4) with ghost=4 read the
+   outermost ghost cell (worst prolongation quality), creating a feedback loop.
+   Decoupled KO_ORDER from FD_ORDER via new macro; default KO_ORDER=6 (half-width 3,
+   margin=1). GRChombo/AthenaK match. Legacy 8th-order via `make KO_ORDER=8`.
+
+3. **sigma too high for FD=6** — GRChombo's sigma=1.0 works because their 6th-order
+   KO is 2 orders above their 4th-order FD (only damps noise). With our 6th-order FD,
+   KO=6 operates at the same order as truncation error — sigma=1.0 causes constraint
+   growth at fine AMR levels (NaN at t=20M after fixes 1-2). Changed to sigma=0.5
+   (AthenaK default for FD=6 + KO=6, at the stability bound sigma < 2×CFL).
+   Ref: arXiv:2409.10383.
+
+Final configuration: kappa1=0.1 (constant), kappa3=1.0, covariant=true, KO=6th,
+sigma=0.5, eta=1.0. CCZ4 formulation from GRChombo (multi-body proven),
+dissipation from AthenaK (FD=6 proven).
+
+**Stale multi-root tests removed** — test_amr_mesh and test_amr_refine had tests
+assuming 8-block mesh_create (old multi-root architecture, deleted long ago).
+Fixed multi-block pack test to use AMR refinement. Removed 3 dead tests covered
+by test_full_regrid.
+
 ## 2026-04-05: HiSpID solver fixes + GPU AMR performance + NaN check + NR code comparison
 
 **HiSpID coupled solver: 2 bugs found via cross-code comparison (arXiv:1410.8607).**
