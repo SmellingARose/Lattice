@@ -890,18 +890,20 @@ static void step_level_gpu(mesh_t *m, const sim_params_t *p,
     /* Stage 1: evaluate at t (c=0)
      * Combined ghost exchange + cross-level fill (GRChombo/Athena++ ordering):
      * same-level first, cross-level second, prolong last. Cross-level temporal
-     * interpolation has the final word at refinement boundaries. */
-    backend_enforce_algebraic_packed(pack);
+     * interpolation has the final word at refinement boundaries.
+     * Enforce AFTER ghost fill so prolongated ghosts get chi/lapse floor.
+     * (CPU path: ghost_fill_from_coarser → enforce → RHS. Match that here.) */
     backend_ghost_exchange_cross_level_packed(pack, coarser, frac);
+    backend_enforce_algebraic_packed(pack);
     backend_compute_rhs_packed(pack, p);
     backend_sommerfeld_packed(pack, p);
     backend_taylor_accumulate_packed(pack, 0, dt_level);
     backend_rk4_stage_packed(pack, 1.0/6.0, 0.5, dt_level);
 
     /* Stage 2: evaluate at t + dt/2 (c=0.5) */
-    backend_enforce_algebraic_packed(pack);
     backend_ghost_exchange_cross_level_packed(pack, coarser,
                                               frac + 0.5 * inv_ratio);
+    backend_enforce_algebraic_packed(pack);
     backend_compute_rhs_packed(pack, p);
     backend_sommerfeld_packed(pack, p);
     backend_taylor_accumulate_packed(pack, 1, dt_level);
@@ -911,18 +913,18 @@ static void step_level_gpu(mesh_t *m, const sim_params_t *p,
      * Cross-level ghost fill SKIPPED: stages 2 and 3 share frac=0.5
      * (c_s[1] = c_s[2] = 0.5 in classic RK4). Interior-only rk4_stage
      * preserves coarse_data ghost cells from stage 2's fill. */
-    backend_enforce_algebraic_packed(pack);
     backend_ghost_exchange_cross_level_packed(pack, coarser,
                                               frac + 0.5 * inv_ratio);
+    backend_enforce_algebraic_packed(pack);
     backend_compute_rhs_packed(pack, p);
     backend_sommerfeld_packed(pack, p);
     backend_taylor_accumulate_packed(pack, 2, dt_level);
     backend_rk4_stage_packed(pack, 1.0/3.0, 1.0, dt_level);
 
     /* Stage 4: evaluate at t + dt (c=1.0) */
-    backend_enforce_algebraic_packed(pack);
     backend_ghost_exchange_cross_level_packed(pack, coarser,
                                               frac + 1.0 * inv_ratio);
+    backend_enforce_algebraic_packed(pack);
     backend_compute_rhs_packed(pack, p);
     backend_sommerfeld_packed(pack, p);
     backend_taylor_accumulate_packed(pack, 3, dt_level);
