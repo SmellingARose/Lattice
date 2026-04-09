@@ -41,8 +41,16 @@ dissipation from AthenaK (FD=6 proven).
    `enforce_algebraic` after restricting fine→coarse + re-exchanging coarse ghosts.
    CPU `subcycle_level` was missing this step. Added to match GPU path.
 
-Full CPU vs GPU audit confirmed: all remaining differences are structural (different
-implementations of same algorithm) not behavioral.
+Full CPU vs GPU audit found additional issue: GPU Phase 3a (`hip_ghost_coarse_fill`)
+reads from buffer blocks (non-leaf parents at level L-1, packed in the fine L pack)
+WITHOUT temporal interpolation. Buffer block data is frozen from the last restriction
+(time t_0), but fine level is at time t_0 + k*dt_fine during subcycling. The
+cross-level map (Phase 3b) was supposed to overwrite with correctly interpolated data,
+but buffer blocks aren't in the coarser pack — `coarse_rev[nbr_id]` returns -1, so
+Phase 3b SKIPS them. At substep 128/128, temporal error = entire coarse dt.
+CPU path doesn't have this because `ghost_fill_from_coarser` accesses actual mesh
+blocks with fields_old + Taylor coefficients. Investigation ongoing — checking how
+AthenaK handles the same buffer block pattern.
 
 **Stale multi-root tests removed** — test_amr_mesh and test_amr_refine had tests
 assuming 8-block mesh_create (old multi-root architecture, deleted long ago).
