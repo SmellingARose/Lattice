@@ -650,6 +650,15 @@ static void subcycle_level(mesh_t *m, const sim_params_t *p,
         ghost_exchange(m);
         ghost_fill_from_coarser(m, level + 1, 1.0);
         restrict_level_to_parents(m, level + 1);
+
+        /* Post-restriction enforcement on coarse level (match GPU path).
+         * Restriction may produce values that violate algebraic constraints.
+         * Ref: GPU subcycle_level_gpu does enforce_algebraic after restrict. */
+        if (m->level_packs[level]) {
+            meshblock_pack_sync_from_blocks(m->level_packs[level], m->blocks);
+            backend_enforce_algebraic_packed(m->level_packs[level]);
+            meshblock_pack_sync_to_blocks(m->level_packs[level], m->blocks);
+        }
     }
 
     /* Algebraic constraints (det(h)=1, tr(A)=0) enforced inside step_level
