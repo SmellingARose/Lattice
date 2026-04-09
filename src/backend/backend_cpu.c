@@ -711,8 +711,6 @@ static void packed_fill_coarse_buf_ghosts(meshblock_pack_t *pack)
     int ghost = pack->ghost;
     int N_c = pack->coarse_N;
     int Nt_c = pack->coarse_Ntotal;
-    int Nt_f = pack->Ntotal;
-    size_t npts = pack->npts;
     size_t cnpts = pack->coarse_npts;
 
     #pragma omp parallel for schedule(dynamic)
@@ -766,56 +764,11 @@ static void packed_fill_coarse_buf_ghosts(meshblock_pack_t *pack)
                     }
                 }
 
-            } else if (nlev >= 0 && nlev == blk_level - 1) {
-                /* Coarser neighbor: copy from its main grid in pack->data.
-                 * Both the coarser block's grid and this block's coarse_buf
-                 * share the same dx, so use integer index offset. */
-                int pack_nbr = pack->neighbor_table[b * NUM_NEIGHBORS + n];
-                if (pack_nbr < 0) continue;
-
-                double dx_c = pack->dx_per_block[pack_nbr];
-                int off_i = (int)round(
-                    (pack->origins[b*3+0] - pack->origins[pack_nbr*3+0]) / dx_c);
-                int off_j = (int)round(
-                    (pack->origins[b*3+1] - pack->origins[pack_nbr*3+1]) / dx_c);
-                int off_k = (int)round(
-                    (pack->origins[b*3+2] - pack->origins[pack_nbr*3+2]) / dx_c);
-
-                /* Ghost range on coarse_buf (destination) */
-                int dx_lo, dx_hi, dummy1, dummy2;
-                int dy_lo, dy_hi, dummy3, dummy4;
-                int dz_lo, dz_hi, dummy5, dummy6;
-                ghost_range_pack(ox, ghost, N_c, Nt_c,
-                                 &dx_lo, &dx_hi, &dummy1, &dummy2);
-                ghost_range_pack(oy, ghost, N_c, Nt_c,
-                                 &dy_lo, &dy_hi, &dummy3, &dummy4);
-                ghost_range_pack(oz, ghost, N_c, Nt_c,
-                                 &dz_lo, &dz_hi, &dummy5, &dummy6);
-
-                for (int f = 0; f < pack->n_fields; f++) {
-                    size_t dst_off = (size_t)r * pack->n_fields * cnpts
-                                   + (size_t)f * cnpts;
-                    size_t src_off = (size_t)f * nb * npts
-                                   + (size_t)pack_nbr * npts;
-
-                    for (int k = dz_lo; k < dz_hi; k++) {
-                        int sk = k + off_k;
-                        if (sk < 0 || sk >= Nt_f) continue;
-                        for (int j = dy_lo; j < dy_hi; j++) {
-                            int sj = j + off_j;
-                            if (sj < 0 || sj >= Nt_f) continue;
-                            for (int i = dx_lo; i < dx_hi; i++) {
-                                int si = i + off_i;
-                                if (si < 0 || si >= Nt_f) continue;
-                                pack->coarse_data[dst_off
-                                    + k*Nt_c*Nt_c + j*Nt_c + i] =
-                                    pack->data[src_off
-                                    + sk*Nt_f*Nt_f + sj*Nt_f + si];
-                            }
-                        }
-                    }
-                }
             }
+            /* Coarser neighbors (nlev == blk_level - 1) are NOT handled here.
+             * They are filled by cross-level ghost fill (Phase 3b) with proper
+             * temporal interpolation from the coarser pack's fields_old + Taylor.
+             * Ref: AthenaK pattern — Phase 3a = same-level only. */
             /* nlev < 0: domain boundary — skip, Phase 3.5 handles */
         }
     }

@@ -1359,42 +1359,13 @@ __global__ void hip_ghost_coarse_fill(double *pk_data, double *coarse_data,
                 }
             }
         }
-    } else if (nlev >= 0 && nlev == blk_level - 1) {
-        int pack_nbr = neighbor_table[b * NUM_NEIGHBORS + n];
-        if (pack_nbr < 0) return;
-
-        double dx_c = dx_arr[pack_nbr];
-        int off_i = (int)round((origins[b*3+0] - origins[pack_nbr*3+0]) / dx_c);
-        int off_j = (int)round((origins[b*3+1] - origins[pack_nbr*3+1]) / dx_c);
-        int off_k = (int)round((origins[b*3+2] - origins[pack_nbr*3+2]) / dx_c);
-
-        int dx_lo, dx_hi, dummy1, dummy2;
-        int dy_lo, dy_hi, dummy3, dummy4;
-        int dz_lo, dz_hi, dummy5, dummy6;
-        ghost_range_pack(ox, ghost, N_c, Nt_c, &dx_lo, &dx_hi, &dummy1, &dummy2);
-        ghost_range_pack(oy, ghost, N_c, Nt_c, &dy_lo, &dy_hi, &dummy3, &dummy4);
-        ghost_range_pack(oz, ghost, N_c, Nt_c, &dz_lo, &dz_hi, &dummy5, &dummy6);
-
-        for (int f = 0; f < nf; f++) {
-            size_t dst_off = (size_t)r * nf * cnpts + (size_t)f * cnpts;
-            size_t src_off = (size_t)f * nb * npts + (size_t)pack_nbr * npts;
-
-            for (int kk = dz_lo; kk < dz_hi; kk++) {
-                int sk = kk + off_k;
-                if (sk < 0 || sk >= Nt_f) continue;
-                for (int jj = dy_lo; jj < dy_hi; jj++) {
-                    int sj = jj + off_j;
-                    if (sj < 0 || sj >= Nt_f) continue;
-                    for (int ii = dx_lo; ii < dx_hi; ii++) {
-                        int si = ii + off_i;
-                        if (si < 0 || si >= Nt_f) continue;
-                        coarse_data[dst_off + kk*Nt_c*Nt_c + jj*Nt_c + ii] =
-                            pk_data[src_off + sk*Nt_f*Nt_f + sj*Nt_f + si];
-                    }
-                }
-            }
-        }
     }
+    /* Coarser neighbors (nlev == blk_level - 1) are NOT handled here.
+     * They are filled by Phase 3b (hip_cross_level_ghost_fill) with proper
+     * temporal interpolation from the coarser pack's fields_old + Taylor
+     * coefficients. Direct copy from buffer blocks would use stale-time
+     * data without interpolation.
+     * Ref: AthenaK pattern — Phase 3a = same-level only. */
 }
 
 /* Kernel 12: Boundary extrapolation on coarse_data (single dimension) */
