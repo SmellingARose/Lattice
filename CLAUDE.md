@@ -312,7 +312,11 @@ work on AMR meshes.
   ghost-zone RHS corrupted cross-level boundaries during RK4 stages. GPU
   `subcycle_level_gpu` missing cross-level ghost fill before post-subcycle
   restriction — 6th-order restriction stencil read stale ghost data at
-  refinement boundaries.
+  refinement boundaries. GPU `step_level_gpu` enforce_algebraic ordering:
+  was BEFORE `ghost_exchange_cross_level_packed` — prolongated ghost zones with
+  chi<0 (from 6th-order negative Lagrange weights near puncture) never floored
+  before RHS. Fixed: enforce AFTER ghost exchange (matches CPU path). CPU
+  `subcycle_level` missing post-restriction enforcement — added to match GPU.
 - **Per-stage cross-level ghost fill (GRChombo match):** Both CPU `step_level` and
   GPU `step_level_gpu` fill coarse-fine boundary ghosts at RK4 sub-stages 1, 2,
   and 4 with temporally interpolated data at the correct sub-stage time

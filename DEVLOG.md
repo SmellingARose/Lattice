@@ -30,6 +30,20 @@ Final configuration: kappa1=0.1 (constant), kappa3=1.0, covariant=true, KO=6th,
 sigma=0.5, eta=1.0. CCZ4 formulation from GRChombo (multi-body proven),
 dissipation from AthenaK (FD=6 proven).
 
+4. **GPU enforce_algebraic ordering bug (root cause of NaN)** — GPU `step_level_gpu`
+   did `enforce_algebraic → ghost_exchange_cross_level → compute_rhs`. This meant
+   prolongated ghost zones with chi<0 (from 6th-order negative Lagrange weights near
+   puncture) were never floored before the RHS stencil read them. CPU path had the
+   correct ordering: `ghost_fill_from_coarser → enforce → ghost_exchange → compute_rhs`.
+   Fixed by swapping enforcement to AFTER ghost exchange on GPU at all 4 RK4 stages.
+
+5. **CPU post-restriction enforcement missing** — GPU `subcycle_level_gpu` did
+   `enforce_algebraic` after restricting fine→coarse + re-exchanging coarse ghosts.
+   CPU `subcycle_level` was missing this step. Added to match GPU path.
+
+Full CPU vs GPU audit confirmed: all remaining differences are structural (different
+implementations of same algorithm) not behavioral.
+
 **Stale multi-root tests removed** — test_amr_mesh and test_amr_refine had tests
 assuming 8-block mesh_create (old multi-root architecture, deleted long ago).
 Fixed multi-block pack test to use AMR refinement. Removed 3 dead tests covered

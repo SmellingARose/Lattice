@@ -471,6 +471,15 @@ The Einstein Toolkit stability bound is &sigma; &lt; 2&times;CFL = 0.5.
 Ref: arXiv:2409.10383 (AthenaK).</li>
 </ol>
 
+<li><strong>GPU enforce_algebraic ordering (ROOT CAUSE)</strong> &mdash;
+GPU <code>step_level_gpu</code> called <code>enforce_algebraic</code> BEFORE
+<code>ghost_exchange_cross_level</code>. This meant 6th-order Lagrange prolongation
+with negative weights could produce &chi;&lt;0 in ghost zones near the puncture,
+and the RHS stencil read these unfloored values. CPU path had correct ordering
+(ghost fill first, enforce second). Fixed by swapping at all 4 RK4 stages.
+CPU post-restriction enforcement also added to match GPU.</li>
+</ol>
+
 <p>Other parameters unchanged: &kappa;1=0.1, &eta;=1.0.
 All CPU tests pass (convergence order 5.8&ndash;6.3, threshold &ge;4).</p>
 
