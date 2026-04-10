@@ -449,39 +449,71 @@ independent problems that compound at the finest AMR level. The recommended appr
 <p><strong>GRChombo route chosen</strong> &mdash; targeting multi-body simulations (25+ BH).
 GRChombo is the only code proven at that scale (arXiv:2505.01495).</p>
 
-<h3>Changes applied:</h3>
+<h3>Changes applied (parameter side):</h3>
 <ol>
-<li><strong>Option A: 6th-order KO (IMPLEMENTED)</strong> &mdash; <code>KO_ORDER</code> macro
-decoupled from <code>FD_ORDER</code>. Default <code>KO_ORDER=6</code> (7-point stencil,
-half-width 3). Ghost margin = 1 cell with GHOST=4. Legacy 8th-order available
-via <code>make KO_ORDER=8</code>.</li>
+<li><strong>6th-order KO</strong> &mdash; <code>KO_ORDER</code> macro decoupled from
+<code>FD_ORDER</code>. Default <code>KO_ORDER=6</code> (7-point stencil, half-width 3).
+Ghost margin = 1 cell with GHOST=4. Legacy 8th-order via <code>make KO_ORDER=8</code>.</li>
+
 <li><strong>&kappa;3 = 1.0</strong> &mdash; covariant CCZ4 formulation (GRChombo match).
 With <code>covariant_Z4=true</code> (constant &kappa;1), &kappa;3=1.0 is the
-mathematically consistent choice per Alic 2012 (arXiv:1106.2254).
-The previous &kappa;3=0.5 + covariant was an untested hybrid used by no
-production code.</li>
-</ol>
+mathematically consistent choice per Alic 2012 (arXiv:1106.2254). The previous
+&kappa;3=0.5 + covariant was an untested hybrid used by no production code.</li>
 
 <li><strong>&sigma; = 0.5</strong> &mdash; AthenaK default for 6th-order FD + 6th-order KO.
 GRChombo&rsquo;s &sigma;=1.0 works because their 6th-order KO is 2 orders above
-their 4th-order FD (only damps unresolved noise). With our 6th-order FD,
-KO operates at the same order as the truncation error &mdash; &sigma;=1.0 is
-too aggressive and causes constraint growth at fine AMR levels.
-The Einstein Toolkit stability bound is &sigma; &lt; 2&times;CFL = 0.5.
+their 4th-order FD (only damps unresolved noise). With our 6th-order FD, KO
+operates at the same order as the truncation error &mdash; &sigma;=1.0 is too
+aggressive. Einstein Toolkit stability bound: &sigma; &lt; 2&times;CFL = 0.5.
 Ref: arXiv:2409.10383 (AthenaK).</li>
 </ol>
 
-<li><strong>GPU enforce_algebraic ordering (ROOT CAUSE)</strong> &mdash;
-GPU <code>step_level_gpu</code> called <code>enforce_algebraic</code> BEFORE
-<code>ghost_exchange_cross_level</code>. This meant 6th-order Lagrange prolongation
-with negative weights could produce &chi;&lt;0 in ghost zones near the puncture,
-and the RHS stencil read these unfloored values. CPU path had correct ordering
-(ghost fill first, enforce second). Fixed by swapping at all 4 RK4 stages.
-CPU post-restriction enforcement also added to match GPU.</li>
+<h3>GPU/AMR bugs found and fixed:</h3>
+<ol>
+<li><strong>GPU enforce_algebraic ordering</strong> &mdash; <code>step_level_gpu</code>
+called <code>enforce_algebraic</code> BEFORE <code>ghost_exchange_cross_level</code>.
+6th-order Lagrange prolongation with negative weights could produce &chi;&lt;0 in
+ghost zones near the puncture, and the RHS stencil read these unfloored values.
+CPU path had correct ordering. Fixed by swapping at all 4 RK4 stages.</li>
+
+<li><strong>CPU post-restriction enforcement missing</strong> &mdash; GPU
+<code>subcycle_level_gpu</code> did <code>enforce_algebraic</code> after restriction;
+CPU <code>subcycle_level</code> didn&rsquo;t. Added to match.</li>
+
+<li><strong>Phase 3a stale-time buffer block copy</strong> &mdash;
+<code>hip_ghost_coarse_fill</code> and CPU <code>packed_fill_coarse_buf_ghosts</code>
+had a coarser-neighbor branch that direct-copied buffer block data without temporal
+interpolation. Buffer blocks are frozen from the last restriction (time t&#8320;);
+fine level is at time t&#8320; + k&middot;dt during subcycling. Removed the branch
+entirely &mdash; AthenaK pattern: Phase 3a = same-level only, Phase 3b handles
+ALL coarser via Taylor interpolation.</li>
+
+<li><strong>Cross-level ghost fill 1-cell offset (LIKELY ROOT CAUSE)</strong> &mdash;
+<code>hip_cross_level_ghost_fill</code> and CPU <code>copy_from_coarse_grid</code>
+mapped fine coarse_buf indices to coarser pack indices via <code>si = ii + off_i</code>
+without correcting for the ghost width difference. Fine coarse_buf has
+<code>ghost = COARSE_BUF_GHOST = 5</code> (wider, for 7-point prolongation stencil);
+coarser pack has <code>ghost = GHOST_WIDTH = 4</code>. Cell-centered alignment
+requires <code>si = ii + off_i + (ghost_src - ghost_dst) = ii + off_i - 1</code>.
+Without the correction, every coarse_buf ghost cell at every refinement boundary
+read from a 1-cell-shifted location in the coarser pack, corrupting temporal
+interpolation on every RK4 substep. Compounds rapidly through 128 fine substeps
+per coarse step at 7 AMR levels.</li>
 </ol>
 
-<p>Other parameters unchanged: &kappa;1=0.1, &eta;=1.0.
-All CPU tests pass (convergence order 5.8&ndash;6.3, threshold &ge;4).</p>
+<p>All CPU tests pass after fixes (convergence order 6.31/5.83, threshold &ge;4).
+Comprehensive sign-level audit vs GRChombo confirms all CCZ4 RHS equations,
+geometric quantities, RK4 coefficients, and prolongation/restriction weights
+match. GPU stream synchronization audit found no race conditions or missing
+barriers (all 34 kernel launches use the persistent <code>gpu_stream</code>).</p>
+
+<p><em>Note on baseline constraint values:</em> L2 ~ 0.15&ndash;0.25 at the finest
+AMR level near a Schwarzschild puncture (dx=M/16) is normal for production
+NR codes. Standard BSSN sees O(0.1&ndash;1.0); CCZ4 with constraint damping sits
+between BSSN and Z4c. The puncture is a coordinate singularity &mdash; finite
+differences can&rsquo;t make constraints exact there. Interior violations stay
+trapped near the puncture and don&rsquo;t propagate outward (Brown 2007,
+arXiv:0705.1359).</p>
 
 <!-- ================================================================== -->
 <h2>References</h2>

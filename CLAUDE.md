@@ -317,6 +317,19 @@ work on AMR meshes.
   chi<0 (from 6th-order negative Lagrange weights near puncture) never floored
   before RHS. Fixed: enforce AFTER ghost exchange (matches CPU path). CPU
   `subcycle_level` missing post-restriction enforcement — added to match GPU.
+  Phase 3a coarser-neighbor branch removed from both CPU and GPU
+  (`hip_ghost_coarse_fill`, `packed_fill_coarse_buf_ghosts`) — was direct-copying
+  buffer block data without temporal interpolation. AthenaK pattern: Phase 3a =
+  same-level only; Phase 3b handles ALL coarser via Taylor interpolation.
+  Cross-level ghost fill 1-cell offset bug: `hip_cross_level_ghost_fill` and CPU
+  `copy_from_coarse_grid` mapped fine coarse_buf indices to coarser pack indices
+  via `si = ii + off_i` without correcting for the ghost width difference. Fine
+  coarse_buf has ghost = `COARSE_BUF_GHOST` = 5 (for 7-point prolongation
+  stencil); coarser pack has ghost = `GHOST_WIDTH` = 4. Fixed via
+  `ghost_correction = ghost_src - ghost_dst = -1`. Without this, every
+  cross-level ghost cell read from a 1-cell-shifted location in the coarser
+  pack — corrupting temporal interpolation at every refinement boundary on
+  every RK4 substep.
 - **Per-stage cross-level ghost fill (GRChombo match):** Both CPU `step_level` and
   GPU `step_level_gpu` fill coarse-fine boundary ghosts at RK4 sub-stages 1, 2,
   and 4 with temporally interpolated data at the correct sub-stage time

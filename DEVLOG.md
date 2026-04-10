@@ -64,6 +64,21 @@ prolongation/restriction weights — perfect match. The only differences are
 intentional (covariant CCZ4, 6th-order FD, 6th-order prolongation, AthenaK-style
 buffer blocks).
 
+GPU stream synchronization audit: all 34 kernel launches use the persistent
+`gpu_stream`; all hipMemcpyAsync/hipMemsetAsync use the same stream. Kernel
+arguments are captured by value at launch time, so `backend_activate_pack`
+updating the host `d_ptrs` struct between kernels doesn't affect in-flight
+work. No race conditions or missing barriers.
+
+Constraint norm sanity check: L2 ~ 0.15-0.25 at the finest AMR level near a
+Schwarzschild puncture (dx=M/16) is normal for production NR codes. Standard
+BSSN sees O(0.1-1.0); CCZ4 with constraint damping sits between BSSN and Z4c.
+The puncture is a coordinate singularity — finite differences can't make
+constraints exact there. Interior violations stay trapped near the puncture
+and don't propagate outward (Brown 2007, arXiv:0705.1359). The previous NaN
+was caused by the bugs above (especially the ghost width offset), not by
+high baseline constraint values at the puncture.
+
 **Stale multi-root tests removed** — test_amr_mesh and test_amr_refine had tests
 assuming 8-block mesh_create (old multi-root architecture, deleted long ago).
 Fixed multi-block pack test to use AMR refinement. Removed 3 dead tests covered
