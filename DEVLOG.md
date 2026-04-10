@@ -84,6 +84,45 @@ assuming 8-block mesh_create (old multi-root architecture, deleted long ago).
 Fixed multi-block pack test to use AMR refinement. Removed 3 dead tests covered
 by test_full_regrid.
 
+**GPU QNM publication test results after all fixes:**
+- Initial Ham: 2.94e-02 (same as before)
+- Step 1 Ham: **7.57e-06** (was 1.21e-03 — 160x improvement)
+- Past t=18M (previous crash point): stable, Ham ~1e-04
+- Fine levels L3-L7 rock-stable throughout (L7 holds at ~2e-02)
+- Crash at t=50M, isolated to L2 (r=24-48M annulus)
+
+**Next issue (deferred): wave zone under-resolution + AMR boundary reflection.**
+
+The crash is a well-known AMR problem documented in Etienne 2024 (arXiv:2404.01137):
+"seven-decade constraint spikes when a gauge wave crosses AMR boundaries." The 1+log
+lapse creates a superluminal gauge pulse at early times. When this pulse crosses
+the L1/L2 refinement boundary at r=48M (where dx jumps from 4M to 8M), restriction
+aliases the under-resolved high-k modes and prolongation amplifies the error.
+
+Specifically:
+- Level 2 (dx=4M) gives only ~4 cells per wavelength for ω=0.37/M QNM (λ=17M).
+  Nyquist minimum is 8-9, production codes target 10+.
+- Psi4 extraction at r=30M and r=50M straddles the L1/L2 boundary at r=48M —
+  worst possible configuration.
+- Fine levels L3-L7 are stable because the wave is still within the refined
+  region. The instability appears exactly when the wave enters level 2 at t=42M
+  and explodes when it crosses to level 1 at t=48M.
+
+Three proven mitigations already implemented in the code but disabled by default:
+1. **CAKO** (Chi-Adjusted KO): `sigma_eff = sqrt(chi) * sigma` — reduces dissipation
+   near puncture where chi→0, full strength in wave zone. Ref: arXiv:2404.01137.
+2. **Per-field sigma**: `sigma_gauge = 0.99` (aggressive on gauge fields that
+   carry the spurious wave), `sigma_phys = 0.3` (gentle on metric).
+3. **SSL** (Slow-Start Lapse): Gaussian time-ramp on 1+log lapse prevents the
+   sharp initial gauge pulse from forming.
+
+To test: run with `--cako --per_field_sigma --ssl` enabled. No code changes needed.
+Alternative short-term fix: `--refine-c 3.0` extends level 2 to r<96M, pushing
+the boundary crossing beyond the 100M run window (but doesn't fix long runs).
+
+For production binary inspiral runs (1000M+), need Etienne 2024 features + larger
+domain (L=512 or L=1024) + more AMR levels (8-11).
+
 ## 2026-04-05: HiSpID solver fixes + GPU AMR performance + NaN check + NR code comparison
 
 **HiSpID coupled solver: 2 bugs found via cross-code comparison (arXiv:1410.8607).**

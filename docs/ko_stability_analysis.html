@@ -516,6 +516,57 @@ trapped near the puncture and don&rsquo;t propagate outward (Brown 2007,
 arXiv:0705.1359).</p>
 
 <!-- ================================================================== -->
+<h2>Open Issue: Wave Zone AMR Boundary Reflection</h2>
+<!-- ================================================================== -->
+
+<p>After the four GPU bug fixes above, the QNM publication test passes the
+puncture region cleanly (fine levels L3&ndash;L7 rock-stable through the crash).
+A different instability now manifests at <strong>level 2</strong> (dx=4M,
+annulus r=24&ndash;48M) starting at t=42M, with NaN by t=50M.</p>
+
+<h3>Diagnosis</h3>
+
+<p>This is the <strong>AMR boundary reflection problem</strong> documented in
+Etienne 2024 (<a href="https://arxiv.org/abs/2404.01137">arXiv:2404.01137</a>):
+&ldquo;seven-decade constraint spikes when a gauge wave crosses AMR boundaries.&rdquo;
+The 1+log lapse creates a superluminal gauge pulse at early times. When this
+pulse crosses a coarse&ndash;fine boundary, restriction aliases the under-resolved
+high-frequency modes and prolongation amplifies the error.</p>
+
+<p>Specifically:</p>
+<ul>
+<li><strong>Under-resolved wave zone:</strong> dx=4M at level 2 gives only
+~4 cells per wavelength for the &omega;=0.37/M QNM (&lambda;=17M).
+Nyquist minimum is 8&ndash;9, production codes target 10+.</li>
+<li><strong>Psi4 extraction on refinement boundary:</strong> Extraction spheres
+at r=30M and r=50M straddle the L1/L2 boundary at r=48M &mdash; worst possible
+configuration.</li>
+<li><strong>Timing:</strong> Gauge wave reaches r=42M at t=42M (L2 starts growing),
+crosses L1/L2 boundary at t=48M (L2 explodes to NaN).</li>
+</ul>
+
+<h3>Mitigations (already implemented, currently disabled)</h3>
+
+<ol>
+<li><strong>CAKO (Chi-Adjusted KO):</strong> <code>sigma_eff = sqrt(chi) * sigma</code>.
+Reduces dissipation near puncture (chi&rarr;0), full strength in wave zone where
+chi~1. Implemented in <code>dissipation.c</code> behind <code>--cako</code> flag.</li>
+
+<li><strong>Per-field sigma:</strong> <code>sigma_gauge = 0.99</code> (aggressive
+damping of gauge wave), <code>sigma_phys = 0.3</code> (gentle on metric).
+Implemented behind <code>--per_field_sigma</code> flag.</li>
+
+<li><strong>SSL (Slow-Start Lapse):</strong> Gaussian time-ramp on 1+log lapse
+prevents the sharp initial gauge pulse from forming. Implemented behind
+<code>--ssl</code> flag.</li>
+</ol>
+
+<p>All three are from Etienne 2024 and specifically target this problem.
+Next step: re-run the QNM test with <code>--cako --per_field_sigma --ssl</code>
+enabled. For production binary inspirals (1000M+), also enlarge the domain
+(L=512 or 1024) and use 8&ndash;11 AMR levels.</p>
+
+<!-- ================================================================== -->
 <h2>References</h2>
 <!-- ================================================================== -->
 <ul>
@@ -524,6 +575,8 @@ arXiv:0705.1359).</p>
 <li>arXiv:1307.7391 &mdash; Alic 2013: CCZ4 stability (&kappa;3=0.5 requires &kappa;1&times;&alpha;; &kappa;3=1.0 requires const &kappa;1)</li>
 <li>arXiv:2409.10383 &mdash; AthenaK: &kappa;1=0.02, &sigma;=0.5, 6th KO</li>
 <li>arXiv:2112.10567 &mdash; GRChombo AMR lessons: &sigma;=1.0, 6th KO, ghost=3&ndash;4</li>
+<li>arXiv:2404.01137 &mdash; Etienne 2024: CAKO + per-field sigma + SSL for AMR boundary reflection</li>
+<li>arXiv:0705.1359 &mdash; Brown 2007: puncture interior violations don&rsquo;t propagate</li>
 <li>Einstein Toolkit Dissipation docs: stability bound &sigma; &lt; 2&times;CFL</li>
 </ul>
 
