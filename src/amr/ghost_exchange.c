@@ -195,13 +195,15 @@ static void exchange_same_level(mesh_t *m, int level)
 
 /*
  * Copy from a coarse neighbor's main grid into this block's coarse_buf
- * ghost zone. Both grids have the same dx but different N.
+ * ghost zone. Both grids have the same dx but DIFFERENT ghost widths:
+ *   dst (coarse_buf): ghost = COARSE_BUF_GHOST = 5 (for 7-point prolongation)
+ *   src (coarser block grid): ghost = GHOST_WIDTH = 4
  *
- * Uses index-offset mapping:
- *   src_i = dst_i + round((dst_origin - src_origin) / dx)
- *
- * The coarse neighbor's grid has N = N_block, while coarse_buf has N = N_block/2.
- * Both have ghost = GHOST_WIDTH and the same dx.
+ * Cell-centered mapping with ghost width correction:
+ *   x_dst[i]  = dst_origin + (i  - ghost_dst + 0.5) * dx
+ *   x_src[si] = src_origin + (si - ghost_src + 0.5) * dx
+ * Setting equal:
+ *   si = i + (ghost_src - ghost_dst) + round((dst_origin - src_origin) / dx)
  */
 static void copy_from_coarse_grid(grid_t *dst, const double *dst_origin,
                                    const grid_t *src, const double *src_origin,
@@ -209,13 +211,15 @@ static void copy_from_coarse_grid(grid_t *dst, const double *dst_origin,
 {
     const double dx = dst->dx;
     const int ghost_d = dst->ghost;
+    const int ghost_s = src->ghost;
     const int N_d = dst->N;
     const int Nt_d = dst->Ntotal;
 
-    /* Origin offset in grid cells (integer since both grids share dx) */
-    int off_i = (int)round((dst_origin[0] - src_origin[0]) / dx);
-    int off_j = (int)round((dst_origin[1] - src_origin[1]) / dx);
-    int off_k = (int)round((dst_origin[2] - src_origin[2]) / dx);
+    /* Origin offset in grid cells, including ghost width correction */
+    const int ghost_correction = ghost_s - ghost_d;
+    int off_i = (int)round((dst_origin[0] - src_origin[0]) / dx) + ghost_correction;
+    int off_j = (int)round((dst_origin[1] - src_origin[1]) / dx) + ghost_correction;
+    int off_k = (int)round((dst_origin[2] - src_origin[2]) / dx) + ghost_correction;
 
     /* Compute ghost zone range on destination (coarse_buf) */
     int dx_lo, dx_hi, dummy_s1, dummy_s2;

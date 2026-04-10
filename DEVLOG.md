@@ -41,16 +41,28 @@ dissipation from AthenaK (FD=6 proven).
    `enforce_algebraic` after restricting fine→coarse + re-exchanging coarse ghosts.
    CPU `subcycle_level` was missing this step. Added to match GPU path.
 
-Full CPU vs GPU audit found additional issue: GPU Phase 3a (`hip_ghost_coarse_fill`)
-reads from buffer blocks (non-leaf parents at level L-1, packed in the fine L pack)
-WITHOUT temporal interpolation. Buffer block data is frozen from the last restriction
-(time t_0), but fine level is at time t_0 + k*dt_fine during subcycling. The
-cross-level map (Phase 3b) was supposed to overwrite with correctly interpolated data,
-but buffer blocks aren't in the coarser pack — `coarse_rev[nbr_id]` returns -1, so
-Phase 3b SKIPS them. At substep 128/128, temporal error = entire coarse dt.
-CPU path doesn't have this because `ghost_fill_from_coarser` accesses actual mesh
-blocks with fields_old + Taylor coefficients. Investigation ongoing — checking how
-AthenaK handles the same buffer block pattern.
+Full CPU vs GPU audit found additional issues, all fixed:
+
+5. **Phase 3a stale-time buffer block copy** — GPU `hip_ghost_coarse_fill` (and CPU
+   `packed_fill_coarse_buf_ghosts`) had a coarser-neighbor branch that direct-copied
+   from buffer blocks WITHOUT temporal interpolation. Removed entirely. AthenaK
+   pattern: Phase 3a = same-level only; Phase 3b handles ALL coarser via Taylor.
+
+6. **Cross-level fill 1-cell offset bug (CRITICAL)** — `hip_cross_level_ghost_fill`
+   and CPU `copy_from_coarse_grid` mapped fine coarse_buf indices to coarser pack
+   indices via `si = ii + off_i` without accounting for ghost width difference.
+   Fine coarse_buf has ghost = COARSE_BUF_GHOST = 5 (wider, for 7-point prolongation
+   stencil). Coarser pack has ghost = GHOST_WIDTH = 4. Cell-centered alignment
+   requires `si = ii + off_i + (ghost_src - ghost_dst) = ii + off_i - 1`. Without
+   the correction, every coarse_buf ghost cell read from the WRONG coarser cell,
+   off by exactly 1 cell in each dimension. This corrupted temporal interpolation
+   at every refinement boundary on every substep.
+
+Comprehensive sign-level audit vs GRChombo (4 parallel agents): all 9 CCZ4 RHS
+equations, all geometric quantities (Christoffel, Ricci, Z), RK4 coefficients,
+prolongation/restriction weights — perfect match. The only differences are
+intentional (covariant CCZ4, 6th-order FD, 6th-order prolongation, AthenaK-style
+buffer blocks).
 
 **Stale multi-root tests removed** — test_amr_mesh and test_amr_refine had tests
 assuming 8-block mesh_create (old multi-root architecture, deleted long ago).

@@ -480,6 +480,7 @@ __global__ void hip_cross_level_ghost_fill(
     double frac,
     int fine_nb, int coarse_nb,
     int ghost_c, int N_c, int Nt_c,
+    int ghost_coarse,
     int Nt_coarse_full,
     size_t fine_cnpts, size_t coarse_npts,
     int nf);
@@ -557,6 +558,7 @@ void backend_cross_level_ghost_fill_packed(
                        frac,
                        nb, cdp->nb,
                        ghost_c, N_c, Nt_c,
+                       coarse_pack->ghost,
                        coarse_pack->Ntotal,
                        cnpts, coarse_pack->npts,
                        nf);
@@ -1573,6 +1575,7 @@ __global__ void hip_cross_level_ghost_fill(
     double frac,                       /* temporal interp fraction θ */
     int fine_nb, int coarse_nb,
     int ghost_c, int N_c, int Nt_c,
+    int ghost_coarse,                  /* coarse pack's ghost width */
     int Nt_coarse_full,                /* coarse pack's Ntotal */
     size_t fine_cnpts, size_t coarse_npts,
     int nf)
@@ -1596,10 +1599,18 @@ __global__ void hip_cross_level_ghost_fill(
 
     /* Compute origin offset: fine block origin relative to coarse block origin,
      * in coarse grid units. This maps fine's coarse_buf coordinates to coarse
-     * pack's data coordinates. */
-    int off_i = (int)round((fine_origins[fb*3+0] - coarse_origins[cb*3+0]) / dx_c);
-    int off_j = (int)round((fine_origins[fb*3+1] - coarse_origins[cb*3+1]) / dx_c);
-    int off_k = (int)round((fine_origins[fb*3+2] - coarse_origins[cb*3+2]) / dx_c);
+     * pack's data coordinates.
+     *
+     * Ghost width correction: fine's coarse_buf has ghost = COARSE_BUF_GHOST
+     * (= 5, wider for 7-point prolongation stencil), while the coarser pack
+     * has ghost = GHOST_WIDTH (= 4). For cell-centered coordinates:
+     *   x_dst[ii] = dst_origin + (ii - ghost_dst + 0.5) * dx_c
+     *   x_src[si] = src_origin + (si - ghost_src + 0.5) * dx_c
+     * Setting equal: si = off_i + ii + (ghost_src - ghost_dst). */
+    int ghost_correction = ghost_coarse - ghost_c;  /* = 4 - 5 = -1 */
+    int off_i = (int)round((fine_origins[fb*3+0] - coarse_origins[cb*3+0]) / dx_c) + ghost_correction;
+    int off_j = (int)round((fine_origins[fb*3+1] - coarse_origins[cb*3+1]) / dx_c) + ghost_correction;
+    int off_k = (int)round((fine_origins[fb*3+2] - coarse_origins[cb*3+2]) / dx_c) + ghost_correction;
 
     int ox = d_nbr_offset[dir][0];
     int oy = d_nbr_offset[dir][1];
@@ -1750,6 +1761,7 @@ void backend_ghost_exchange_cross_level_packed(
                                frac,
                                nb, cdp->nb,
                                ghost_c, N_c, Nt_c,
+                               coarser_pack->ghost,
                                coarser_pack->Ntotal,
                                cnpts, coarser_pack->npts,
                                nf);
