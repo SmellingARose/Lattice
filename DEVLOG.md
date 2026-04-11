@@ -47,6 +47,49 @@ This is an empirically-motivated middle ground: stronger gauge damping than
 Etienne (matches GRChombo's uniform), gentler physics damping than Etienne
 (sweep suggested low σ_phys minimizes constraint growth).
 
+**GPU QNM test result with per-field (1.0/0.15):**
+- Steps 1-20 ~25% lower Ham than Etienne values (0.99/0.3)
+- Same crash pattern at t=42M (L2 jumps 10x, crosses L1/L2 boundary at t=48M, NaN)
+- Conclusion: per-field sigma alone is insufficient for our QNM configuration
+- The crash is an AMR boundary crossing issue that dissipation can't fix
+
+**Diagnostic: checked GPU vs CPU restriction ordering vs GRChombo.**
+
+Sub-agent investigation confirmed GPU path already has the correct pattern:
+restrict → same-level ghost exchange on coarse pack → enforce_algebraic
+(subcycle_level_gpu lines 1013-1025). This matches GRChombo's
+`postTimeStep → averageToCoarse → fillBdyGhosts` sequence.
+
+**Found CPU path was missing the post-restriction ghost exchange.**
+`subcycle_level` did `ghost_exchange → ghost_fill_from_coarser → restrict →
+enforce_algebraic` but skipped the ghost_exchange after restriction.
+Added it to match GPU path and GRChombo pattern. This doesn't fix the GPU
+crash (GPU path was already correct), but it's a real bug for CPU AMR runs
+that would have caused drifting constraint violations at refinement boundaries.
+
+**What doesn't fix the GPU QNM crash (as of this session):**
+- kappa3=1.0 + KO_ORDER=6 (ghost margin)
+- sigma 1.0 → 0.5 (AthenaK match)
+- GPU enforce_algebraic ordering swap
+- Post-restriction enforcement (CPU consistency)
+- Phase 3a buffer block stale-time copy removal
+- Cross-level ghost fill 1-cell offset (ghost width mismatch)
+- Per-field sigma (Etienne 0.99/0.3)
+- Per-field sigma sweep-tuned (1.0/0.15)
+- CPU post-restriction ghost_exchange fix
+
+All these are real bugs that are now fixed. The remaining issue is the
+wave-zone instability when the initial gauge pulse crosses the first
+refinement boundary (L1/L2 at r=48M). It's a well-documented AMR
+phenomenon (Etienne 2024) but none of the standard mitigations in our
+code (per-field sigma, CAKO, level-dependent) seem to fully resolve it.
+
+Possible next steps (not yet tried):
+- `--refine-c 3.0`: extend L2 to r<96M, delays boundary crossing past run end
+- Full Etienne toolkit: `--cako --ssl --cahd` combined
+- BAM-style level-dependent sigma: `--level_dep_sigma`
+- Investigate deeper — maybe a subtle data-flow bug at buffer/leaf boundaries
+
 Infrastructure is in place for future sweeps once a faster representative test
 exists (probably requires GPU-based sweep with smaller domains but full AMR
 level depth).

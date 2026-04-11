@@ -317,6 +317,12 @@ work on AMR meshes.
   chi<0 (from 6th-order negative Lagrange weights near puncture) never floored
   before RHS. Fixed: enforce AFTER ghost exchange (matches CPU path). CPU
   `subcycle_level` missing post-restriction enforcement — added to match GPU.
+  CPU `subcycle_level` also missing post-restriction ghost_exchange: restriction
+  writes fresh fine-averaged data into coarse parent blocks but the coarse leaf
+  blocks bordering them still had stale pre-restriction ghost data. Added
+  `ghost_exchange(m)` between `restrict_level_to_parents` and
+  `enforce_algebraic_packed` to match GRChombo's
+  `postTimeStep → averageToCoarse → fillBdyGhosts` pattern.
   Phase 3a coarser-neighbor branch removed from both CPU and GPU
   (`hip_ghost_coarse_fill`, `packed_fill_coarse_buf_ghosts`) — was direct-copying
   buffer block data without temporal interpolation. AthenaK pattern: Phase 3a =

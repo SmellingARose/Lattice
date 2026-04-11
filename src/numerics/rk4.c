@@ -651,9 +651,20 @@ static void subcycle_level(mesh_t *m, const sim_params_t *p,
         ghost_fill_from_coarser(m, level + 1, 1.0);
         restrict_level_to_parents(m, level + 1);
 
+        /* Post-restriction ghost exchange on coarse level (GRChombo pattern).
+         * Restriction just wrote fresh fine-averaged data into coarse parent
+         * blocks. The coarse leaf blocks that border those parents need their
+         * ghost zones updated to see the new data. Without this, ghosts still
+         * contain pre-restriction data → discontinuity at the refinement
+         * boundary → constraint blow-up when the next coarse RHS is evaluated.
+         *
+         * Ref: GRChombo postTimeStep → averageToCoarse → fillBdyGhosts.
+         * Ref: Matches GPU subcycle_level_gpu which calls
+         *      backend_ghost_exchange_packed(cpk) after restriction. */
+        ghost_exchange(m);
+
         /* Post-restriction enforcement on coarse level (match GPU path).
-         * Restriction may produce values that violate algebraic constraints.
-         * Ref: GPU subcycle_level_gpu does enforce_algebraic after restrict. */
+         * Restriction may produce values that violate algebraic constraints. */
         if (m->level_packs[level]) {
             meshblock_pack_sync_from_blocks(m->level_packs[level], m->blocks);
             backend_enforce_algebraic_packed(m->level_packs[level]);
