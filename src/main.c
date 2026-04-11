@@ -120,9 +120,9 @@ static void print_usage(void)
     fprintf(stderr, "  --lapse_advec <float>  Lapse advection coeff (default 0)\n");
     fprintf(stderr, "  --shift_advec <float>  Shift advection coeff (default 0)\n");
     fprintf(stderr, "\nNoise reduction (arXiv:2404.01137):\n");
-    fprintf(stderr, "  --cako / --no_cako     Chi-adjusted KO dissipation (default on)\n");
+    fprintf(stderr, "  --cako / --no_cako     Chi-adjusted KO dissipation (default off)\n");
     fprintf(stderr, "  --per_field_sigma / --no_per_field_sigma  Per-field KO (default on)\n");
-    fprintf(stderr, "  --ssl / --no_ssl       Slow-start lapse (default on)\n");
+    fprintf(stderr, "  --ssl / --no_ssl       Slow-start lapse (default off)\n");
     fprintf(stderr, "  --cahd / --no_cahd     Constraint-adjusted H damping (default off)\n");
     fprintf(stderr, "  --sigma_gauge <float>  Gauge field KO sigma (default 0.99)\n");
     fprintf(stderr, "  --sigma_phys <float>   Physical field KO sigma (default 0.3)\n");

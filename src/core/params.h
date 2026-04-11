@@ -182,16 +182,20 @@ static inline sim_params_t default_params(void)
     /* Noise reduction defaults.
      * All off by default — matches community standard practice.
      * GRChombo uses uniform sigma=1.0, AthenaK uses 0.5, BAM uses 0.5.
-     * CAKO/SSL/CAHD/per-field sigma are from arXiv:2404.01137 (Etienne 2024)
-     * but not adopted by any other major NR code. Enable via CLI flags
-     * for advanced waveform extraction if needed. */
+     * CAKO/SSL/CAHD are from arXiv:2404.01137 (Etienne 2024). Per-field sigma
+     * is enabled by default: compensates for our 6th-order FD having less
+     * implicit diffusion than GRChombo's 4th-order, aggressively damps the
+     * gauge wave (which lives in lapse/shift/B^i) without contaminating the
+     * physical fields that carry the waveform. Without this, the gauge wave
+     * crashes at AMR refinement boundaries (wave zone at L1/L2).
+     * CAKO/SSL/CAHD remain opt-in via CLI flags. */
     p.noise.use_cako           = 0;
     p.noise.cako_floor         = 0.04;  /* W_min = 0.2, σ_eff ≥ 20% of nominal */
     p.noise.use_cahd           = 0;
     p.noise.use_ssl            = 0;
-    p.noise.use_per_field_sigma = 0;
-    p.noise.sigma_gauge        = 0.99;
-    p.noise.sigma_phys         = 0.3;
+    p.noise.use_per_field_sigma = 1;    /* ON: targets gauge wave, preserves phys */
+    p.noise.sigma_gauge        = 0.99;  /* aggressive damping of gauge fields */
+    p.noise.sigma_phys         = 0.3;   /* gentle damping of physical fields */
     p.noise.cahd_coeff         = 0.15;
     p.noise.ssl_h              = 0.6;
     p.noise.ssl_sigma_t        = 20.0;
