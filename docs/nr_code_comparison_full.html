@@ -276,15 +276,20 @@ Both use binomial(8,k)/256 weights.</p>
 
 <details><summary>5.2 Sigma and CAKO</summary><div>
 <table>
-<tr><th>Code</th><th>Default &sigma;</th><th>Per-field?</th><th>Chi-adjusted?</th></tr>
-<tr><td><strong>Lattice</strong></td><td>1.0</td><td>Optional (0.99 gauge / 0.3 phys)</td><td>Optional (CAKO)</td></tr>
-<tr><td>GRChombo</td><td>1.0</td><td>No</td><td>No</td></tr>
-<tr><td>AthenaK</td><td>0.5</td><td>No</td><td>No</td></tr>
-<tr><td>BAM</td><td>~0.5</td><td>No</td><td>No</td></tr>
-<tr><td>Dendro-GR</td><td>user-set</td><td>Yes</td><td>Yes (CAKO)</td></tr>
+<tr><th>Code</th><th>Default &sigma;</th><th>Per-field?</th><th>Chi-adjusted?</th><th>Level-dep?</th></tr>
+<tr><td><strong>Lattice</strong></td><td>Per-field (1.0 gauge / 0.15 phys)</td><td><strong>Yes (default)</strong></td><td>Optional (CAKO)</td><td>Optional (BAM-style)</td></tr>
+<tr><td>GRChombo</td><td>1.0</td><td>No</td><td>No</td><td>No</td></tr>
+<tr><td>AthenaK</td><td>0.5</td><td>No</td><td>No</td><td>No</td></tr>
+<tr><td>BAM</td><td>0.1 fine / 0.5 coarse</td><td>No</td><td>No</td><td><strong>Yes</strong></td></tr>
+<tr><td>Dendro-GR</td><td>user-set</td><td>Yes</td><td>Yes (CAKO)</td><td>No</td></tr>
 </table>
 <p>CAKO formula: <code>&sigma;_eff = sqrt(chi) &times; &sigma;</code> with floor 0.04 (dissipation.c:57&ndash;61).
-Per-field &sigma; from arXiv:2404.01137. <span class="tag tag-intentional">INTENTIONAL DIFFERENCE</span> &mdash; only Lattice and Dendro-GR implement CAKO.</p>
+Per-field &sigma; from arXiv:2404.01137 (Etienne 2024).
+<span class="tag tag-intentional">INTENTIONAL DIFFERENCE</span> &mdash; Lattice enables per-field &sigma;
+by default to compensate for 6th-order FD's low implicit diffusion. Etienne
+uses 0.99/0.3; we use 1.0/0.15 based on a sigma parameter sweep (see
+tools/sigma_sweep/). GRChombo uses uniform &sigma;=1.0 with 4th-order FD
+which provides ~150&times; more implicit diffusion.</p>
 </div></details>
 
 <!-- ================================================================== -->

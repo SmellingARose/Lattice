@@ -302,7 +302,7 @@ details > .detail-body { padding: 14px 18px; border: 1px solid #d8dee4; border-t
 <tr><th>File</th><th>Purpose</th></tr>
 <tr><td><code>ccz4_rhs.c</code></td><td>Full CCZ4 RHS including EM source terms. Restructured into 5 <code>static inline</code> sub-functions with typed output structs for scoped lifetimes. CSE: pre-computed <code>K_minus_2Theta</code>, <code>A_mixed</code>. Fused <code>fd_d1_d2()</code> stencil for 11 dual-derivative fields. Position-dependent eta: <code>eta(x) = eta_0 / sqrt(chi)</code>. GPU-annotated. Ref: arXiv:1106.2254, GRChombo <code>CCZ4RHS.impl.hpp</code>.</td></tr>
 <tr><td><code>maxwell_rhs.h/c</code></td><td>Conformal Maxwell evolution (E^i, B^i) with constraint damping. Ref: arXiv:0907.1151.</td></tr>
-<tr><td><code>dissipation.c</code></td><td>6th-order Kreiss-Oliger dissipation. Supports CAKO (curvature-adjusted: sigma_eff = sqrt(chi) * sigma) and per-field sigma (0.99 gauge, 0.3 physical).</td></tr>
+<tr><td><code>dissipation.c</code></td><td>6th-order Kreiss-Oliger dissipation. Supports CAKO (sigma_eff = sqrt(chi) * sigma, opt-in), per-field sigma (default: 1.0 gauge, 0.15 physical), and level-dependent sigma (BAM-style, opt-in via <code>--level_dep_sigma</code>).</td></tr>
 </table>
 
 <!-- ========================================== -->

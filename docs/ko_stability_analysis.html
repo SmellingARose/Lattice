@@ -545,26 +545,41 @@ configuration.</li>
 crosses L1/L2 boundary at t=48M (L2 explodes to NaN).</li>
 </ul>
 
-<h3>Mitigations (already implemented, currently disabled)</h3>
+<h3>Mitigations (status 2026-04-11)</h3>
 
 <ol>
+<li><strong>Per-field sigma (DEFAULT ON):</strong>
+<code>sigma_gauge = 1.0</code> (aggressive damping of gauge wave fields),
+<code>sigma_phys = 0.15</code> (gentle on physical fields that carry the waveform).
+Per-field sigma is enabled by default &mdash; compensates for our 6th-order FD
+having ~150&times; less implicit diffusion than GRChombo's 4th-order. Values
+informed by a sigma parameter sweep (see sigma_sweep.html for details).</li>
+
 <li><strong>CAKO (Chi-Adjusted KO):</strong> <code>sigma_eff = sqrt(chi) * sigma</code>.
 Reduces dissipation near puncture (chi&rarr;0), full strength in wave zone where
-chi~1. Implemented in <code>dissipation.c</code> behind <code>--cako</code> flag.</li>
-
-<li><strong>Per-field sigma:</strong> <code>sigma_gauge = 0.99</code> (aggressive
-damping of gauge wave), <code>sigma_phys = 0.3</code> (gentle on metric).
-Implemented behind <code>--per_field_sigma</code> flag.</li>
+chi~1. Implemented behind <code>--cako</code> flag. OPT-IN.</li>
 
 <li><strong>SSL (Slow-Start Lapse):</strong> Gaussian time-ramp on 1+log lapse
 prevents the sharp initial gauge pulse from forming. Implemented behind
-<code>--ssl</code> flag.</li>
+<code>--ssl</code> flag. OPT-IN.</li>
+
+<li><strong>CAHD (Constraint-Adjusted H Damping):</strong> Feeds Hamiltonian
+constraint back into chi evolution. Coefficient scales with dx.
+Implemented behind <code>--cahd</code> flag. OPT-IN (interacts with covariant
+CCZ4's kappa1 damping).</li>
+
+<li><strong>Level-dependent sigma (BAM-style):</strong>
+Different sigma per AMR level (fine vs coarse threshold).
+4 parameters: <code>sigma_{gauge,phys}_{fine,coarse}</code>.
+Implemented behind <code>--level_dep_sigma</code> flag. OPT-IN for experimental
+BAM-style tuning.</li>
 </ol>
 
-<p>All three are from Etienne 2024 and specifically target this problem.
-Next step: re-run the QNM test with <code>--cako --per_field_sigma --ssl</code>
-enabled. For production binary inspirals (1000M+), also enlarge the domain
-(L=512 or 1024) and use 8&ndash;11 AMR levels.</p>
+<p>Per-field sigma (default) replicates GRChombo's implicit diffusion via
+explicit targeting: aggressive damping on gauge fields (where the problematic
+wave lives), gentle on physical fields (which carry waveforms). CAKO/SSL/CAHD
+remain opt-in because Etienne 2024 tested them with 8th-order FD + BSSN, not
+our 6th-order FD + covariant CCZ4 configuration.</p>
 
 <!-- ================================================================== -->
 <h2>References</h2>
