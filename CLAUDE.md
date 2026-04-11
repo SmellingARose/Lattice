@@ -648,7 +648,10 @@ constant `GR_SPACEDIM = 3`.
 | `kappa1` | 0.1 | Constraint damping (Theta + Z_i). BAM uses 0.1, AthenaK uses 0.02. |
 | `kappa2` | 0.0 | Controls mix of Theta damping in K equation |
 | `kappa3` | 1.0 | Z contribution in Gamma equation. GRChombo covariant CCZ4 (kappa3=1 + constant kappa1). BAM/AthenaK use 0.5 with non-covariant (kappa1×alpha). Ref: arXiv:1106.2254 (Alic 2012). |
-| `sigma` | 0.5 | Kreiss-Oliger dissipation strength (AthenaK default for 6th-order FD + KO) |
+| `sigma` | 0.5 | KO dissipation strength (used when `use_per_field_sigma=0`) |
+| `sigma_gauge` | 1.0 | Per-field KO sigma for gauge fields (lapse/shift/B^i). Aggressive damping absorbs the gauge wave that causes AMR boundary reflections. |
+| `sigma_phys` | 0.15 | Per-field KO sigma for physical fields (chi/h/K/A/Theta/Gamma). Gentle damping preserves waveform accuracy. Sweep-informed. |
+| `use_per_field_sigma` | 1 | Enable per-field sigma by default (compensates for 6th-order FD's lower implicit diffusion) |
 | `lapse_coeff` | 2.0 | Coefficient c in 1+log slicing: dt(alpha) = -c * alpha * (K - 2*Theta) |
 | `lapse_power` | 1.0 | Power p in Bona-Masso: f(alpha) = c * alpha^(p-2) |
 | `shift_Gamma_coeff` | 0.75 | F in dt(beta^i) = F * B^i |

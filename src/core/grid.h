@@ -23,6 +23,7 @@ typedef struct {
     int    N;          /* interior grid points per side               */
     int    ghost;      /* ghost zone width = GHOST_WIDTH              */
     int    Ntotal;     /* N + 2*ghost, padded so N is multiple of 16  */
+    int    level;      /* AMR level (0 = base, higher = finer)        */
     double dx;         /* grid spacing                                */
     double inv_dx;     /* 1.0 / dx (precomputed for FD stencils)      */
     double L;          /* physical domain size                        */

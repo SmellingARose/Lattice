@@ -19,3 +19,4 @@ grchombo-ref/
 
 # AI assistant config
 .claude/
+sweep_results.csv

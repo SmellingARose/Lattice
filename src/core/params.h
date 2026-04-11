@@ -80,8 +80,17 @@ typedef struct {
     int    use_cahd;           /* CAHD: constraint-adjusted Hamiltonian    */
     int    use_ssl;            /* SSL: slow-start lapse                    */
     int    use_per_field_sigma; /* per-field dissipation strengths         */
+    int    use_level_dep_sigma; /* level-dependent sigma (BAM-style)       */
     double sigma_gauge;        /* KO sigma for gauge fields (default 0.99) */
     double sigma_phys;         /* KO sigma for physical fields (def 0.3)   */
+    /* Level-dependent split (BAM-style): different sigma for fine vs coarse.
+     * Fine = level >= level_split, Coarse = level < level_split.
+     * When use_level_dep_sigma=0, only *_coarse values are used (per-field behavior). */
+    int    level_split;        /* level threshold (fine vs coarse, default 3) */
+    double sigma_gauge_fine;   /* gauge sigma on fine levels (def 0.99)    */
+    double sigma_gauge_coarse; /* gauge sigma on coarse levels (def 0.99)  */
+    double sigma_phys_fine;    /* phys sigma on fine levels (def 0.1)      */
+    double sigma_phys_coarse;  /* phys sigma on coarse levels (def 0.5)    */
     double cahd_coeff;         /* CAHD C coefficient (default 0.15)        */
     double cako_floor;         /* CAKO chi floor (default 0.04)             */
     double ssl_h;              /* SSL Gaussian height h/(M) (default 0.6)  */
@@ -194,8 +203,14 @@ static inline sim_params_t default_params(void)
     p.noise.use_cahd           = 0;
     p.noise.use_ssl            = 0;
     p.noise.use_per_field_sigma = 1;    /* ON: targets gauge wave, preserves phys */
-    p.noise.sigma_gauge        = 0.99;  /* aggressive damping of gauge fields */
-    p.noise.sigma_phys         = 0.3;   /* gentle damping of physical fields */
+    p.noise.sigma_gauge        = 1.0;   /* GRChombo-strong damping of gauge fields */
+    p.noise.sigma_phys         = 0.15;  /* very gentle damping — sweep-informed */
+    p.noise.use_level_dep_sigma = 0;    /* OFF by default (use Etienne-style)  */
+    p.noise.level_split        = 3;     /* levels >= 3 are "fine" */
+    p.noise.sigma_gauge_fine   = 0.99;
+    p.noise.sigma_gauge_coarse = 0.99;
+    p.noise.sigma_phys_fine    = 0.1;
+    p.noise.sigma_phys_coarse  = 0.5;
     p.noise.cahd_coeff         = 0.15;
     p.noise.ssl_h              = 0.6;
     p.noise.ssl_sigma_t        = 20.0;

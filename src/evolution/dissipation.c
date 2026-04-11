@@ -61,10 +61,20 @@ void add_ko_dissipation(double ** restrict rhs,
     }
 
     /* Precompute per-field effective sigma to eliminate branches in hot loop.
-     * Hoists gauge/physical sigma selection and W scaling out of the field loop. */
+     * Three modes:
+     *   1. use_level_dep_sigma=1: BAM-style level-dependent + per-field
+     *   2. use_per_field_sigma=1: Etienne-style per-field (default)
+     *   3. both off: uniform p->sigma on all fields
+     */
     int nf = g->n_fields;
     double sigma_arr[NUM_FIELDS];
-    if (p->noise.use_per_field_sigma) {
+    if (p->noise.use_level_dep_sigma) {
+        int is_fine = (g->level >= p->noise.level_split);
+        double sg = is_fine ? p->noise.sigma_gauge_fine : p->noise.sigma_gauge_coarse;
+        double sp = is_fine ? p->noise.sigma_phys_fine  : p->noise.sigma_phys_coarse;
+        for (int f = 0; f < nf; f++)
+            sigma_arr[f] = W * (is_gauge_field(f) ? sg : sp);
+    } else if (p->noise.use_per_field_sigma) {
         for (int f = 0; f < nf; f++)
             sigma_arr[f] = W * (is_gauge_field(f) ? p->noise.sigma_gauge
                                                    : p->noise.sigma_phys);

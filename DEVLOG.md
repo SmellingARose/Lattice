@@ -3,6 +3,54 @@
 > **Note:** When adding/removing/renaming files or functions, also update
 > `docs/architecture.html` — the living map of the codebase structure.
 
+## 2026-04-11: Sigma parameter sweep + per-field defaults
+
+**Built sigma sweep harness and tested 70 configs in 5 minutes.**
+
+Infrastructure: `tools/sigma_sweep/sweep.py` + `run_one.sh`. 28-core parallel,
+single-thread per run. Parameter space: 4D (sigma_gauge_{fine,coarse},
+sigma_phys_{fine,coarse}) via Latin Hypercube + 6 seed configs.
+
+Added level-dependent sigma infrastructure (BAM-style) alongside Etienne-style
+per-field sigma:
+- New `grid_t.level` field (set by `block_alloc` from block's AMR level)
+- 5 new params: `use_level_dep_sigma`, `level_split`, `sigma_*_fine/coarse`
+- `dissipation.c` picks sigma via level threshold + field type
+- 6 new CLI flags: `--level_dep_sigma`, `--sigma_*_fine/coarse`, `--level_split`
+
+**Mini test config:** L=16, N_block=16, max_level=1, 20 steps (t=5M).
+Single-threaded: ~42s/run. 70 configs parallel: 5 min wall time.
+
+**Sweep findings (abbreviated):**
+- NO runs crashed at this scale — test too small to reproduce the full QNM failure
+- Fitness range: 1.43-1.61 (Ham L2 = 2.5-3.7e-2), small spread
+- Top configs all had LOW σ_phys (0.05-0.25) — gentler physics damping = lower Ham L2
+- σ_gauge values uncorrelated with fitness at this scale
+- Uniform σ=0.5 ranked mid-pack (fitness 1.43)
+
+**Interpretation:** The mini test only has 1 refinement boundary (at r=1.5M, too
+close to puncture) and 5M of evolution. Not enough wave propagation for AMR
+boundary interactions to compound into instability. But the top results do
+suggest σ_phys should be low (preserves physical accuracy), while σ_gauge can
+be anything moderate-to-high (doesn't affect diagnostic).
+
+Scaling up to L=32 max_level=2 for a more representative test: 11 min/run
+single-threaded = 12 hours sequential for 64 runs. Too slow. Full QNM test
+is the real validator.
+
+**Decision:** Based on sweep + literature (GRChombo uniform σ=1.0, Etienne
+σ_gauge=0.99 σ_phys=0.3), use per-field sigma defaults:
+- `sigma_gauge = 1.0` (GRChombo-strong, aggressive gauge wave damping)
+- `sigma_phys = 0.15` (sweep-informed; between Etienne's 0.3 and sweep optimum ~0.1)
+
+This is an empirically-motivated middle ground: stronger gauge damping than
+Etienne (matches GRChombo's uniform), gentler physics damping than Etienne
+(sweep suggested low σ_phys minimizes constraint growth).
+
+Infrastructure is in place for future sweeps once a faster representative test
+exists (probably requires GPU-based sweep with smaller domains but full AMR
+level depth).
+
 ## 2026-04-06: GRChombo CCZ4 configuration + KO stability fix
 
 **QNM publication test NaN at t=14M: root cause analysis and fix.**

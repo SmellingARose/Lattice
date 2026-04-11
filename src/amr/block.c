@@ -107,6 +107,7 @@ block_t *block_alloc(int id, int level, int N_block, double dx,
      * N_block should be a multiple of 16 so grid_alloc doesn't change it. */
     double L_block = N_block * dx;
     b->grid = grid_alloc_ex(N_block, L_block, method, n_fields);
+    b->grid->level = level;
 
     /* Verify grid_alloc didn't pad N (it shouldn't if N_block is multiple of 16) */
     if (b->grid->N != N_block) {

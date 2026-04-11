@@ -124,8 +124,14 @@ static void print_usage(void)
     fprintf(stderr, "  --per_field_sigma / --no_per_field_sigma  Per-field KO (default on)\n");
     fprintf(stderr, "  --ssl / --no_ssl       Slow-start lapse (default off)\n");
     fprintf(stderr, "  --cahd / --no_cahd     Constraint-adjusted H damping (default off)\n");
-    fprintf(stderr, "  --sigma_gauge <float>  Gauge field KO sigma (default 0.99)\n");
-    fprintf(stderr, "  --sigma_phys <float>   Physical field KO sigma (default 0.3)\n");
+    fprintf(stderr, "  --sigma_gauge <float>  Gauge field KO sigma (default 1.0)\n");
+    fprintf(stderr, "  --sigma_phys <float>   Physical field KO sigma (default 0.15)\n");
+    fprintf(stderr, "  --level_dep_sigma / --no_level_dep_sigma  BAM-style level-dependent sigma\n");
+    fprintf(stderr, "  --sigma_gauge_fine <float>    (default 0.99)\n");
+    fprintf(stderr, "  --sigma_gauge_coarse <float>  (default 0.99)\n");
+    fprintf(stderr, "  --sigma_phys_fine <float>     (default 0.1)\n");
+    fprintf(stderr, "  --sigma_phys_coarse <float>   (default 0.5)\n");
+    fprintf(stderr, "  --level_split <int>    Level threshold fine>=N, coarse<N (default 3)\n");
     fprintf(stderr, "  --cahd_coeff <float>   CAHD coefficient C (default 0.15)\n");
     fprintf(stderr, "  --ssl_h <float>        SSL Gaussian height (default 0.6)\n");
     fprintf(stderr, "  --ssl_sigma_t <float>  SSL Gaussian width (default 20.0)\n");
@@ -344,6 +350,20 @@ int main(int argc, char **argv)
             p.noise.sigma_gauge = atof(argv[++a]);
         } else if (strcmp(argv[a], "--sigma_phys") == 0 && a + 1 < argc) {
             p.noise.sigma_phys = atof(argv[++a]);
+        } else if (strcmp(argv[a], "--level_dep_sigma") == 0) {
+            p.noise.use_level_dep_sigma = 1;
+        } else if (strcmp(argv[a], "--no_level_dep_sigma") == 0) {
+            p.noise.use_level_dep_sigma = 0;
+        } else if (strcmp(argv[a], "--sigma_gauge_fine") == 0 && a + 1 < argc) {
+            p.noise.sigma_gauge_fine = atof(argv[++a]);
+        } else if (strcmp(argv[a], "--sigma_gauge_coarse") == 0 && a + 1 < argc) {
+            p.noise.sigma_gauge_coarse = atof(argv[++a]);
+        } else if (strcmp(argv[a], "--sigma_phys_fine") == 0 && a + 1 < argc) {
+            p.noise.sigma_phys_fine = atof(argv[++a]);
+        } else if (strcmp(argv[a], "--sigma_phys_coarse") == 0 && a + 1 < argc) {
+            p.noise.sigma_phys_coarse = atof(argv[++a]);
+        } else if (strcmp(argv[a], "--level_split") == 0 && a + 1 < argc) {
+            p.noise.level_split = atoi(argv[++a]);
         } else if (strcmp(argv[a], "--cahd_coeff") == 0 && a + 1 < argc) {
             p.noise.cahd_coeff = atof(argv[++a]);
         } else if (strcmp(argv[a], "--ssl_h") == 0 && a + 1 < argc) {
