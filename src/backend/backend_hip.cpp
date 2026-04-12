@@ -1499,10 +1499,17 @@ __global__ void hip_ghost_prolong(double *pk_data, double *coarse_data,
     int oy = (fj < ghost_f) ? -1 : (fj >= ghost_f + N_f) ? 1 : 0;
     int oz = (fk < ghost_f) ? -1 : (fk >= ghost_f + N_f) ? 1 : 0;
 
-    /* Skip ghosts filled by same-level neighbors */
+    /* Skip ghosts NOT needing prolongation.
+     * Prolongation is ONLY for cells facing COARSER neighbors. Same-level
+     * and (hypothetically) finer neighbors should not be touched by prolong.
+     * Note: mesh_rebuild_neighbors never sets nblevel to a finer level
+     * (it searches same-level first, then coarser), so `nlev > blk_level`
+     * doesn't happen in practice — but the `>=` check is defensive.
+     * Ref: Athena++ paper (Stone 2020) — "use finer MeshBlock values when
+     * available because prolongated values are less accurate". */
     int blk_level = levels[b];
     int nlev = nblevel_table[b*27 + (oz+1)*9 + (oy+1)*3 + (ox+1)];
-    if (nlev == blk_level) return;
+    if (nlev >= blk_level) return;
 
     int half = 7 / 2;  /* PROLONG_STENCIL / 2 */
 
