@@ -3,7 +3,7 @@
 ## What this is
 
 A rewrite from zero. The previous CCZ4/AMR/GPU code was deleted; it lives in
-git history (last commit before the rewrite: `5c98407`). Do not restore or copy
+git history (branch `legacy-ccz4`, commit `5c98407`). Do not restore or copy
 from it.
 
 Goal: evolve Einstein's equations in the plain ADM (3+1) formulation on a
