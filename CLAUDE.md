@@ -26,6 +26,24 @@ a black hole, we reformulate to BSSN.
 5. Plain notation in chat (unicode / ASCII math). Keep explanations tight; the
    owner is technically strong but rusty on GR.
 
+## Workbook (where lessons happen)
+
+Lessons live in an interactive Artifact, the **Lattice ADM Workbook**:
+https://claude.ai/artifact/WTnD3K1TkJsqjoKEARQJpU (capabilities: `db`, `sample`).
+Each lesson: intuitive explanation → interactive figures → auto-graded checks →
+code editor. New lessons are added by republishing the same artifact.
+
+Review loop, via the `ArtifactData` tool on that URL:
+- The owner submits code in the page. It lands in `submissions/<step-id>`
+  (e.g. `step-1`): `{status, draft:{files}, submitted:{files:[{name,code}], n, at}}`.
+- Claude reads `submitted.files`, reviews against the math, and writes back with
+  an `update`: `{status:"changes"|"accepted", review:{forSubmission:n, summary,
+  notes:[{file, line, text}], commit}}`. The page shows notes live and jumps to
+  the line when you click one.
+- On accept: copy the files into the repo, build, test, commit, then set
+  `status:"accepted"` with the commit hash.
+- Check progress is in `progress/lesson-<id>`.
+
 ## Roadmap
 
 0. GR refresher: metric, Christoffel symbols, covariant derivative, Riemann/Ricci
